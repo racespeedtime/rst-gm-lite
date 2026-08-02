@@ -86,7 +86,9 @@ export function updateSpeed2d(tds: TextDraw[], speed: number): void {
 }
 
 export function destroySpeed2d(tds: TextDraw[]): void {
-  tds.forEach((t) => t.destroy());
+  tds.forEach((t) => {
+    if (t.isValid()) t.destroy();
+  });
 }
 
 /**

@@ -80,13 +80,17 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
       new Dialog({
         style: DialogStylesEnum.INPUT,
         caption: "名字前缀",
-        info: `输入名字前缀（留空清除，当前：${setting.prefix ? setting.prefix : "无"}）：`,
+        info: `输入名字前缀（留空清除，≤255字符，当前：${setting.prefix ? setting.prefix : "无"}）：`,
         button1: "确定",
         button2: "取消",
       }),
     );
     if (!res || res.response !== 1) return;
     const prefix = res.inputText.trim();
+    if (prefix.length > 255) {
+      player.sendClientMessage(COLOR_ERROR, "名字前缀最多 255 个字符");
+      return;
+    }
     await updateSetting(player, { prefix: prefix || null });
     notifySaved(player, prefix ? `名字前缀已设为：${prefix}` : "名字前缀已清除");
     await applyPlayerStyle(player);
@@ -99,13 +103,17 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
       new Dialog({
         style: DialogStylesEnum.INPUT,
         caption: "名字后缀",
-        info: `输入名字后缀（留空清除，当前：${setting.suffix ? setting.suffix : "无"}）：`,
+        info: `输入名字后缀（留空清除，≤255字符，当前：${setting.suffix ? setting.suffix : "无"}）：`,
         button1: "确定",
         button2: "取消",
       }),
     );
     if (!res || res.response !== 1) return;
     const suffix = res.inputText.trim();
+    if (suffix.length > 255) {
+      player.sendClientMessage(COLOR_ERROR, "名字后缀最多 255 个字符");
+      return;
+    }
     await updateSetting(player, { suffix: suffix || null });
     notifySaved(player, suffix ? `名字后缀已设为：${suffix}` : "名字后缀已清除");
     await applyPlayerStyle(player);

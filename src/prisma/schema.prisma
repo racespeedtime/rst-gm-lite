@@ -282,7 +282,7 @@ model SysUserSetting {
   showName           Boolean  @default(true) @map("show_name")
   showStunt          Boolean  @default(true) @map("show_stunt")
   nitroType          String   @default("timer") @map("nitro_type") @db.VarChar(10)
-  spawnMode          String   @default("RANDOM") @map("spawn_mode") @db.VarChar(10)
+  spawnMode          String   @default("RANDOM") @map("spawn_mode") @db.VarChar(16)
   lastX              Decimal? @map("last_x") @db.Decimal(18, 6)
   lastY              Decimal? @map("last_y") @db.Decimal(18, 6)
   lastZ              Decimal? @map("last_z") @db.Decimal(18, 6)

@@ -434,10 +434,12 @@ function showNextCheckpoint(player: Player, cps: RaceRoom["cps"], cpIndex: numbe
   }
 }
 
-/** 销毁房间所有计时 TD */
+/** 销毁房间所有计时 TD（防未创建/已失效的 TD destroy 抛异常） */
 function destroyRaceTds(room: RaceRoom): void {
   for (const td of room.raceTextTds.values()) {
-    td.destroy();
+    if (td.isValid()) {
+      td.destroy();
+    }
   }
   room.raceTextTds.clear();
 }
