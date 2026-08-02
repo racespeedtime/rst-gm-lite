@@ -246,6 +246,8 @@ startSessionHeartbeat();
 
 GameMode.onInit(({ next }) => {
   logger.info("RST GameMode 已启动");
+  // 昵称即账号：放开昵称字符限制（支持中文/特殊字符），否则部分昵称被 open.mp 默认规则拒绝连入
+  GameMode.supportAllNickname();
   // 初始化碰撞检测插件（缺失时静默跳过，不影响其他功能）
   initColandreas();
   // 启动清理：上次崩溃/异常退出残留的 ONLINE 会话置为离线

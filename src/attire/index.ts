@@ -6,6 +6,7 @@ import { invalidateSettingCache, getSetting } from "@/personalize/settings";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
+import type { MenuBack } from "@/core/panel";
 
 /** 装扮数量上限：人物 10 槽（平台 SetPlayerAttachedObject 上限 MAX_PLAYER_ATTACHED_OBJECTS=10）/ 车辆 15 槽 */
 export const MAX_PLAYER_ATTIRE = 10;
@@ -176,7 +177,7 @@ export async function cleanupOrphanPresets(userId: string): Promise<void> {
  * 1. 人物预设（按 skinId）
  * 2. 车辆预设（按 modelId）
  */
-export async function openAttireMenu(player: Player): Promise<void> {
+export async function openAttireMenu(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({
@@ -187,16 +188,17 @@ export async function openAttireMenu(player: Player): Promise<void> {
       button2: "关闭",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return; // 断线
+  if (res.response !== 1) return back?.(); // 取消 → 返回上一层
   if (res.listItem === 0) {
-    await playerPresetMenu(player);
+    await playerPresetMenu(player, () => openAttireMenu(player, back));
   } else if (res.listItem === 1) {
-    await vehiclePresetMenu(player);
+    await vehiclePresetMenu(player, () => openAttireMenu(player, back));
   }
 }
 
 /** 人物预设管理：选择皮肤 → 预设列表 */
-async function playerPresetMenu(player: Player): Promise<void> {
+async function playerPresetMenu(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const setting = await prisma.sysUserSetting.findUnique({ where: { userId: auth.userId } });
@@ -213,17 +215,18 @@ async function playerPresetMenu(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!skinRes || skinRes.response !== 1) return;
+  if (!skinRes) return;
+  if (skinRes.response !== 1) return back?.();
   const skinId = skinRes.inputText.trim() ? Number(skinRes.inputText.trim()) : currentSkin;
   if (!Number.isInteger(skinId) || skinId < 0 || skinId > 311) {
     player.sendClientMessage(COLOR_ERROR, "皮肤ID需为 0-311 的整数");
-    return;
+    return back?.();
   }
-  await showPlayerPresetList(player, skinId);
+  await showPlayerPresetList(player, skinId, back);
 }
 
 /** 人物预设列表：创建/选择预设/重排入口（重排后直接刷新本列表） */
-async function showPlayerPresetList(player: Player, skinId: number): Promise<void> {
+async function showPlayerPresetList(player: Player, skinId: number, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const setting = await prisma.sysUserSetting.findUnique({ where: { userId: auth.userId } });
@@ -251,23 +254,24 @@ async function showPlayerPresetList(player: Player, skinId: number): Promise<voi
       button2: "取消",
     }),
   );
-  if (!r || r.response !== 1) return;
+  if (!r) return;
+  if (r.response !== 1) return back?.();
   if (r.listItem === 0) {
-    await createPlayerPreset(player, skinId, presets);
+    await createPlayerPreset(player, skinId, presets, back);
     return;
   }
   const preset = presets[(r.listItem - 1) >> 1];
-  if (!preset) return;
+  if (!preset) return back?.();
   if (r.listItem % 2 === 0) {
     // 偶数项 = 重排入口（1=预设0, 2=重排0, 3=预设1, 4=重排1 ...）
-    await reorderPreset(player, skinId, presets, preset.id);
+    await reorderPreset(player, skinId, presets, preset.id, back);
     return;
   }
-  await playerPresetDetail(player, preset.id, skinId);
+  await playerPresetDetail(player, preset.id, skinId, back);
 }
 
 /** 预设重排：上移/下移（与相邻预设交换 index），完成后刷新当前皮肤列表 */
-async function reorderPreset(player: Player, skinId: number, presets: { id: string; index: number }[], presetId: string): Promise<void> {
+async function reorderPreset(player: Player, skinId: number, presets: { id: string; index: number }[], presetId: string, back?: MenuBack): Promise<void> {
   const idx = presets.findIndex((p) => p.id === presetId);
   if (idx < 0) return;
   const label = presets[idx].index + 1;
@@ -281,23 +285,24 @@ async function reorderPreset(player: Player, skinId: number, presets: { id: stri
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const target = res.listItem === 0 ? presets[idx - 1] : presets[idx + 1];
   if (!target) {
     player.sendClientMessage(COLOR_ERROR, res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设");
-    return;
+    return back?.();
   }
   await swapSortIndex(presets[idx], target, (id, index) =>
     prisma.playerPreset.update({ where: { id }, data: { index } }),
   );
   player.sendClientMessage(COLOR_SUCCESS, `预设${label} 已${res.listItem === 0 ? "上移" : "下移"}`);
-  await showPlayerPresetList(player, skinId);
+  await showPlayerPresetList(player, skinId, back);
 }
 
-async function createPlayerPreset(player: Player, skinId: number, presets: { index: number }[]): Promise<void> {
+async function createPlayerPreset(player: Player, skinId: number, presets: { index: number }[], back?: MenuBack): Promise<void> {
   if (presets.length >= 3) {
     player.sendClientMessage(COLOR_ERROR, "每个皮肤最多 3 套预设");
-    return;
+    return back?.();
   }
   const nameRes = await showDialog(
     player,
@@ -329,7 +334,7 @@ async function createPlayerPreset(player: Player, skinId: number, presets: { ind
 }
 
 /** 预设详情：应用/添加装扮/移除装扮/设为默认/删除 */
-async function playerPresetDetail(player: Player, presetId: string, skinId: number): Promise<void> {
+async function playerPresetDetail(player: Player, presetId: string, skinId: number, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const setting = await prisma.sysUserSetting.findUnique({ where: { userId: auth.userId } });
@@ -356,19 +361,21 @@ async function playerPresetDetail(player: Player, presetId: string, skinId: numb
       button2: "取消",
     }),
   );
-  if (!r || r.response !== 1) return;
+  if (!r) return;
+  if (r.response !== 1) return back?.();
   const idx = r.listItem;
+  const toThis = () => playerPresetDetail(player, presetId, skinId, back);
   if (idx === 0) {
     await applyPlayerPreset(player, presetId);
     player.sendClientMessage(COLOR_SUCCESS, "已应用人物预设");
-    await playerPresetDetail(player, presetId, skinId);
+    await toThis();
   } else if (idx === 1) {
-    await addPlayerPresetItem(player, presetId, skinId);
+    await addPlayerPresetItem(player, presetId, skinId, toThis);
   } else if (idx >= 2 && idx < 2 + items.length) {
     const item = items[idx - 2];
     await prisma.playerPresetItem.delete({ where: { id: item.id } });
     player.sendClientMessage(COLOR_SUCCESS, `已移除装扮 ${item.attire.name}`);
-    await playerPresetDetail(player, presetId, skinId);
+    await toThis();
   } else if (idx === 2 + items.length && setting?.defaultPlayerPresetId !== presetId) {
     await prisma.sysUserSetting.update({
       where: { userId: auth.userId },
@@ -376,18 +383,19 @@ async function playerPresetDetail(player: Player, presetId: string, skinId: numb
     });
     invalidateSettingCache(auth.userId); // 直接写库后使设置缓存失效，防脏读
     player.sendClientMessage(COLOR_SUCCESS, "已设为默认人物预设");
-    await playerPresetDetail(player, presetId, skinId);
+    await toThis();
   } else if (idx === options.length - 1) {
     await confirmDeletePreset(player, presetId, skinId, "人物");
+    await back?.();
   }
 }
 
 /** 添加装扮到人物预设：选装扮 → 选骨骼 → 输入偏移 */
-async function addPlayerPresetItem(player: Player, presetId: string, skinId: number): Promise<void> {
+async function addPlayerPresetItem(player: Player, presetId: string, skinId: number, back?: MenuBack): Promise<void> {
   const count = await prisma.playerPresetItem.count({ where: { presetId } });
   if (count >= MAX_PLAYER_ATTIRE) {
     player.sendClientMessage(COLOR_ERROR, `人物预设最多 ${MAX_PLAYER_ATTIRE} 件装扮`);
-    return;
+    return back?.();
   }
   const attires = await prisma.attire.findMany({
     where: { deletedAt: null, OR: [{ type: "PLAYER" }, { type: "COMMON" }] },
@@ -395,7 +403,7 @@ async function addPlayerPresetItem(player: Player, presetId: string, skinId: num
   });
   if (attires.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "系统装扮库为空，请联系管理员添加");
-    return;
+    return back?.();
   }
   const options = attires.map((a) => `${a.name}（模型${a.modelId} 骨${a.boneId}）`);
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
@@ -428,7 +436,8 @@ async function addPlayerPresetItem(player: Player, presetId: string, skinId: num
       button2: "取消",
     }),
   );
-  if (!boneRes || boneRes.response !== 1) return;
+  if (!boneRes) return;
+  if (boneRes.response !== 1) return back?.();
   const boneId = boneRes.listItem + 1;
   // 偏移/旋转/缩放（沿用装扮目录默认值，可调整）
   const offsetRes = await showDialog(
@@ -441,13 +450,14 @@ async function addPlayerPresetItem(player: Player, presetId: string, skinId: num
       button2: "取消",
     }),
   );
-  if (!offsetRes || offsetRes.response !== 1) return;
+  if (!offsetRes) return;
+  if (offsetRes.response !== 1) return back?.();
   const nums = offsetRes.inputText.trim()
     ? offsetRes.inputText.trim().split(/\s+/).map(Number)
     : [Number(attire.x), Number(attire.y), Number(attire.z), Number(attire.rX), Number(attire.rY), Number(attire.rZ), Number(attire.sX), Number(attire.sY), Number(attire.sZ)];
   if (nums.length !== 9 || nums.some((n) => !Number.isFinite(n))) {
     player.sendClientMessage(COLOR_ERROR, "需要 9 个数字（X Y Z 偏移 / 旋转 / 缩放）");
-    return;
+    return back?.();
   }
   try {
     await prisma.playerPresetItem.create({
@@ -461,15 +471,16 @@ async function addPlayerPresetItem(player: Player, presetId: string, skinId: num
       },
     });
     player.sendClientMessage(COLOR_SUCCESS, `已添加装扮 ${attire.name}`);
-    await playerPresetDetail(player, presetId, skinId);
+    await playerPresetDetail(player, presetId, skinId, back);
   } catch (e) {
     logger.error(`[attire] 添加人物装扮失败`, e);
     player.sendClientMessage(COLOR_ERROR, "添加失败（可能已存在该装扮）");
+    return back?.();
   }
 }
 
 /** 车辆预设管理：输入模型 → 预设列表 */
-async function vehiclePresetMenu(player: Player): Promise<void> {
+async function vehiclePresetMenu(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const veh = player.getVehicle();
@@ -484,17 +495,18 @@ async function vehiclePresetMenu(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!modelRes || modelRes.response !== 1) return;
+  if (!modelRes) return;
+  if (modelRes.response !== 1) return back?.();
   const modelId = modelRes.inputText.trim() ? Number(modelRes.inputText.trim()) : currentModel;
   if (!Number.isInteger(modelId) || modelId < 400 || modelId > 611) {
     player.sendClientMessage(COLOR_ERROR, "车辆模型ID需为 400-611");
-    return;
+    return back?.();
   }
   await showVehiclePresetList(player, modelId);
 }
 
 /** 车辆预设列表：创建/选择预设/重排入口（重排后直接刷新本列表） */
-async function showVehiclePresetList(player: Player, modelId: number): Promise<void> {
+async function showVehiclePresetList(player: Player, modelId: number, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const presets = await prisma.vehiclePreset.findMany({
@@ -518,23 +530,24 @@ async function showVehiclePresetList(player: Player, modelId: number): Promise<v
       button2: "取消",
     }),
   );
-  if (!r || r.response !== 1) return;
+  if (!r) return;
+  if (r.response !== 1) return back?.();
   if (r.listItem === 0) {
-    await createVehiclePreset(player, modelId, presets);
+    await createVehiclePreset(player, modelId, presets, back);
     return;
   }
   const preset = presets[(r.listItem - 1) >> 1];
-  if (!preset) return;
+  if (!preset) return back?.();
   if (r.listItem % 2 === 0) {
     // 偶数项 = 重排入口
-    await reorderVehiclePreset(player, modelId, presets, preset.id);
+    await reorderVehiclePreset(player, modelId, presets, preset.id, back);
     return;
   }
-  await vehiclePresetDetail(player, preset.id, modelId);
+  await vehiclePresetDetail(player, preset.id, modelId, back);
 }
 
 /** 车辆预设重排：上移/下移（与相邻预设交换 index），完成后刷新当前模型列表 */
-async function reorderVehiclePreset(player: Player, modelId: number, presets: { id: string; index: number }[], presetId: string): Promise<void> {
+async function reorderVehiclePreset(player: Player, modelId: number, presets: { id: string; index: number }[], presetId: string, back?: MenuBack): Promise<void> {
   const idx = presets.findIndex((p) => p.id === presetId);
   if (idx < 0) return;
   const label = presets[idx].index + 1;
@@ -548,23 +561,24 @@ async function reorderVehiclePreset(player: Player, modelId: number, presets: { 
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const target = res.listItem === 0 ? presets[idx - 1] : presets[idx + 1];
   if (!target) {
     player.sendClientMessage(COLOR_ERROR, res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设");
-    return;
+    return back?.();
   }
   await swapSortIndex(presets[idx], target, (id, index) =>
     prisma.vehiclePreset.update({ where: { id }, data: { index } }),
   );
   player.sendClientMessage(COLOR_SUCCESS, `预设${label} 已${res.listItem === 0 ? "上移" : "下移"}`);
-  await showVehiclePresetList(player, modelId);
+  await showVehiclePresetList(player, modelId, back);
 }
 
-async function createVehiclePreset(player: Player, modelId: number, presets: { index: number }[]): Promise<void> {
+async function createVehiclePreset(player: Player, modelId: number, presets: { index: number }[], back?: MenuBack): Promise<void> {
   if (presets.length >= 3) {
     player.sendClientMessage(COLOR_ERROR, "每个车辆模型最多 3 套预设");
-    return;
+    return back?.();
   }
   const nameRes = await showDialog(
     player,
@@ -576,7 +590,8 @@ async function createVehiclePreset(player: Player, modelId: number, presets: { i
       button2: "取消",
     }),
   );
-  if (!nameRes || nameRes.response !== 1) return;
+  if (!nameRes) return;
+  if (nameRes.response !== 1) return back?.();
   const auth = getAuthState(player.id);
   try {
     const preset = await prisma.vehiclePreset.create({
@@ -588,15 +603,16 @@ async function createVehiclePreset(player: Player, modelId: number, presets: { i
       },
     });
     player.sendClientMessage(COLOR_SUCCESS, `车辆预设创建成功`);
-    await vehiclePresetDetail(player, preset.id, modelId);
+    await vehiclePresetDetail(player, preset.id, modelId, back);
   } catch (e) {
     logger.error(`[attire] 创建车辆预设失败`, e);
     player.sendClientMessage(COLOR_ERROR, "创建失败");
+    return back?.();
   }
 }
 
 /** 车辆预设详情：应用/添加挂件/删除 */
-async function vehiclePresetDetail(player: Player, presetId: string, modelId: number): Promise<void> {
+async function vehiclePresetDetail(player: Player, presetId: string, modelId: number, back?: MenuBack): Promise<void> {
   const items = await prisma.vehiclePresetItem.findMany({
     where: { presetId },
     include: { attire: true },
@@ -619,34 +635,38 @@ async function vehiclePresetDetail(player: Player, presetId: string, modelId: nu
       button2: "取消",
     }),
   );
-  if (!r || r.response !== 1) return;
+  if (!r) return;
+  if (r.response !== 1) return back?.();
   const idx = r.listItem;
   const veh = player.getVehicle();
+  const toThis = () => vehiclePresetDetail(player, presetId, modelId, back);
   if (idx === 0) {
     if (!veh) {
       player.sendClientMessage(COLOR_ERROR, "你不在车内，无法应用预设");
-      return;
+      return back?.();
     }
     await applyVehiclePreset(veh, presetId, player.id);
     player.sendClientMessage(COLOR_SUCCESS, "已应用车辆预设");
+    return toThis();
   } else if (idx === 1) {
-    await addVehiclePresetItem(player, presetId, modelId);
+    await addVehiclePresetItem(player, presetId, modelId, toThis);
   } else if (idx >= 2 && idx < 2 + items.length) {
     const item = items[idx - 2];
     await prisma.vehiclePresetItem.delete({ where: { id: item.id } });
     player.sendClientMessage(COLOR_SUCCESS, `已移除挂件 ${item.attire.name}`);
-    await vehiclePresetDetail(player, presetId, modelId);
+    await toThis();
   } else if (idx === options.length - 1) {
     await confirmDeletePreset(player, presetId, modelId, "车辆");
+    await back?.();
   }
 }
 
 /** 添加挂件到车辆预设 */
-async function addVehiclePresetItem(player: Player, presetId: string, modelId: number): Promise<void> {
+async function addVehiclePresetItem(player: Player, presetId: string, modelId: number, back?: MenuBack): Promise<void> {
   const count = await prisma.vehiclePresetItem.count({ where: { presetId } });
   if (count >= MAX_VEHICLE_ATTIRE) {
     player.sendClientMessage(COLOR_ERROR, `车辆预设最多 ${MAX_VEHICLE_ATTIRE} 个挂件`);
-    return;
+    return back?.();
   }
   const attires = await prisma.attire.findMany({
     where: { deletedAt: null, OR: [{ type: "VEHICLE" }, { type: "COMMON" }] },
@@ -654,7 +674,7 @@ async function addVehiclePresetItem(player: Player, presetId: string, modelId: n
   });
   if (attires.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "车辆装扮库为空，请联系管理员添加");
-    return;
+    return back?.();
   }
   const options = attires.map((a) => `${a.name}（模型${a.modelId}）`);
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
@@ -668,9 +688,10 @@ async function addVehiclePresetItem(player: Player, presetId: string, modelId: n
       button2: "取消",
     }),
   );
-  if (!r || r.response !== 1) return;
+  if (!r) return;
+  if (r.response !== 1) return back?.();
   const attire = attires[r.listItem];
-  if (!attire) return;
+  if (!attire) return back?.();
   // 挂载偏移（沿用默认）
   const offsetRes = await showDialog(
     player,
@@ -682,13 +703,14 @@ async function addVehiclePresetItem(player: Player, presetId: string, modelId: n
       button2: "取消",
     }),
   );
-  if (!offsetRes || offsetRes.response !== 1) return;
+  if (!offsetRes) return;
+  if (offsetRes.response !== 1) return back?.();
   const nums = offsetRes.inputText.trim()
     ? offsetRes.inputText.trim().split(/\s+/).map(Number)
     : [Number(attire.x), Number(attire.y), Number(attire.z), Number(attire.rX), Number(attire.rY), Number(attire.rZ)];
   if (nums.length !== 6 || nums.some((n) => !Number.isFinite(n))) {
     player.sendClientMessage(COLOR_ERROR, "需要 6 个数字（偏移X Y Z / 旋转X Y Z）");
-    return;
+    return back?.();
   }
   try {
     await prisma.vehiclePresetItem.create({
@@ -701,10 +723,11 @@ async function addVehiclePresetItem(player: Player, presetId: string, modelId: n
       },
     });
     player.sendClientMessage(COLOR_SUCCESS, `已添加挂件 ${attire.name}`);
-    await vehiclePresetDetail(player, presetId, modelId);
+    await vehiclePresetDetail(player, presetId, modelId, back);
   } catch (e) {
     logger.error(`[attire] 添加车辆挂件失败`, e);
     player.sendClientMessage(COLOR_ERROR, "添加失败（可能槽位冲突）");
+    return back?.();
   }
 }
 

@@ -4,6 +4,7 @@ import { logger } from "@/logger";
 import { getAuthState, askNewPassword } from "@/auth/auth";
 import { showUserSessionLogs } from "@/auth/sessionLog";
 import { showProfileByUsername } from "@/core/profile";
+import type { MenuBack } from "@/core/panel";
 import { hashPassword } from "@/auth/password";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { banUser, unbanUser, banIp, unbanIp } from "@/core/ban";
@@ -19,8 +20,9 @@ export function isSuperAdmin(player: Player): boolean {
 /**
  * 重置指定用户的密码（管理员操作）。
  * 流程：输入目标用户名 → 确认 → 输入新密码 → 二次确认 → 更新（bcrypt，清空旧 salt）
+ * 取消/完成后返回上一层（管理员面板）
  */
-export async function resetUserPassword(player: Player): Promise<void> {
+export async function resetUserPassword(player: Player, back?: MenuBack): Promise<void> {
   // 1. 输入目标用户名
   const targetRes = await showDialog(
     player,
@@ -32,17 +34,18 @@ export async function resetUserPassword(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!targetRes || targetRes.response !== 1) return;
+  if (!targetRes) return;
+  if (targetRes.response !== 1) return back?.();
   const target = targetRes.inputText.trim();
   if (!target) {
     player.sendClientMessage(COLOR_ERROR, "用户名不能为空");
-    return;
+    return back?.();
   }
   // 2. 查用户
   const user = await prisma.sysUser.findUnique({ where: { username: target } });
   if (!user) {
     player.sendClientMessage(COLOR_ERROR, `用户 ${target} 不存在`);
-    return;
+    return back?.();
   }
   // 3. 操作确认
   const confirmRes = await showDialog(
@@ -55,10 +58,11 @@ export async function resetUserPassword(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!confirmRes || confirmRes.response !== 1) return;
+  if (!confirmRes) return;
+  if (confirmRes.response !== 1) return back?.();
   // 4. 新密码 + 二次确认
   const pwd = await askNewPassword(player, "重置密码", `为 ${target} 设置新密码`);
-  if (!pwd) return;
+  if (!pwd) return back?.();
   // 5. 更新密码（bcrypt，清空旧 salt）
   try {
     await prisma.sysUser.update({
@@ -71,10 +75,11 @@ export async function resetUserPassword(player: Player): Promise<void> {
     logger.error(`[op] 重置 ${target} 密码失败`, e);
     player.sendClientMessage(COLOR_ERROR, "重置失败，请稍后重试");
   }
+  return back?.();
 }
 
-/** 打开管理员面板（对话框菜单） */
-export async function openOpPanel(player: Player): Promise<void> {
+/** 打开管理员面板（对话框菜单）。子功能取消时返回本面板，本面板"关闭"返回上一层 */
+export async function openOpPanel(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({
@@ -85,13 +90,14 @@ export async function openOpPanel(player: Player): Promise<void> {
       button2: "关闭",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   if (res.listItem === 0) {
-    await resetUserPassword(player);
+    await resetUserPassword(player, () => openOpPanel(player, back));
   } else if (res.listItem === 1) {
-    await showProfileByUsername(player);
+    await showProfileByUsername(player, () => openOpPanel(player, back));
   } else if (res.listItem === 2) {
-    await showUserSessionLogs(player);
+    await showUserSessionLogs(player, () => openOpPanel(player, back));
   }
 }
 

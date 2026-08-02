@@ -2,6 +2,7 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { checkLoginAllowed } from "@/core/ban";
+import type { MenuBack } from "@/core/panel";
 import { hashPassword, verifyPassword, isLegacyPassword } from "./password";
 import { showDialog } from "@/utils/dialog";
 
@@ -86,13 +87,9 @@ export async function closePlayerSession(playerId: number): Promise<void> {
   clearAuthState(playerId);
 }
 
-/** 校验用户名是否合法（字母数字及常见符号，禁止空格） */
+/** 校验昵称是否可作为账号名：非空 + 字节数 ≤ 24（SA-MP 昵称按字节计，支持中文/Unicode） */
 function isValidName(name: string): boolean {
-  return (
-    name.length > 0 &&
-    name.length <= MAX_NAME_LEN &&
-    /^[A-Za-z0-9_[\]{}()#%+$=?!.@-]+$/.test(name)
-  );
+  return name.length > 0 && Buffer.byteLength(name, "utf8") <= MAX_NAME_LEN;
 }
 
 /** 校验密码强度 */
@@ -124,32 +121,16 @@ async function openGameSession(player: Player, userId: string): Promise<string> 
 }
 
 /**
- * 玩家连入后的认证流程：登录（老用户）或注册（新用户名）
+ * 玩家连入后的认证流程：登录（老用户）或注册（新用户名）。
+ * 账号名 = 玩家连接的昵称（player.getName()），无需再输入用户名。
  */
 export async function runAuthFlow(player: Player): Promise<AuthState | null> {
-  let name = "";
-  // 询问用户名
-  while (true) {
-    const res = await showDialog(
-      player,
-      new Dialog({
-        style: DialogStylesEnum.INPUT,
-        caption: "欢迎来到 RST",
-        info: "请输入你的游戏账号名称：",
-        button1: "确定",
-        button2: "离开",
-      }),
-    );
-    if (!res) return null;
-    if (res.response !== 1) {
-      return null;
-    }
-    name = res.inputText.trim();
-    if (!isValidName(name)) {
-      player.sendClientMessage(COLOR_ERROR, "账号名称包含非法字符或长度不正确，请重新输入");
-      continue;
-    }
-    break;
+  // 直接用玩家连接的昵称作为账号名（SA-MP 玩家名即账号，改名连接即新账号）
+  const name = player.getName().name;
+  if (!isValidName(name)) {
+    player.sendClientMessage(COLOR_ERROR, "你的昵称包含非法字符或长度不正确，无法注册账号");
+    player.kick();
+    return null;
   }
 
   const user = await prisma.sysUser.findUnique({ where: { username: name } });
@@ -300,7 +281,7 @@ export async function askNewPassword(
  * 玩家自助修改自己的密码（万能面板入口）。
  * 流程：验证当前密码 → 新密码 + 二次确认 → 更新为 bcrypt。
  */
-export async function changeOwnPassword(player: Player): Promise<void> {
+export async function changeOwnPassword(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const user = await prisma.sysUser.findUnique({ where: { id: auth.userId } });
@@ -321,7 +302,7 @@ export async function changeOwnPassword(player: Player): Promise<void> {
     );
     if (!res) return;
     if (res.response !== 1) {
-      return;
+      return back?.();
     }
     if (await verifyPassword(res.inputText, user.password, user.salt)) {
       verified = true;
@@ -331,12 +312,12 @@ export async function changeOwnPassword(player: Player): Promise<void> {
   }
   if (!verified) {
     player.sendClientMessage(COLOR_ERROR, "当前密码验证失败，操作已取消");
-    return;
+    return back?.();
   }
 
   // 2. 新密码 + 二次确认
   const pwd = await askNewPassword(player, "修改密码", "输入新密码");
-  if (!pwd) return;
+  if (!pwd) return back?.();
 
   // 3. 更新（bcrypt，清空旧 salt）
   try {
@@ -350,6 +331,7 @@ export async function changeOwnPassword(player: Player): Promise<void> {
     logger.error(`[auth] ${auth.username} 修改密码失败`, e);
     player.sendClientMessage(COLOR_ERROR, "修改失败，请稍后重试");
   }
+  return back?.();
 }
 
 /**

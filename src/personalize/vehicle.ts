@@ -1,6 +1,7 @@
 import { Player } from "@infernus/core";
 import { getSetting, updateSetting, pickOption, notifySaved, toggleText, COLOR_ERROR } from "./settings";
 import { syncVehicleAutoState } from "@/core/vehicleAuto";
+import type { MenuBack } from "@/core/panel";
 
 /**
  * 车辆个性化菜单
@@ -11,7 +12,7 @@ import { syncVehicleAutoState } from "@/core/vehicleAuto";
  * 5. 氮气方式（点按 / 定时器）
  * 6. 翻车自动翻正（开关）
  */
-export async function openVehicleMenu(player: Player): Promise<void> {
+export async function openVehicleMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
   if (!setting) return;
   const options = [
@@ -23,7 +24,7 @@ export async function openVehicleMenu(player: Player): Promise<void> {
     `翻车自动翻正：${toggleText(setting.vehicleFlip)}`,
   ];
   const index = await pickOption(player, "车辆个性化", options);
-  if (index < 0) return;
+  if (index < 0) return back?.();
 
   switch (index) {
     case 0: {

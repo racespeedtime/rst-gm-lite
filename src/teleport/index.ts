@@ -6,6 +6,7 @@ import { isSuperAdmin } from "@/admin/op";
 import { sessionManager } from "@/sessions/manager";
 import { isInRace } from "@/race/room";
 import { showDialog } from "@/utils/dialog";
+import type { MenuBack } from "@/core/panel";
 import { setIntervalSafe } from "@/core/timers";
 
 import { COLOR_INFO, COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
@@ -303,8 +304,8 @@ export function initTpTimeoutLoop(): void {
   setIntervalSafe(() => updateTpTimeouts(), 1000);
 }
 
-/** 面板入口：传送菜单（传送点列表 / 创建传送点） */
-export async function openTeleportMenu(player: Player): Promise<void> {
+/** 面板入口：传送菜单（传送点列表 / 创建传送点 / OP 管理） */
+export async function openTeleportMenu(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({
@@ -315,29 +316,32 @@ export async function openTeleportMenu(player: Player): Promise<void> {
       button2: "关闭",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return; // 断线
+  if (res.response !== 1) return back?.(); // 取消 → 返回上一层
+  const toThis = () => openTeleportMenu(player, back);
   if (res.listItem === 0) {
-    await listSystemTeleports(player);
+    await listSystemTeleports(player, toThis);
   } else if (res.listItem === 1) {
-    await createTeleportFlow(player);
+    await createTeleportFlow(player, toThis);
   } else if (res.listItem === 2) {
     if (isSuperAdmin(player)) {
-      await manageTeleports(player);
+      await manageTeleports(player, toThis);
     } else {
       player.sendClientMessage(COLOR_ERROR, "仅管理员可管理传送点");
+      return back?.();
     }
   }
 }
 
 /** 系统传送点列表 */
-async function listSystemTeleports(player: Player): Promise<void> {
+async function listSystemTeleports(player: Player, back?: MenuBack): Promise<void> {
   const points = await prisma.teleport.findMany({
     where: { isSystem: true, isEnabled: true, deletedAt: null },
     orderBy: { name: "asc" },
   });
   if (points.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "暂无系统传送点");
-    return;
+    return back?.();
   }
   const options = points.map((p) => `/${p.name}${p.description ? `（${p.description}）` : ""}`);
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
@@ -351,15 +355,17 @@ async function listSystemTeleports(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!r || r.response !== 1) return;
+  if (!r) return;
+  if (r.response !== 1) return back?.();
   const point = points[r.listItem];
-  if (!point) return;
+  if (!point) return back?.();
   teleportTo(player, Number(point.x), Number(point.y), Number(point.z), Number(point.angle), point.interiorId);
   player.sendClientMessage(COLOR_WHITE, `[传送] 你传送到了 ${point.name}`);
+  return back?.();
 }
 
 /** 创建传送点：非 OP 只能建 //（用户点），OP 可选 / 或 // */
-async function createTeleportFlow(player: Player): Promise<void> {
+async function createTeleportFlow(player: Player, back?: MenuBack): Promise<void> {
   const isOp = isSuperAdmin(player);
   const nameRes = await showDialog(
     player,
@@ -371,11 +377,12 @@ async function createTeleportFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!nameRes || nameRes.response !== 1) return;
+  if (!nameRes) return;
+  if (nameRes.response !== 1) return back?.();
   let name = nameRes.inputText.trim();
   if (!name) {
     player.sendClientMessage(COLOR_ERROR, "传送点名称不能为空");
-    return;
+    return back?.();
   }
   // 去斜杠前缀
   if (name.startsWith("/")) name = name.slice(name.startsWith("//") ? 2 : 1);
@@ -391,7 +398,8 @@ async function createTeleportFlow(player: Player): Promise<void> {
         button2: "取消",
       }),
     );
-    if (!typeRes || typeRes.response !== 1) return;
+    if (!typeRes) return;
+    if (typeRes.response !== 1) return back?.();
     isSystem = typeRes.listItem === 0;
   }
   const descRes = await showDialog(
@@ -404,7 +412,8 @@ async function createTeleportFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!descRes || descRes.response !== 1) return;
+  if (!descRes) return;
+  if (descRes.response !== 1) return back?.();
   const pos = player.getPos();
   const auth = getAuthState(player.id);
   try {
@@ -427,17 +436,18 @@ async function createTeleportFlow(player: Player): Promise<void> {
     logger.error(`[tp] 创建传送点失败 ${name}`, e);
     player.sendClientMessage(COLOR_ERROR, "创建失败，名称可能已存在");
   }
+  return back?.();
 }
 
 /** OP 管理传送点：列表 → 删除（二次验证） */
-async function manageTeleports(player: Player): Promise<void> {
+async function manageTeleports(player: Player, back?: MenuBack): Promise<void> {
   const points = await prisma.teleport.findMany({
     where: { deletedAt: null },
     orderBy: [{ isSystem: "desc" }, { name: "asc" }],
   });
   if (points.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "暂无传送点");
-    return;
+    return back?.();
   }
   const options = points.map((p) => `${p.isSystem ? "/" : "//"}${p.name}${p.description ? `（${p.description}）` : ""}`);
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
@@ -451,9 +461,10 @@ async function manageTeleports(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!r || r.response !== 1) return;
+  if (!r) return;
+  if (r.response !== 1) return back?.();
   const point = points[r.listItem];
-  if (!point) return;
+  if (!point) return back?.();
   // 二次验证删除
   const confirm = await showDialog(
     player,
@@ -465,10 +476,12 @@ async function manageTeleports(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!confirm || confirm.response !== 1) return;
+  if (!confirm) return;
+  if (confirm.response !== 1) return back?.();
   await prisma.teleport.update({
     where: { id: point.id },
     data: { deletedAt: new Date() },
   });
   player.sendClientMessage(COLOR_WHITE, `[传送] 传送点已删除`);
+  return back?.();
 }

@@ -5,6 +5,7 @@ import { getSetting, updateSetting, pickOption, notifySaved, toggleText, COLOR_E
 import { applyInvincibleState } from "@/core/invincible";
 import { applyPlayerStyle } from "@/core/playerStyle";
 import { parseIntInRange } from "@/utils/parse";
+import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
 /**
@@ -17,7 +18,7 @@ import { showDialog } from "@/utils/dialog";
  * 6. 默认人物预设
  * 7. 无敌状态
  */
-export async function openCharacterMenu(player: Player): Promise<void> {
+export async function openCharacterMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
   if (!setting) return;
   const options = [
@@ -30,7 +31,7 @@ export async function openCharacterMenu(player: Player): Promise<void> {
     `无敌状态：${toggleText(setting.invincible)}`,
   ];
   const index = await pickOption(player, "人物个性化", options);
-  if (index < 0) return;
+  if (index < 0) return back?.();
 
   if (index === 0) {
     const next = !setting.showPlayerAttire;

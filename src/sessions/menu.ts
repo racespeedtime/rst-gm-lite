@@ -2,6 +2,7 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { sessionManager } from "./manager";
 import { getSetting } from "@/personalize/settings";
 import { showDialog } from "@/utils/dialog";
+import type { MenuBack } from "@/core/panel";
 
 import { COLOR_ERROR } from "@/utils/colors";
 
@@ -16,10 +17,10 @@ function findOnlinePlayer(name: string): Player | undefined {
  * 战局菜单（万能面板入口之一）
  * 1. 加入战局  2. 创建私人战局  3. 回到公共大世界  4. 返回自身战局  5. 我的战局管理
  */
-export async function openSessionMenu(player: Player): Promise<void> {
+export async function openSessionMenu(player: Player, back?: MenuBack): Promise<void> {
   const items: { label: string; run: () => Promise<void> }[] = [];
-  items.push({ label: "加入战局", run: () => joinSessionFlow(player) });
-  items.push({ label: "创建私人战局", run: () => createSessionFlow(player) });
+  items.push({ label: "加入战局", run: () => joinSessionFlow(player, () => openSessionMenu(player, back)) });
+  items.push({ label: "创建私人战局", run: () => createSessionFlow(player, () => openSessionMenu(player, back)) });
   items.push({
     label: "回到公共大世界",
     run: async () => {
@@ -46,7 +47,7 @@ export async function openSessionMenu(player: Player): Promise<void> {
   }
   const current = sessionManager.getPlayerSession(player);
   if (current.id !== 0 && sessionManager.isOwner(player, current)) {
-    items.push({ label: "我的战局管理", run: () => openOwnerMenu(player) });
+    items.push({ label: "我的战局管理", run: () => openOwnerMenu(player, () => openSessionMenu(player, back)) });
   }
 
   const info = items.map((item, i) => `${i + 1}. ${item.label}`).join("\n");
@@ -60,16 +61,17 @@ export async function openSessionMenu(player: Player): Promise<void> {
       button2: "关闭",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return; // 断线直接退出
+  if (res.response !== 1) return back?.(); // 取消 → 返回上一层（万能面板）
   await items[res.listItem].run();
 }
 
 /** 加入战局流程 */
-async function joinSessionFlow(player: Player): Promise<void> {
+async function joinSessionFlow(player: Player, back?: MenuBack): Promise<void> {
   const list = sessionManager.listJoinableSessions(player);
   if (list.length === 0) {
     player.sendClientMessage(COLOR_ERROR, "当前没有可加入的战局，你可以创建一个");
-    return;
+    return back?.();
   }
   const info = list
     .map(
@@ -87,13 +89,14 @@ async function joinSessionFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const target = list[res.listItem];
-  if (!target) return;
+  if (!target) return back?.();
   if (!target.password) {
     const result = await sessionManager.joinSession(player, target);
     if (!result.ok) player.sendClientMessage(COLOR_ERROR, result.reason!);
-    return;
+    return back?.();
   }
   // 需要密码
   const pwdRes = await showDialog(
@@ -106,15 +109,17 @@ async function joinSessionFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!pwdRes || pwdRes.response !== 1) return;
+  if (!pwdRes) return;
+  if (pwdRes.response !== 1) return back?.();
   const result = await sessionManager.joinSession(player, target, pwdRes.inputText);
   if (!result.ok) {
     player.sendClientMessage(COLOR_ERROR, result.reason!);
   }
+  return back?.();
 }
 
 /** 创建私人战局流程（尊重战局设置：sessionType=PRIVATE 时应用设置的密码） */
-async function createSessionFlow(player: Player): Promise<void> {
+async function createSessionFlow(player: Player, back?: MenuBack): Promise<void> {
   // 战局名（可空 → 默认）
   const nameRes = await showDialog(
     player,
@@ -126,7 +131,8 @@ async function createSessionFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!nameRes || nameRes.response !== 1) return;
+  if (!nameRes) return;
+  if (nameRes.response !== 1) return back?.();
   const name = nameRes.inputText.trim();
   // 战局设置：sessionType=PRIVATE 时直接应用已设置的密码（无需再询问）
   const setting = await getSetting(player);
@@ -158,7 +164,8 @@ async function createSessionFlow(player: Player): Promise<void> {
         button2: "取消",
       }),
     );
-    if (!pwdRes || pwdRes.response !== 1) return;
+    if (!pwdRes) return;
+    if (pwdRes.response !== 1) return back?.();
     if (pwdRes.inputText) {
       password = pwdRes.inputText;
     }
@@ -167,11 +174,11 @@ async function createSessionFlow(player: Player): Promise<void> {
 }
 
 /** 房主管理菜单：设置密码 / 踢人 / 邀请 */
-async function openOwnerMenu(player: Player): Promise<void> {
+async function openOwnerMenu(player: Player, back?: MenuBack): Promise<void> {
   const items: { label: string; run: () => Promise<void> }[] = [
-    { label: "设置战局密码", run: () => setPasswordFlow(player) },
-    { label: "踢人", run: () => kickMemberFlow(player) },
-    { label: "邀请玩家", run: () => inviteFlow(player) },
+    { label: "设置战局密码", run: () => setPasswordFlow(player, () => openOwnerMenu(player, back)) },
+    { label: "踢人", run: () => kickMemberFlow(player, () => openOwnerMenu(player, back)) },
+    { label: "邀请玩家", run: () => inviteFlow(player, () => openOwnerMenu(player, back)) },
   ];
   const res = await showDialog(
     player,
@@ -183,12 +190,13 @@ async function openOwnerMenu(player: Player): Promise<void> {
       button2: "关闭",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   await items[res.listItem].run();
 }
 
 /** 设置战局密码 */
-async function setPasswordFlow(player: Player): Promise<void> {
+async function setPasswordFlow(player: Player, back?: MenuBack): Promise<void> {
   const session = sessionManager.getPlayerSession(player);
   const current = session.password ? `（当前已设置密码）` : "（当前无密码）";
   const res = await showDialog(
@@ -201,18 +209,20 @@ async function setPasswordFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const result = await sessionManager.setPassword(player, res.inputText.trim() || null);
   if (!result.ok) player.sendClientMessage(COLOR_ERROR, result.reason!);
+  return back?.();
 }
 
 /** 踢人流程 */
-async function kickMemberFlow(player: Player): Promise<void> {
+async function kickMemberFlow(player: Player, back?: MenuBack): Promise<void> {
   const session = sessionManager.getPlayerSession(player);
   const others = sessionManager.getMembers(session).filter((p) => p.id !== player.id);
   if (others.length === 0) {
     player.sendClientMessage(COLOR_ERROR, "战局内没有其他成员");
-    return;
+    return back?.();
   }
   const info = others.map((p, i) => `${i + 1}. ${p.getName().name}`).join("\n");
   const res = await showDialog(
@@ -225,15 +235,17 @@ async function kickMemberFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const target = others[res.listItem];
-  if (!target) return;
+  if (!target) return back?.();
   const result = await sessionManager.kickMember(player, target);
   if (!result.ok) player.sendClientMessage(COLOR_ERROR, result.reason!);
+  return back?.();
 }
 
 /** 邀请玩家流程 */
-async function inviteFlow(player: Player): Promise<void> {
+async function inviteFlow(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({
@@ -244,16 +256,18 @@ async function inviteFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const target = findOnlinePlayer(res.inputText.trim());
   if (!target) {
     player.sendClientMessage(COLOR_ERROR, "未找到该在线玩家");
-    return;
+    return back?.();
   }
   if (target.id === player.id) {
     player.sendClientMessage(COLOR_ERROR, "不能邀请自己");
-    return;
+    return back?.();
   }
   const result = await sessionManager.inviteMember(player, target);
   if (!result.ok) player.sendClientMessage(COLOR_ERROR, result.reason!);
+  return back?.();
 }

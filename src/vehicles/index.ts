@@ -1,4 +1,4 @@
-import { Dialog, DialogStylesEnum, Player, PlayerEvent, Vehicle } from "@infernus/core";
+import { Dialog, DialogStylesEnum, Dynamic3DTextLabel, Player, PlayerEvent, Vehicle } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -15,18 +15,26 @@ const SAVE_INTERVAL_MS = 30_000;
 
 /** 一人一车：playerId -> 当前刷出的 Vehicle */
 const playerVehs = new Map<number, Vehicle>();
+/** 爱车 3D 标签：playerId -> 绑定的 description 标签（车辆销毁/断线时清理） */
+const playerVehLabels = new Map<number, Dynamic3DTextLabel>();
 
 export function getOwnedVehicle(playerId: number): Vehicle | undefined {
   return playerVehs.get(playerId);
 }
 
-/** 销毁玩家的当前车辆（同时清理挂载其上的装扮挂件） */
+/** 销毁玩家的当前车辆（同时清理挂载其上的装扮挂件与 3D 标签） */
 export function destroyPlayerVehicle(playerId: number): void {
   const veh = playerVehs.get(playerId);
   if (veh && veh.isValid()) {
     veh.destroy();
   }
   playerVehs.delete(playerId);
+  // 清理爱车 3D 标签（防空中残留文字）
+  const label = playerVehLabels.get(playerId);
+  if (label && label.isValid()) {
+    label.destroy();
+  }
+  playerVehLabels.delete(playerId);
   // 清理挂在该车上的装扮 DynamicObject（防空中残留）
   cleanupAttire(playerId);
 }
@@ -94,6 +102,22 @@ export async function spawnVehicle(player: Player, modelId: number): Promise<boo
     veh.addComponent(1010); // 氮气
     // 应用完整预设外观（颜色/paintjob/改装件 + 挂件），默认预设挂件也自动生效
     await applyVehiclePreset(veh, uv.defaultPresetId, player.id);
+    // 爱车 description 绑定 3D 文本（有描述才挂，跟随车辆移动）
+    if (uv.description) {
+      const label = new Dynamic3DTextLabel({
+        text: uv.description,
+        color: "#ffd700",
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+        drawDistance: 30,
+        testLOS: false,
+        attachedVehicle: veh.id,
+        charset: "gbk",
+      });
+      label.create();
+      playerVehLabels.set(player.id, label);
+    }
     veh.putPlayerIn(player, 0);
     player.sendClientMessage(COLOR_SUCCESS, `刷车成功！爱车模型 [${modelId}]，/cc 换色，/c wode 召唤`);
     return true;

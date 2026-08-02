@@ -5,6 +5,7 @@ import { setTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve } from "@/core/observe";
 import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";
 import { flipVehicle } from "@/core/vehicleAuto";
+import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
 /**
@@ -18,7 +19,7 @@ import { showDialog } from "@/utils/dialog";
  * 7. 车辆翻正（车内时）
  * 8. 范围倒计时（当前战局 10 秒）
  */
-export async function openQuickActionsMenu(player: Player): Promise<void> {
+export async function openQuickActionsMenu(player: Player, back?: MenuBack): Promise<void> {
   const inRace = isInRace(player.id);
   // 比赛中禁用的选项：脱离卡死（瞬移作弊）、降落伞/喷气背包（装备作弊）
   const options = inRace
@@ -43,7 +44,7 @@ export async function openQuickActionsMenu(player: Player): Promise<void> {
         "停止观战",
       ];
   const index = await pickOption(player, "快捷操作", options);
-  if (index < 0) return;
+  if (index < 0) return back?.();
 
   // 比赛中的选项重新映射到 switch case
   const idx = inRace ? index + 2 : index;

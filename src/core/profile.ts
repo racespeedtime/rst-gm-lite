@@ -3,6 +3,7 @@ import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
 import { isPlayerLocked } from "@/core/interaction";
+import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
 import { COLOR_ERROR } from "@/utils/colors";
@@ -20,8 +21,6 @@ interface ProfileStats {
   lastLogoutAt: Date | null;
   /** 比赛完成次数 */
   raceCount: number;
-  /** 个人最佳（最快完成记录，毫秒） */
-  bestRecord: number | null;
   /** 总里程（米）= Σ 完成比赛的 赛道长度 × 圈数 */
   totalDistance: number;
   /** 最近一次比赛时间 */
@@ -48,13 +47,6 @@ function formatTotalSeconds(seconds: number): string {
 }
 
 /** 毫秒 → mm:ss.SSS（比赛成绩展示，对齐 formatTime） */
-function formatRaceTime(ms: number): string {
-  const m = Math.floor(ms / 60000);
-  const s = Math.floor((ms % 60000) / 1000);
-  const mm = ms % 1000;
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(mm).padStart(3, "0")}`;
-}
-
 /** 判断用户是否为超管（查角色表，支持查看不在线用户） */
 async function isUserSuperAdmin(userId: string): Promise<boolean> {
   const roles = await prisma.sysUserRole.findMany({
@@ -66,7 +58,7 @@ async function isUserSuperAdmin(userId: string): Promise<boolean> {
 
 /** 汇总某用户的信息统计（一次聚合查询，零迁移） */
 async function collectProfileStats(userId: string): Promise<ProfileStats | null> {
-  const [user, sessions, raceRecords, bestRecord, lastSession] = await Promise.all([
+  const [user, sessions, raceRecords, lastSession] = await Promise.all([
     prisma.sysUser.findUnique({ where: { id: userId }, include: { sysUserSetting: true } }),
     // 在线时长：历史离线会话累计时长（null 时长按 0 计，异常掉线由心跳更正）
     prisma.sysUserGameSession.findMany({
@@ -77,12 +69,6 @@ async function collectProfileStats(userId: string): Promise<ProfileStats | null>
     prisma.raceRecord.findMany({
       where: { userId, deletedAt: null },
       select: { createdAt: true, race: { select: { totalLength: true, laps: true } } },
-    }),
-    // 个人最佳（所有赛道中的最快完成成绩）
-    prisma.raceRecord.findFirst({
-      where: { userId, deletedAt: null },
-      orderBy: { record: "asc" },
-      select: { record: true },
     }),
     // 最近登录会话（判断在线状态/本次在线起始/最近登出）
     prisma.sysUserGameSession.findFirst({
@@ -120,7 +106,6 @@ async function collectProfileStats(userId: string): Promise<ProfileStats | null>
     currentSessionStart,
     lastLogoutAt: lastSession?.logoutAt ?? null,
     raceCount,
-    bestRecord: bestRecord?.record ?? null,
     totalDistance,
     lastRaceAt,
   };
@@ -138,7 +123,6 @@ function buildProfileLines(s: ProfileStats): string[] {
     `{98CDFE}注册日期: {FFFFFF}${formatDate(s.registeredAt)}`,
     `{98CDFE}皮肤: {FFFFFF}${s.skinId}`,
     `{98CDFE}比赛次数: {FFFFFF}${s.raceCount}`,
-    `{98CDFE}个人最佳: {FFFFFF}${s.bestRecord != null ? formatRaceTime(s.bestRecord) : "—"}`,
     `{98CDFE}比赛总里程: {FFFFFF}${s.totalDistance >= 1000 ? `${(s.totalDistance / 1000).toFixed(2)} km` : `${Math.round(s.totalDistance)} m`}`,
     `{98CDFE}最近比赛: {FFFFFF}${formatDate(s.lastRaceAt)}`,
   ];
@@ -162,18 +146,19 @@ async function showProfile(player: Player, userId: string, title: string): Promi
   );
 }
 
-/** 万能面板入口：我的信息（所有人，比赛中可用） */
-export async function showMyProfile(player: Player): Promise<void> {
+/** 万能面板入口：我的信息（所有人，比赛中可用）。关闭信息后返回上一层 */
+export async function showMyProfile(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   await showProfile(player, auth.userId, "我的信息");
+  return back?.();
 }
 
-/** OP 入口：按用户名查看任意玩家信息（不要求在线） */
-export async function showProfileByUsername(player: Player): Promise<void> {
+/** OP 入口：按用户名查看任意玩家信息（不要求在线）。取消返回上一层 */
+export async function showProfileByUsername(player: Player, back?: MenuBack): Promise<void> {
   if (!isSuperAdmin(player)) {
     player.sendClientMessage(COLOR_ERROR, "仅管理员可查看他人信息");
-    return;
+    return back?.();
   }
   const res = await showDialog(
     player,
@@ -185,15 +170,17 @@ export async function showProfileByUsername(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const username = res.inputText.trim();
-  if (!username) return;
+  if (!username) return back?.();
   const user = await prisma.sysUser.findUnique({ where: { username } });
   if (!user) {
     player.sendClientMessage(COLOR_ERROR, `用户 ${username} 不存在`);
-    return;
+    return back?.();
   }
   await showProfile(player, user.id, `${username} 的信息`);
+  return back?.();
 }
 
 /** 初始化：点击玩家 → 查看其信息（对齐原版 ClickPlayer） */

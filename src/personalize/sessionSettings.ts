@@ -1,6 +1,7 @@
 import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { getSetting, updateSetting, pickOption, notifySaved, COLOR_ERROR } from "./settings";
 import { showDialog } from "@/utils/dialog";
+import type { MenuBack } from "@/core/panel";
 
 /**
  * 战局设置菜单
@@ -8,7 +9,7 @@ import { showDialog } from "@/utils/dialog";
  * 2. 设置自身战局密码
  * 3. 启动时进入：公共大世界 / 自身战局
  */
-export async function openSessionSettingsMenu(player: Player): Promise<void> {
+export async function openSessionSettingsMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
   if (!setting) return;
   const menuOptions = [
@@ -17,7 +18,7 @@ export async function openSessionSettingsMenu(player: Player): Promise<void> {
     `启动进入：${setting.enterWorldMode === "OWN_SESSION" ? "自身战局" : "公共大世界"}`,
   ];
   const index = await pickOption(player, "战局设置", menuOptions);
-  if (index < 0) return;
+  if (index < 0) return back?.(); // 取消 → 返回上一层
 
   if (index === 0) {
     // 自身战局类型（公开/私有）
@@ -27,7 +28,7 @@ export async function openSessionSettingsMenu(player: Player): Promise<void> {
       `私有（需密码）${!isPublic ? "（当前）" : ""}`,
     ];
     const typeIndex = await pickOption(player, "自身战局类型", typeOptions);
-    if (typeIndex < 0) return;
+    if (typeIndex < 0) return back?.();
     if (typeIndex === 1) {
       // 私有战局必须设定密码
       const pwdRes = await showDialog(
@@ -40,10 +41,11 @@ export async function openSessionSettingsMenu(player: Player): Promise<void> {
           button2: "取消",
         }),
       );
-      if (!pwdRes || pwdRes.response !== 1) return;
+      if (!pwdRes) return;
+      if (pwdRes.response !== 1) return back?.();
       if (!pwdRes.inputText.trim()) {
         player.sendClientMessage(COLOR_ERROR, "私有战局必须设置密码，未设置已取消");
-        return;
+        return back?.();
       }
       await updateSetting(player, {
         sessionType: "PRIVATE",
@@ -54,7 +56,7 @@ export async function openSessionSettingsMenu(player: Player): Promise<void> {
       await updateSetting(player, { sessionType: "PUBLIC" });
       notifySaved(player, "自身战局已设为公开");
     }
-    return;
+    return back?.();
   }
 
   if (index === 1) {
@@ -69,11 +71,12 @@ export async function openSessionSettingsMenu(player: Player): Promise<void> {
         button2: "取消",
       }),
     );
-    if (!pwdRes || pwdRes.response !== 1) return;
+    if (!pwdRes) return;
+    if (pwdRes.response !== 1) return back?.();
     const pwd = pwdRes.inputText.trim();
     await updateSetting(player, { sessionPassword: pwd || null });
     notifySaved(player, pwd ? `战局密码已设为：${pwd}` : "战局密码已清除");
-    return;
+    return back?.();
   }
 
   if (index === 2) {
@@ -84,9 +87,10 @@ export async function openSessionSettingsMenu(player: Player): Promise<void> {
       `自身战局${enterOwn ? "（当前）" : ""}`,
     ];
     const modeIndex = await pickOption(player, "启动进入", enterOptions);
-    if (modeIndex < 0) return;
+    if (modeIndex < 0) return back?.();
     const next = modeIndex === 1 ? "OWN_SESSION" : "PUBLIC";
     await updateSetting(player, { enterWorldMode: next });
     notifySaved(player, `下次进入世界：${next === "OWN_SESSION" ? "自身战局" : "公共大世界"}`);
+    return back?.();
   }
 }

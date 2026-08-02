@@ -26,8 +26,12 @@ interface PanelItem {
   visible?: (player: Player) => boolean;
   /** 比赛中是否允许（默认 false，比赛中隐藏） */
   raceSafe?: boolean;
-  run: (player: Player) => void | Promise<void>;
+  /** back：返回上一级菜单的回调（子菜单取消时调用，保证面板连贯性） */
+  run: (player: Player, back?: () => void | Promise<void>) => void | Promise<void>;
 }
+
+/** 菜单返回回调类型（所有菜单函数统一签名：取消时调用 back 返回上一层） */
+export type MenuBack = () => void | Promise<void>;
 
 /** 万能面板分类条目（后续功能入口统一在这里扩展） */
 const panelItems: PanelItem[] = [
@@ -63,11 +67,12 @@ function getVisibleItems(player: Player): PanelItem[] {
 /**
  * 打开万能面板（Y 键呼出）。
  * 整个面板流程（含子菜单）期间锁定玩家，防止重复触发。
+ * 子菜单取消时通过 back 回调回到主菜单（连贯导航，不会直接关闭）。
  */
 export async function openPanel(player: Player): Promise<void> {
-  const items = getVisibleItems(player);
   lockPlayer(player.id);
   try {
+    const items = getVisibleItems(player);
     const info = items.map((item, i) => `${i + 1}. ${item.label}`).join("\n");
     const res = await showDialog(
       player,
@@ -79,10 +84,12 @@ export async function openPanel(player: Player): Promise<void> {
         button2: "关闭",
       }),
     );
-    if (!res || res.response !== 1) return;
+    if (!res) return; // 断线直接退出
+    if (res.response !== 1) return; // 主菜单点"关闭"→ 关闭面板
     const item = items[res.listItem];
     if (item) {
-      await item.run(player);
+      // 子菜单取消时回到主菜单（继续本次面板流程）
+      await item.run(player, () => openPanel(player));
     }
   } finally {
     unlockPlayer(player.id);

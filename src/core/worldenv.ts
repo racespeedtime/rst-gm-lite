@@ -1,4 +1,4 @@
-import { DynamicMapIcon, GameMode, Player, TextLabel } from "@infernus/core";
+import { DynamicMapIcon, DynamicRaceCP, GameMode, Player, TextLabel } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -9,6 +9,7 @@ import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 interface WorldEnv {
   icons: DynamicMapIcon[];
   labels: TextLabel[];
+  raceCps: DynamicRaceCP[];
 }
 
 import { COLOR_LABEL, COLOR_RACE } from "@/utils/colors";
@@ -85,7 +86,7 @@ export function startWorldClockTimers(): void {
   }, WEATHER_ROTATE_MS);
 }
 
-let worldEnv: WorldEnv = { icons: [], labels: [] };
+let worldEnv: WorldEnv = { icons: [], labels: [], raceCps: [] };
 
 /** 清理世界环境实体（GameMode.onExit 调用） */
 export function clearWorldEnvironment(): void {
@@ -95,7 +96,10 @@ export function clearWorldEnvironment(): void {
   for (const label of worldEnv.labels) {
     if (label.isValid()) label.destroy();
   }
-  worldEnv = { icons: [], labels: [] };
+  for (const cp of worldEnv.raceCps) {
+    if (cp.isValid()) cp.destroy();
+  }
+  worldEnv = { icons: [], labels: [], raceCps: [] };
 }
 
 /**
@@ -114,6 +118,7 @@ export async function initWorldEnvironment(): Promise<void> {
 
   const icons: DynamicMapIcon[] = [];
   const labels: TextLabel[] = [];
+  const raceCps: DynamicRaceCP[] = [];
 
   // 2. 地图图标（数据库 map_icon 表）
   try {
@@ -158,6 +163,7 @@ export async function initWorldEnvironment(): Promise<void> {
           drawDistance: 30,
           virtualWorld: 0,
           testLOS: false,
+          charset: "gbk", // 玩家默认 gbk 字符集，3D 标签中文必须同字符集否则乱码
         });
         label.create();
         labels.push(label);
@@ -170,18 +176,19 @@ export async function initWorldEnvironment(): Promise<void> {
     logger.error("[worldenv] 加载传送点标签失败", e);
   }
 
-  // 4. 赛道起点展示（3D 标签 + 图标 类型 53）
+  // 4. 赛道起点展示（3D 标签 + 图标 类型 53 + 检查点圆圈）
   try {
     const races = await prisma.race.findMany({
       where: { isEnabled: true, deletedAt: null },
       include: {
-        raceCps: { orderBy: { index: "asc" }, take: 1 },
+        raceCps: { orderBy: { index: "asc" }, take: 2 }, // 前 2 个 CP：起点 + 第二个（箭头方向）
       },
     });
     let raceLabels = 0;
     for (const race of races) {
       const first = race.raceCps[0];
       if (!first) continue;
+      const second = race.raceCps[1];
       try {
         const label = new TextLabel({
           text: `{98cdfe}[赛车] ${race.name}\n输入 /r s ${race.name} 开始比赛`,
@@ -192,6 +199,7 @@ export async function initWorldEnvironment(): Promise<void> {
           drawDistance: 20,
           virtualWorld: 0,
           testLOS: false,
+          charset: "gbk", // 玩家默认 gbk 字符集，3D 标签中文必须同字符集否则乱码
         });
         label.create();
         labels.push(label);
@@ -205,6 +213,20 @@ export async function initWorldEnvironment(): Promise<void> {
         });
         icon.create();
         icons.push(icon);
+        // 起点检查点圆圈：有第二 CP → 红色箭头指向它；只有一个 CP → 终点样式
+        const cp = new DynamicRaceCP({
+          type: second ? 0 : 1,
+          x: Number(first.x),
+          y: Number(first.y),
+          z: Number(first.z),
+          nextX: second ? Number(second.x) : Number(first.x),
+          nextY: second ? Number(second.y) : Number(first.y),
+          nextZ: second ? Number(second.z) : Number(first.z),
+          size: Number(first.size) || 8,
+          worldId: 0,
+        });
+        cp.create();
+        raceCps.push(cp);
         raceLabels++;
       } catch (e) {
         logger.warn(`[worldenv] 赛道起点展示失败 ${race.name}`, e);
@@ -215,7 +237,7 @@ export async function initWorldEnvironment(): Promise<void> {
     logger.error("[worldenv] 加载赛道起点失败", e);
   }
 
-  worldEnv = { icons, labels };
+  worldEnv = { icons, labels, raceCps };
 }
 
 /** 玩家当前应跟随的现实游戏时间 */

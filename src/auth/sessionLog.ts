@@ -2,6 +2,7 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
+import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
 import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
@@ -51,18 +52,19 @@ async function showSessionLog(player: Player, userId: string, title: string): Pr
   );
 }
 
-/** 面板入口：我的登录记录（所有人） */
-export async function showMySessionLogs(player: Player): Promise<void> {
+/** 面板入口：我的登录记录（所有人）。关闭记录后返回上一层 */
+export async function showMySessionLogs(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   await showSessionLog(player, auth.userId, "我的登录记录（最近 10 次）");
+  return back?.();
 }
 
-/** OP 面板入口：按用户名查看任意用户登录记录（不要求在线） */
-export async function showUserSessionLogs(player: Player): Promise<void> {
+/** OP 面板入口：按用户名查看任意用户登录记录（不要求在线）。取消返回上一层 */
+export async function showUserSessionLogs(player: Player, back?: MenuBack): Promise<void> {
   if (!isSuperAdmin(player)) {
     player.sendClientMessage(COLOR_ERROR, "仅管理员可查看他人登录记录");
-    return;
+    return back?.();
   }
   const res = await showDialog(
     player,
@@ -74,13 +76,15 @@ export async function showUserSessionLogs(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const username = res.inputText.trim();
-  if (!username) return;
+  if (!username) return back?.();
   const user = await prisma.sysUser.findUnique({ where: { username } });
   if (!user) {
     player.sendClientMessage(COLOR_ERROR, `用户 ${username} 不存在`);
-    return;
+    return back?.();
   }
   await showSessionLog(player, user.id, `${username} 的登录记录（最近 10 次）`);
+  return back?.();
 }

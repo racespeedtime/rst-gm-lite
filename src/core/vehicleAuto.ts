@@ -117,7 +117,7 @@ async function vehicleTick(player: Player): Promise<void> {
     const vel = veh.getVelocity();
     if (Math.abs(vel.z) > STUNT_AIR_SPEED) {
       lastStuntAt.set(player.id, Date.now());
-      new GameText("~r~特技!~w~ +1", 1200, 6).forPlayer(player);
+      new GameText("~r~STUNT!~w~ +1", 1200, 6).forPlayer(player);
     }
   }
 }

@@ -1,5 +1,6 @@
 import { Player } from "@infernus/core";
 import { getSetting, updateSetting, pickOption, notifySaved, toggleText, toggleSetting } from "./settings";
+import type { MenuBack } from "@/core/panel";
 
 /**
  * 界面个性化菜单
@@ -10,7 +11,7 @@ import { getSetting, updateSetting, pickOption, notifySaved, toggleText, toggleS
  * 5. 速度表 3d 显示（与 2d 互斥）
  * 6. 特技显示
  */
-export async function openInterfaceMenu(player: Player): Promise<void> {
+export async function openInterfaceMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
   if (!setting) return;
   const options = [
@@ -22,7 +23,7 @@ export async function openInterfaceMenu(player: Player): Promise<void> {
     `特技显示：${toggleText(setting.showStunt)}`,
   ];
   const index = await pickOption(player, "界面个性化", options);
-  if (index < 0) return;
+  if (index < 0) return back?.();
 
   if (index === 0) {
     const next = !setting.hideAllGui;

@@ -4,6 +4,7 @@ import { openSpawnSettingsFlow } from "@/core/spawn";
 import { setHouseObjectsVisibleForPlayer } from "@/house";
 import { parseIntInRange } from "@/utils/parse";
 import { showDialog } from "@/utils/dialog";
+import type { MenuBack } from "@/core/panel";
 
 /** 玩家游戏内颜色色板 */
 const COLOR_PALETTE = [
@@ -32,7 +33,7 @@ const pad2 = (n: number): string => String(n).padStart(2, "0");
  * 7. 出生点设置（随机/上次位置）
  * 8. 接受传送（开关）
  */
-export async function openWorldMenu(player: Player): Promise<void> {
+export async function openWorldMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
   if (!setting) return;
   const options = [
@@ -46,7 +47,7 @@ export async function openWorldMenu(player: Player): Promise<void> {
     `接受传送：${toggleText(setting.acceptTeleport)}`,
   ];
   const index = await pickOption(player, "世界个性化", options);
-  if (index < 0) return;
+  if (index < 0) return back?.();
 
   if (index === 0) {
     await toggleSetting(player, "syncGameTime", "跟随世界时间");

@@ -4,6 +4,7 @@ import { getAuthState } from "@/auth/auth";
 import { allowChat } from "@/core/ratelimit";
 import { COLOR_ERROR } from "@/utils/colors";
 import { getChatDisplayName } from "@/core/playerStyle";
+import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
 export type ChatRange = "session" | "public";
@@ -53,7 +54,7 @@ export function chatRangeName(range: ChatRange): string {
 }
 
 /** 万能面板入口：切换聊天范围 */
-export async function changeChatRangeFlow(player: Player): Promise<void> {
+export async function changeChatRangeFlow(player: Player, back?: MenuBack): Promise<void> {
   const current = getChatRange(player.id);
   const info = [
     `1. 当前战局${current === "session" ? "（当前）" : ""} —— 只发给同一战局的玩家`,
@@ -69,10 +70,12 @@ export async function changeChatRangeFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const range: ChatRange = res.listItem === 1 ? "public" : "session";
   setChatRange(player.id, range);
   player.sendClientMessage(SESSION_CHAT_COLOR, `聊天范围已切换为：${chatRangeName(range)}`);
+  return back?.();
 }
 
 /**
@@ -80,7 +83,7 @@ export async function changeChatRangeFlow(player: Player): Promise<void> {
  * 拦截 onText 按玩家范围分发：
  * - "session"（默认）：只发给同一战局的玩家
  * - "public"：发给所有玩家（全局公屏）
- * return true 抑制原生默认显示，避免重复。
+ * return false 抑制原生默认聊天显示（onText 返回 true 会同时输出 SA-MP 默认格式，造成重复）。
  */
 export function initChat(): void {
   PlayerEvent.onText(({ player, text, next }) => {
@@ -90,14 +93,15 @@ export function initChat(): void {
     }
     // 未认证玩家不参与聊天（正常流程中认证期间也不会发出文本）
     if (!getAuthState(player.id)) {
-      return true;
+      return false;
     }
     // 全局限频：发言过快则提示并忽略本次
     if (!allowChat(player.id)) {
       player.sendClientMessage(COLOR_ERROR, "发言过于频繁，请稍后再试");
-      return true;
+      return false;
     }
-    const name = getChatDisplayName(player.id, player.getName().name);
+    // 名字本体剥离颜色码（supportAllNickname 允许昵称含 {RRGGBB}，防聊天注入），prefix/suffix 彩色装饰保留
+    const name = getChatDisplayName(player.id, sanitizeChatText(player.getName().name));
     const range = getChatRange(player.id);
     const safeText = sanitizeChatText(text);
     if (range === "public") {
@@ -114,7 +118,7 @@ export function initChat(): void {
         p.sendClientMessage(SESSION_CHAT_COLOR, `[战局] ${name}: ${safeText}`);
       }
     }
-    return true;
+    return false;
   });
 
   // /pm <ID> <消息>：私人聊天（任何模式下可用）

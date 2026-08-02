@@ -2,12 +2,13 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { isSuperAdmin, sendNoPermission } from "@/admin/op";
+import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 
-/** OP 装扮管理：创建/编辑/删除系统装扮目录 */
-export async function openAttireAdmin(player: Player): Promise<void> {
+/** OP 装扮管理：创建/编辑/删除系统装扮目录。子功能取消返回本面板，本面板"关闭"返回上一层 */
+export async function openAttireAdmin(player: Player, back?: MenuBack): Promise<void> {
   // 纵深防御：函数内再次校验权限（不依赖面板入口过滤）
   if (!isSuperAdmin(player)) {
     sendNoPermission(player);
@@ -23,17 +24,19 @@ export async function openAttireAdmin(player: Player): Promise<void> {
       button2: "关闭",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
+  const toThis = () => openAttireAdmin(player, back);
   if (res.listItem === 0) {
-    await createAttire(player);
+    await createAttire(player, toThis);
   } else if (res.listItem === 1) {
-    await editAttire(player);
+    await editAttire(player, toThis);
   } else if (res.listItem === 2) {
-    await deleteAttire(player);
+    await deleteAttire(player, toThis);
   }
 }
 
-async function createAttire(player: Player): Promise<void> {
+async function createAttire(player: Player, back: MenuBack): Promise<void> {
   const nameRes = await showDialog(
     player,
     new Dialog({
@@ -44,11 +47,12 @@ async function createAttire(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!nameRes || nameRes.response !== 1) return;
+  if (!nameRes) return;
+  if (nameRes.response !== 1) return back();
   const name = nameRes.inputText.trim();
   if (!name) {
     player.sendClientMessage(COLOR_ERROR, "名称不能为空");
-    return;
+    return back();
   }
   const typeRes = await showDialog(
     player,
@@ -60,7 +64,8 @@ async function createAttire(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!typeRes || typeRes.response !== 1) return;
+  if (!typeRes) return;
+  if (typeRes.response !== 1) return back();
   const type = typeRes.listItem === 0 ? "PLAYER" : typeRes.listItem === 1 ? "VEHICLE" : "COMMON";
 
   const modelRes = await showDialog(
@@ -73,11 +78,12 @@ async function createAttire(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!modelRes || modelRes.response !== 1) return;
+  if (!modelRes) return;
+  if (modelRes.response !== 1) return back();
   const [modelId, boneId] = modelRes.inputText.trim().split(/\s+/).map(Number);
   if (!Number.isInteger(modelId) || modelId <= 0) {
     player.sendClientMessage(COLOR_ERROR, "模型ID无效");
-    return;
+    return back();
   }
   const offsetRes = await showDialog(
     player,
@@ -89,13 +95,14 @@ async function createAttire(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!offsetRes || offsetRes.response !== 1) return;
+  if (!offsetRes) return;
+  if (offsetRes.response !== 1) return back();
   const nums = offsetRes.inputText.trim()
     ? offsetRes.inputText.trim().split(/\s+/).map(Number)
     : [0, 0, 0, 0, 0, 0, 1, 1, 1];
   if (nums.length !== 9 || nums.some((n) => !Number.isFinite(n))) {
     player.sendClientMessage(COLOR_ERROR, "需要 9 个数字");
-    return;
+    return back();
   }
   try {
     await prisma.attire.create({
@@ -114,16 +121,17 @@ async function createAttire(player: Player): Promise<void> {
     logger.error(`[attire] OP 创建装扮失败`, e);
     player.sendClientMessage(COLOR_ERROR, "创建失败");
   }
+  return back();
 }
 
-async function editAttire(player: Player): Promise<void> {
+async function editAttire(player: Player, back: MenuBack): Promise<void> {
   const attires = await prisma.attire.findMany({
     where: { deletedAt: null },
     orderBy: { name: "asc" },
   });
   if (attires.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "装扮库为空");
-    return;
+    return back();
   }
   const options = attires.map((a) => `${a.name}（${a.type} 模型${a.modelId}）`);
   const r = await showDialog(
@@ -136,9 +144,10 @@ async function editAttire(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!r || r.response !== 1) return;
+  if (!r) return;
+  if (r.response !== 1) return back();
   const attire = attires[r.listItem];
-  if (!attire) return;
+  if (!attire) return back();
   // 修改装配参数
   const offsetRes = await showDialog(
     player,
@@ -150,11 +159,12 @@ async function editAttire(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!offsetRes || offsetRes.response !== 1) return;
+  if (!offsetRes) return;
+  if (offsetRes.response !== 1) return back();
   const nums = offsetRes.inputText.trim().split(/\s+/).map(Number);
   if (nums.length !== 11 || nums.some((n) => !Number.isFinite(n))) {
     player.sendClientMessage(COLOR_ERROR, "需要 11 个数字");
-    return;
+    return back();
   }
   await prisma.attire.update({
     where: { id: attire.id },
@@ -167,16 +177,17 @@ async function editAttire(player: Player): Promise<void> {
     },
   });
   player.sendClientMessage(COLOR_SUCCESS, `装扮「${attire.name}」已更新`);
+  return back();
 }
 
-async function deleteAttire(player: Player): Promise<void> {
+async function deleteAttire(player: Player, back: MenuBack): Promise<void> {
   const attires = await prisma.attire.findMany({
     where: { deletedAt: null },
     orderBy: { name: "asc" },
   });
   if (attires.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "装扮库为空");
-    return;
+    return back();
   }
   const options = attires.map((a) => `${a.name}（${a.type}）`);
   const r = await showDialog(
@@ -189,9 +200,10 @@ async function deleteAttire(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!r || r.response !== 1) return;
+  if (!r) return;
+  if (r.response !== 1) return back();
   const attire = attires[r.listItem];
-  if (!attire) return;
+  if (!attire) return back();
   const confirm = await showDialog(
     player,
     new Dialog({
@@ -202,7 +214,8 @@ async function deleteAttire(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!confirm || confirm.response !== 1) return;
+  if (!confirm) return;
+  if (confirm.response !== 1) return back();
   // 事务：软删装扮 + 级联删除引用它的预设条目（与提示文案一致，防残留条目继续挂载已删装扮）
   await prisma.$transaction(async (tx) => {
     await tx.playerPresetItem.deleteMany({ where: { attireId: attire.id } });
@@ -213,4 +226,5 @@ async function deleteAttire(player: Player): Promise<void> {
     });
   });
   player.sendClientMessage(COLOR_SUCCESS, `装扮「${attire.name}」已删除`);
+  return back();
 }

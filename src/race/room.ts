@@ -395,9 +395,9 @@ function beginRace(room: RaceRoom): void {
   broadcastToRoom(room, "[赛车] 比赛开始！");
 }
 
-/** 创建比赛计时 UI（每人独立） */
+/** 创建比赛计时 UI（每人独立）。注意：TextDraw 不支持中文，只显示 ASCII 计时（赛道名不进 TextDraw） */
 function createRaceTd(player: Player, room: RaceRoom): void {
-  const td = new TextDraw({ player, x: 320, y: 20, text: `${room.raceName}  00:00.000` });
+  const td = new TextDraw({ player, x: 320, y: 20, text: `00:00.000` });
   td
     .setFont(2)
     .setLetterSize(0.5, 1.5)
@@ -757,13 +757,14 @@ function tickRooms(): void {
       if (a.totalCp !== b.totalCp) return b.totalCp - a.totalCp;
       return a.dist - b.dist;
     });
-    // 更新每人 TD 文本（排名 + 计时）
+    // 更新每人 TD 文本（排名 + 计时；TextDraw 不支持中文，圈数用 ASCII 表示）
     rows.forEach((r, rank) => {
       const td = room.raceTextTds.get(r.playerId);
       const mp = playerRaces.get(r.playerId);
       if (!td || !mp) return;
       const time = mp.finished ? r.time : now - mp.startTime;
-      td.setString(`No.${rank + 1}  ${room.raceName}  ${formatTime(time)}  ${r.finished ? "✓" : `${mp.lap + 1}/${room.laps}圈`}`);
+      const lapText = r.finished ? "FIN" : `L${mp.lap + 1}/${room.laps}`;
+      td.setString(`No.${rank + 1}  ${formatTime(time)}  ${lapText}`);
     });
   }
 }

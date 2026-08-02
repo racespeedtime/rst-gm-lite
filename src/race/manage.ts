@@ -7,11 +7,12 @@ import { showDialog } from "@/utils/dialog";
 import { formatTime } from "@/utils/format";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, COLOR_RACE } from "@/utils/colors";
 import { swapSortIndex, nextSortIndex, compactSortIndex } from "@/utils/sort";
+import type { MenuBack } from "@/core/panel";
 import { createRaceRoom } from "./room";
 import { enterRaceEdit, canEditRace } from "./editor";
 
 /** 面板入口：赛道管理 */
-export async function openRaceMenu(player: Player): Promise<void> {
+export async function openRaceMenu(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({
@@ -22,23 +23,25 @@ export async function openRaceMenu(player: Player): Promise<void> {
       button2: "关闭",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return; // 断线
+  if (res.response !== 1) return back?.(); // 取消 → 返回上一层
+  const toThis = () => openRaceMenu(player, back);
   switch (res.listItem) {
     case 0:
-      await createRaceFlow(player);
+      await createRaceFlow(player, toThis);
       break;
     case 1:
-      await raceListFlow(player, "ALL");
+      await raceListFlow(player, "ALL", toThis);
       break;
     case 2:
-      await raceListFlow(player, "MINE");
+      await raceListFlow(player, "MINE", toThis);
       break;
     case 3:
-      await raceGroupFlow(player);
+      await raceGroupFlow(player, toThis);
       break;
     case 4:
       if (isSuperAdmin(player)) {
-        await adminRaceFlow(player);
+        await adminRaceFlow(player, toThis);
       } else {
         player.sendClientMessage(COLOR_ERROR, "仅管理员可管理赛道");
       }
@@ -47,7 +50,7 @@ export async function openRaceMenu(player: Player): Promise<void> {
 }
 
 /** 创建赛道 */
-async function createRaceFlow(player: Player): Promise<void> {
+async function createRaceFlow(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const nameRes = await showDialog(
@@ -60,11 +63,12 @@ async function createRaceFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!nameRes || nameRes.response !== 1) return;
+  if (!nameRes) return;
+  if (nameRes.response !== 1) return back?.();
   const name = nameRes.inputText.trim();
   if (!name) {
     player.sendClientMessage(COLOR_ERROR, "赛道名称不能为空");
-    return;
+    return back?.();
   }
   const descRes = await showDialog(
     player,
@@ -76,7 +80,8 @@ async function createRaceFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!descRes || descRes.response !== 1) return;
+  if (!descRes) return;
+  if (descRes.response !== 1) return back?.();
   try {
     const race = await prisma.race.create({
       data: {
@@ -95,7 +100,7 @@ async function createRaceFlow(player: Player): Promise<void> {
 }
 
 /** 赛道列表（全部/我的） */
-async function raceListFlow(player: Player, mode: "ALL" | "MINE"): Promise<void> {
+async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   const where = {
     isEnabled: true,
@@ -105,7 +110,7 @@ async function raceListFlow(player: Player, mode: "ALL" | "MINE"): Promise<void>
   const races = await prisma.race.findMany({ where, orderBy: { createdAt: "desc" } });
   if (races.length === 0) {
     player.sendClientMessage(COLOR_WHITE, mode === "MINE" ? "你还没有创建赛道" : "暂无赛道");
-    return;
+    return back?.();
   }
   const options = races.map((r) => `${r.name}${r.description ? `（${r.description}）` : ""} ${Math.round(Number(r.totalLength))}m`);
   const res = await showDialog(
@@ -118,14 +123,15 @@ async function raceListFlow(player: Player, mode: "ALL" | "MINE"): Promise<void>
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const race = races[res.listItem];
-  if (!race) return;
-  await raceDetailFlow(player, race.id);
+  if (!race) return back?.();
+  await raceDetailFlow(player, race.id, back);
 }
 
 /** 赛道详情：开始比赛/编辑/纪录/删除 */
-async function raceDetailFlow(player: Player, raceId: string): Promise<void> {
+async function raceDetailFlow(player: Player, raceId: string, back?: MenuBack): Promise<void> {
   const race = await prisma.race.findUnique({ where: { id: raceId } });
   if (!race) return;
   const mine = await canEditRace(player, raceId);
@@ -141,23 +147,25 @@ async function raceDetailFlow(player: Player, raceId: string): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const idx = res.listItem;
   if (idx === 0) {
     await createRaceRoom(player, raceId);
     // 建好房间后提示下一步（对齐 /r s 流程，避免首次使用者不知道要开始）
     player.sendClientMessage(COLOR_RACE, "输入 /r s 开始比赛（倒计时 5 秒后开跑）");
+    return back?.();
   } else if (idx === 1) {
-    await leaderboardFlow(player, raceId);
+    await leaderboardFlow(player, raceId, () => raceDetailFlow(player, raceId, back));
   } else if (mine && idx === 2) {
     await enterRaceEdit(player, raceId);
   } else if (mine && idx === 3) {
-    await deleteRaceFlow(player, raceId);
+    await deleteRaceFlow(player, raceId, () => raceDetailFlow(player, raceId, back));
   }
 }
 
 /** 排行榜 */
-async function leaderboardFlow(player: Player, raceId: string): Promise<void> {
+async function leaderboardFlow(player: Player, raceId: string, back?: MenuBack): Promise<void> {
   const records = await prisma.raceRecord.findMany({
     where: { raceId, deletedAt: null },
     orderBy: [{ record: "asc" }],
@@ -166,7 +174,7 @@ async function leaderboardFlow(player: Player, raceId: string): Promise<void> {
   });
   if (records.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "该赛道还没有纪录");
-    return;
+    return back?.();
   }
   const info = records
     .map((r, i) => `${i + 1}. ${r.sysUser?.username ?? "?"}  ${formatTime(r.record)}`)
@@ -180,13 +188,14 @@ async function leaderboardFlow(player: Player, raceId: string): Promise<void> {
       button1: "关闭",
     }),
   );
+  return back?.();
 }
 
 /** 删除赛道（二次验证） */
-async function deleteRaceFlow(player: Player, raceId: string): Promise<void> {
+async function deleteRaceFlow(player: Player, raceId: string, back?: MenuBack): Promise<void> {
   if (!(await canEditRace(player, raceId))) {
     player.sendClientMessage(COLOR_ERROR, "你无权删除该赛道");
-    return;
+    return back?.();
   }
   const confirm = await showDialog(
     player,
@@ -198,7 +207,8 @@ async function deleteRaceFlow(player: Player, raceId: string): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!confirm || confirm.response !== 1) return;
+  if (!confirm) return;
+  if (confirm.response !== 1) return back?.();
   const race = await prisma.race.findUnique({ where: { id: raceId } });
   if (!race) return;
   // 二次输入验证
@@ -212,10 +222,11 @@ async function deleteRaceFlow(player: Player, raceId: string): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!verify || verify.response !== 1) return;
+  if (!verify) return;
+  if (verify.response !== 1) return back?.();
   if (verify.inputText.trim() !== race.name) {
     player.sendClientMessage(COLOR_ERROR, "输入的名称不匹配，已取消删除");
-    return;
+    return back?.();
   }
   try {
     const cps = await prisma.raceCp.findMany({ where: { raceId } });
@@ -236,7 +247,7 @@ async function deleteRaceFlow(player: Player, raceId: string): Promise<void> {
 }
 
 /** 赛道分组（OP 管理） */
-async function raceGroupFlow(player: Player): Promise<void> {
+async function raceGroupFlow(player: Player, back?: MenuBack): Promise<void> {
   const groups = await prisma.raceGroup.findMany({
     where: { deletedAt: null },
     orderBy: { index: "asc" },
@@ -245,9 +256,9 @@ async function raceGroupFlow(player: Player): Promise<void> {
   if (groups.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "暂无赛道分组");
     if (isSuperAdmin(player)) {
-      await createGroupFlow(player);
+      await createGroupFlow(player, back);
     }
-    return;
+    return back?.();
   }
   const options = groups.map((g) => `${g.name}（${g.races.length} 条赛道）`);
   if (isSuperAdmin(player)) {
@@ -263,30 +274,31 @@ async function raceGroupFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   if (res.listItem < groups.length) {
     const group = groups[res.listItem];
-    if (group) await groupDetailFlow(player, group.id);
+    if (group) await groupDetailFlow(player, group.id, back);
     return;
   }
   // OP 扩展项
-  if (!isSuperAdmin(player)) return;
+  if (!isSuperAdmin(player)) return back?.();
   if (res.listItem === groups.length) {
-    await reorderGroups(player);
+    await reorderGroups(player, back);
   } else if (res.listItem === groups.length + 1) {
-    await createGroupFlow(player);
+    await createGroupFlow(player, back);
   }
 }
 
 /** 重排分组顺序：列出分组 → 选择上移/下移（与相邻分组交换 index） */
-async function reorderGroups(player: Player): Promise<void> {
+async function reorderGroups(player: Player, back?: MenuBack): Promise<void> {
   const groups = await prisma.raceGroup.findMany({
     where: { deletedAt: null },
     orderBy: { index: "asc" },
   });
   if (groups.length < 2) {
     player.sendClientMessage(COLOR_WHITE, "分组数量不足，无法重排");
-    return;
+    return back?.();
   }
   const options = groups.map((g) => `${g.name}（第 ${g.index + 1} 位）`);
   const res = await showDialog(
@@ -299,10 +311,11 @@ async function reorderGroups(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const idx = res.listItem;
   const group = groups[idx];
-  if (!group) return;
+  if (!group) return back?.();
   const dir = await showDialog(
     player,
     new Dialog({
@@ -313,21 +326,22 @@ async function reorderGroups(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!dir || dir.response !== 1) return;
+  if (!dir) return;
+  if (dir.response !== 1) return back?.();
   const target = dir.listItem === 0 ? groups[idx - 1] : groups[idx + 1];
   if (!target) {
     player.sendClientMessage(COLOR_ERROR, dir.listItem === 0 ? "已是第一个分组" : "已是最后一个分组");
-    return;
+    return back?.();
   }
   await swapSortIndex(group, target, (id, index) =>
     prisma.raceGroup.update({ where: { id }, data: { index } }),
   );
   player.sendClientMessage(COLOR_SUCCESS, `分组「${group.name}」已${dir.listItem === 0 ? "上移" : "下移"}`);
-  await raceGroupFlow(player);
+  await raceGroupFlow(player, back);
 }
 
 /** 分组详情 */
-async function groupDetailFlow(player: Player, groupId: string): Promise<void> {
+async function groupDetailFlow(player: Player, groupId: string, back?: MenuBack): Promise<void> {
   const group = await prisma.raceGroup.findUnique({
     where: { id: groupId },
     include: { races: { include: { race: true }, orderBy: { index: "asc" } } },
@@ -347,24 +361,26 @@ async function groupDetailFlow(player: Player, groupId: string): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const idx = res.listItem;
   if (idx < group.races.length) {
     const gr = group.races[idx];
     await createRaceRoom(player, gr.raceId);
-    return;
+    return back?.();
   }
-  if (!isSuperAdmin(player)) return;
+  if (!isSuperAdmin(player)) return back?.();
   const adminIdx = idx - group.races.length;
-  if (adminIdx === 0) await addRaceToGroup(player, groupId);
-  else if (adminIdx === 1) await removeRaceFromGroup(player, groupId);
-  else if (adminIdx === 2) await reorderGroupRaces(player, groupId);
-  else if (adminIdx === 3) await renameGroup(player, groupId);
-  else if (adminIdx === 4) await deleteGroup(player, groupId);
+  const toThis = () => groupDetailFlow(player, groupId, back);
+  if (adminIdx === 0) await addRaceToGroup(player, groupId, toThis);
+  else if (adminIdx === 1) await removeRaceFromGroup(player, groupId, toThis);
+  else if (adminIdx === 2) await reorderGroupRaces(player, groupId, toThis);
+  else if (adminIdx === 3) await renameGroup(player, groupId, toThis);
+  else if (adminIdx === 4) await deleteGroup(player, groupId, toThis);
 }
 
 /** 重排组内赛道顺序：列出赛道 → 选择上移/下移（交换 index） */
-async function reorderGroupRaces(player: Player, groupId: string): Promise<void> {
+async function reorderGroupRaces(player: Player, groupId: string, back?: MenuBack): Promise<void> {
   const entries = await prisma.raceGroupRace.findMany({
     where: { raceGroupId: groupId },
     include: { race: true },
@@ -372,7 +388,7 @@ async function reorderGroupRaces(player: Player, groupId: string): Promise<void>
   });
   if (entries.length < 2) {
     player.sendClientMessage(COLOR_WHITE, "组内赛道不足，无法重排");
-    return;
+    return back?.();
   }
   const options = entries.map((e) => `${e.race.name}（第 ${e.index + 1} 位）`);
   const res = await showDialog(
@@ -385,10 +401,11 @@ async function reorderGroupRaces(player: Player, groupId: string): Promise<void>
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const idx = res.listItem;
   const entry = entries[idx];
-  if (!entry) return;
+  if (!entry) return back?.();
   const dir = await showDialog(
     player,
     new Dialog({
@@ -399,11 +416,12 @@ async function reorderGroupRaces(player: Player, groupId: string): Promise<void>
       button2: "取消",
     }),
   );
-  if (!dir || dir.response !== 1) return;
+  if (!dir) return;
+  if (dir.response !== 1) return back?.();
   const target = dir.listItem === 0 ? entries[idx - 1] : entries[idx + 1];
   if (!target) {
     player.sendClientMessage(COLOR_ERROR, dir.listItem === 0 ? "已是第一条赛道" : "已是最后一条赛道");
-    return;
+    return back?.();
   }
   await swapSortIndex(
     { id: entry.raceId, index: entry.index },
@@ -415,10 +433,10 @@ async function reorderGroupRaces(player: Player, groupId: string): Promise<void>
       }),
   );
   player.sendClientMessage(COLOR_SUCCESS, `「${entry.race.name}」已${dir.listItem === 0 ? "上移" : "下移"}`);
-  await groupDetailFlow(player, groupId);
+  await groupDetailFlow(player, groupId, back);
 }
 
-async function createGroupFlow(player: Player): Promise<void> {
+async function createGroupFlow(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({
@@ -429,18 +447,20 @@ async function createGroupFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const name = res.inputText.trim();
-  if (!name) return;
+  if (!name) return back?.();
   const groups = await prisma.raceGroup.findMany({
     where: { deletedAt: null },
     select: { index: true },
   });
   await prisma.raceGroup.create({ data: { name, index: nextSortIndex(groups) } });
   player.sendClientMessage(COLOR_SUCCESS, `分组「${name}」已创建`);
+  return back?.();
 }
 
-async function addRaceToGroup(player: Player, groupId: string): Promise<void> {
+async function addRaceToGroup(player: Player, groupId: string, back?: MenuBack): Promise<void> {
   const races = await prisma.race.findMany({
     where: { isEnabled: true, deletedAt: null },
     orderBy: { name: "asc" },
@@ -456,16 +476,17 @@ async function addRaceToGroup(player: Player, groupId: string): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const race = races[res.listItem];
-  if (!race) return;
+  if (!race) return back?.();
   // 判重：该赛道已在分组中则拒绝（race_group_race 有复合主键，重复会抛异常）
   const dup = await prisma.raceGroupRace.findUnique({
     where: { raceGroupId_raceId: { raceGroupId: groupId, raceId: race.id } },
   });
   if (dup) {
     player.sendClientMessage(COLOR_ERROR, `赛道「${race.name}」已在分组中`);
-    return;
+    return back?.();
   }
   try {
     const existing = await prisma.raceGroupRace.findMany({
@@ -480,9 +501,10 @@ async function addRaceToGroup(player: Player, groupId: string): Promise<void> {
     logger.error(`[race] 添加赛道到分组失败`, e);
     player.sendClientMessage(COLOR_ERROR, "添加失败");
   }
+  return back?.();
 }
 
-async function removeRaceFromGroup(player: Player, groupId: string): Promise<void> {
+async function removeRaceFromGroup(player: Player, groupId: string, back?: MenuBack): Promise<void> {
   const entries = await prisma.raceGroupRace.findMany({
     where: { raceGroupId: groupId },
     include: { race: true },
@@ -490,7 +512,7 @@ async function removeRaceFromGroup(player: Player, groupId: string): Promise<voi
   });
   if (entries.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "分组内没有赛道");
-    return;
+    return back?.();
   }
   const res = await showDialog(
     player,
@@ -523,7 +545,7 @@ async function removeRaceFromGroup(player: Player, groupId: string): Promise<voi
   player.sendClientMessage(COLOR_SUCCESS, `已移除赛道「${entry.race.name}」`);
 }
 
-async function renameGroup(player: Player, groupId: string): Promise<void> {
+async function renameGroup(player: Player, groupId: string, back?: MenuBack): Promise<void> {
   const group = await prisma.raceGroup.findUnique({ where: { id: groupId } });
   if (!group) return;
   const res = await showDialog(
@@ -536,14 +558,16 @@ async function renameGroup(player: Player, groupId: string): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const name = res.inputText.trim();
-  if (!name) return;
+  if (!name) return back?.();
   await prisma.raceGroup.update({ where: { id: groupId }, data: { name } });
   player.sendClientMessage(COLOR_SUCCESS, "分组名已更新");
+  return back?.();
 }
 
-async function deleteGroup(player: Player, groupId: string): Promise<void> {
+async function deleteGroup(player: Player, groupId: string, back?: MenuBack): Promise<void> {
   const confirm = await showDialog(
     player,
     new Dialog({
@@ -554,17 +578,19 @@ async function deleteGroup(player: Player, groupId: string): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!confirm || confirm.response !== 1) return;
+  if (!confirm) return;
+  if (confirm.response !== 1) return back?.();
   // 事务：先删组内关联再删分组，中途失败整体回滚
   await prisma.$transaction(async (tx) => {
     await tx.raceGroupRace.deleteMany({ where: { raceGroupId: groupId } });
     await tx.raceGroup.delete({ where: { id: groupId } });
   });
   player.sendClientMessage(COLOR_SUCCESS, "分组已删除");
+  return back?.();
 }
 
 /** OP 管理赛道 */
-async function adminRaceFlow(player: Player): Promise<void> {
+async function adminRaceFlow(player: Player, back?: MenuBack): Promise<void> {
   const races = await prisma.race.findMany({
     where: { deletedAt: null },
     orderBy: { createdAt: "desc" },
@@ -580,9 +606,10 @@ async function adminRaceFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) return;
+  if (!res) return;
+  if (res.response !== 1) return back?.();
   const race = races[res.listItem];
-  if (!race) return;
+  if (!race) return back?.();
   const opts = ["编辑赛道", "删除赛道（二次验证）", "创建分组"];
   const r2 = await showDialog(
     player,
@@ -594,10 +621,12 @@ async function adminRaceFlow(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!r2 || r2.response !== 1) return;
+  if (!r2) return;
+  if (r2.response !== 1) return back?.();
+  const toThis = () => adminRaceFlow(player, back);
   if (r2.listItem === 0) await enterRaceEdit(player, race.id);
-  else if (r2.listItem === 1) await deleteRaceFlow(player, race.id);
-  else if (r2.listItem === 2) await createGroupFlow(player);
+  else if (r2.listItem === 1) await deleteRaceFlow(player, race.id, toThis);
+  else if (r2.listItem === 2) await createGroupFlow(player, toThis);
 }
 
 /** 初始化命令（命令为辅）：/r 相关已由 room 注册，这里补充 /race 别名已在 room */
