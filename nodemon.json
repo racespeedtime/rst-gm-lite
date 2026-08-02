@@ -1,0 +1,4 @@
+{
+  "watch": ["dist/bundle.js", "config.json"],
+  "legacyWatch": true
+}
