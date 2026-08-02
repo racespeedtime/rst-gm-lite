@@ -18,7 +18,7 @@ import { initVehicleCommands, onPlayerDisconnectVehicle, startVehicleSaveTimer }
 import { cleanupTeleport, fallbackTeleport, initTeleport, initTpTimeoutLoop } from "@/teleport";
 import { initHouseCommands, loadAllHouseObjects, unloadAllHouseObjects, setHouseObjectsVisibleForPlayer } from "@/house";
 import { applyPlayerPreset, cleanupAttire, cleanupOrphanPresets } from "@/attire";
-import { initRaceSystem, cleanupRacePlayer, tryReconnectRace } from "@/race/room";
+import { initRaceSystem, cleanupRacePlayer, tryReconnectRace, isInRace } from "@/race/room";
 import { initRaceEditor, exitEdit } from "@/race/editor";
 import { initRaceCommands } from "@/race/manage";
 import { initObserve, cleanupObserve } from "@/core/observe";
@@ -36,7 +36,7 @@ import {
 } from "@/core/worldenv";
 
 const DEFAULT_CHARSET = "gbk";
-import { COLOR_INFO } from "@/utils/colors";
+import { COLOR_INFO, COLOR_ERROR } from "@/utils/colors";
 
 /**
  * 判断是否为 NPC（所有回调事件统一排除 NPC）
@@ -211,6 +211,12 @@ PlayerEvent.onCommandError(({ player, command, cmdText, error, next }) => {
   // 命令不存在 → 尝试当作传送点（/名称 或 //名称）
   // 注意：command 已被解析器剥离斜杠，必须用 cmdText（保留原始 "/ls" 或 "//ls"）判断前缀
   if (error.type === "NOT_EXIST") {
+    // 比赛中未知命令也统一按比赛隔离拒绝（onCommandReceived 只拦截已注册命令，
+    // 未知命令会绕过隔离直接到这里；fallbackTeleport 只报"比赛中不能传送"，误导）
+    if (isInRace(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生");
+      return true;
+    }
     void fallbackTeleport(player, cmdText ?? command);
     return true;
   }
