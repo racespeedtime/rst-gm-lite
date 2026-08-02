@@ -3,10 +3,13 @@ import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
 import type { MenuBack } from "@/core/panel";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import { showDialog } from "@/utils/dialog";
 
 import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
-const RECENT_LIMIT = 10;
+/** 分页浏览最近 50 条登录记录（每页 10 条） */
+const RECENT_LIMIT = 50;
+const PAGE_SIZE = 10;
 
 /** 格式化会话时长（秒 → 可读） */
 function formatDuration(seconds: number | null): string {
@@ -25,7 +28,19 @@ function formatDate(d: Date | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 展示登录记录列表（对话框） */
+/** 登录记录单行展示（index 为全局序号，跨页连续） */
+function formatSessionLine(
+  s: { loginAt: Date | null; logoutAt: Date | null; duration: number | null; ip: string | null; status: string },
+  index: number,
+): string {
+  return (
+    `${index + 1}. 登录 ${formatDate(s.loginAt)}${s.logoutAt ? ` → ${formatDate(s.logoutAt)}` : ""}` +
+    ` 时长 ${formatDuration(s.duration)}${s.ip ? ` IP:${s.ip}` : ""}` +
+    ` ${s.status === "ONLINE" ? "{00FF00}在线" : "{808080}离线"}`
+  );
+}
+
+/** 展示登录记录（分页对话框，浏览模式） */
 async function showSessionLog(player: Player, userId: string, title: string): Promise<void> {
   const logs = await prisma.sysUserGameSession.findMany({
     where: { userId },
@@ -36,27 +51,21 @@ async function showSessionLog(player: Player, userId: string, title: string): Pr
     player.sendClientMessage(COLOR_WHITE, "暂无登录记录");
     return;
   }
-  const lines = logs.map(
-    (s, i) =>
-      `${i + 1}. 登录 ${formatDate(s.loginAt)}${s.logoutAt ? ` → ${formatDate(s.logoutAt)}` : ""}` +
-      ` 时长 ${formatDuration(s.duration)}${s.ip ? ` IP:${s.ip}` : ""} ${s.status === "ONLINE" ? "{00FF00}在线" : "{808080}离线"}`,
-  );
-  await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.MSGBOX,
-      caption: title,
-      info: lines.join("\n"),
-      button1: "关闭",
-    }),
-  );
+  await showPagedDialog(player, {
+    caption: title,
+    data: logs,
+    pageSize: PAGE_SIZE,
+    selectable: false, // 纯浏览：点普通条目忽略，只翻页/关闭
+    button2: "关闭",
+    format: formatSessionLine,
+  });
 }
 
 /** 面板入口：我的登录记录（所有人）。关闭记录后返回上一层 */
 export async function showMySessionLogs(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
-  await showSessionLog(player, auth.userId, "我的登录记录（最近 10 次）");
+  await showSessionLog(player, auth.userId, "我的登录记录");
   return back?.();
 }
 
@@ -85,6 +94,6 @@ export async function showUserSessionLogs(player: Player, back?: MenuBack): Prom
     player.sendClientMessage(COLOR_ERROR, `用户 ${username} 不存在`);
     return back?.();
   }
-  await showSessionLog(player, user.id, `${username} 的登录记录（最近 10 次）`);
+  await showSessionLog(player, user.id, `${username} 的登录记录`);
   return back?.();
 }
