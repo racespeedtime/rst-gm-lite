@@ -8,7 +8,7 @@ plugins
 qawno
 include
 logs
-.rslib
+.env
 log.txt
 *.exe
 *.dll
@@ -16,3 +16,9 @@ log.txt
 *.dmp
 *.pdb
 *.so
+
+.agents
+.claude
+.zcode
+.windsurf
+/src/generated/prisma

@@ -16,5 +16,5 @@
     "types": ["node", "@infernus/types"]
   },
   "exclude": ["node_modules"],
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "prisma.config.ts"]
 }

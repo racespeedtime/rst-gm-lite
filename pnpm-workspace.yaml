@@ -1,1 +1,4 @@
+allowBuilds:
+  '@prisma/engines': true
+  prisma: true
 minimumReleaseAge: 0

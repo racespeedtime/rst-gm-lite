@@ -1,0 +1,484 @@
+generator client {
+  provider = "prisma-client"
+  output   = "./generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Attire {
+  id                 String              @id @default(uuid()) @db.Uuid
+  name               String              @db.VarChar(255)
+  modelId            Int                 @map("model_id")
+  boneId             Int                 @map("bone_id")
+  x                  Decimal             @db.Decimal(18, 6)
+  y                  Decimal             @db.Decimal(18, 6)
+  z                  Decimal             @db.Decimal(18, 6)
+  rX                 Decimal             @map("r_x") @db.Decimal(18, 6)
+  rY                 Decimal             @map("r_y") @db.Decimal(18, 6)
+  rZ                 Decimal             @map("r_z") @db.Decimal(18, 6)
+  sX                 Decimal             @map("s_x") @db.Decimal(18, 6)
+  sY                 Decimal             @map("s_y") @db.Decimal(18, 6)
+  sZ                 Decimal             @map("s_z") @db.Decimal(18, 6)
+  type               String              @db.VarChar(255)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt          DateTime?           @map("deleted_at") @db.Timestamptz(6)
+  sysUserAttire      SysUserAttire[]
+  userVehicleAttires UserVehicleAttire[]
+
+  @@index([deletedAt])
+  @@map("attire")
+}
+
+model House {
+  id            String         @id @default(uuid()) @db.Uuid
+  name          String         @db.VarChar(255)
+  description   String?        @db.VarChar(255)
+  userId        String?        @map("user_id") @db.Uuid
+  isEnabled     Boolean        @default(false) @map("is_enabled")
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)
+  sysUser       SysUser?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  houseModels   HouseModel[]
+  race          Race?
+  sysUserHouses SysUserHouse[]
+  teleport      Teleport?
+
+  @@index([userId])
+  @@index([deletedAt])
+  @@unique([name])
+  @@map("house")
+}
+
+model HouseModel {
+  id        String   @id @default(uuid()) @db.Uuid
+  type      String   @db.VarChar(255)
+  args      String   @db.VarChar(255)
+  houseId   String?  @map("house_id") @db.Uuid
+  index     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  house     House?   @relation(fields: [houseId], references: [id], onDelete: SetNull)
+
+  @@unique([houseId, index])
+  @@index([houseId])
+  @@map("house_model")
+}
+
+model Race {
+  id            String         @id @default(uuid()) @db.Uuid
+  name          String         @db.VarChar(255)
+  description   String?        @db.VarChar(255)
+  isEnabled     Boolean        @default(false) @map("is_enabled")
+  totalLength   Decimal        @default(0) @db.Decimal(18, 6) @map("total_length")
+  laps          Int            @default(1)
+  userId        String?        @map("user_id") @db.Uuid
+  houseId       String?        @unique @map("house_id") @db.Uuid
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)
+  house         House?         @relation(fields: [houseId], references: [id], onDelete: SetNull)
+  sysUser       SysUser?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  raceCps       RaceCp[]
+  raceCpScripts RaceCpScript[]
+  raceRecords   RaceRecord[]
+  raceGroupRaces RaceGroupRace[]
+
+  @@index([userId])
+  @@index([deletedAt])
+  @@map("race")
+}
+
+model RaceGroup {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @db.VarChar(255)
+  index     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+  races     RaceGroupRace[]
+
+  @@index([deletedAt])
+  @@index([index])
+  @@map("race_group")
+}
+
+model RaceGroupRace {
+  raceGroupId String    @map("race_group_id") @db.Uuid
+  raceId      String    @map("race_id") @db.Uuid
+  index       Int       @default(0)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  raceGroup   RaceGroup @relation(fields: [raceGroupId], references: [id], onDelete: Cascade)
+  race        Race      @relation(fields: [raceId], references: [id], onDelete: Cascade)
+
+  @@id([raceGroupId, raceId])
+  @@unique([raceGroupId, index])
+  @@index([raceGroupId])
+  @@index([raceId])
+  @@map("race_group_race")
+}
+
+model RaceCp {
+  id            String         @id @default(uuid()) @db.Uuid
+  index         Int
+  x             Decimal        @db.Decimal(18, 6)
+  y             Decimal        @db.Decimal(18, 6)
+  z             Decimal        @db.Decimal(18, 6)
+  angle         Decimal        @db.Decimal(18, 6)
+  size          Decimal        @db.Decimal(18, 6)
+  raceId        String?        @map("race_id") @db.Uuid
+  createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
+  race          Race?          @relation(fields: [raceId], references: [id], onDelete: SetNull)
+  raceCpScripts RaceCpScript[]
+
+  @@index([raceId])
+  @@unique([raceId, index])
+  @@map("race_cp")
+}
+
+model RaceCpScript {
+  id           String   @id @default(uuid()) @db.Uuid
+  script       String   @db.VarChar(255)
+  index        Int
+  raceId       String?  @map("race_id") @db.Uuid
+  checkpointId String?  @map("checkpoint_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  raceCp       RaceCp?  @relation(fields: [checkpointId], references: [id], onDelete: SetNull)
+  race         Race?    @relation(fields: [raceId], references: [id], onDelete: SetNull)
+
+  @@index([raceId])
+  @@index([checkpointId])
+  @@unique([raceId, index])
+  @@map("race_cp_script")
+}
+
+model RaceRecord {
+  id          String    @id @default(uuid()) @db.Uuid
+  record      Int
+  userId      String?   @map("user_id") @db.Uuid
+  raceId    String?   @map("race_id") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+  race      Race?     @relation(fields: [raceId], references: [id], onDelete: SetNull)
+  sysUser   SysUser?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([raceId])
+  @@index([userId])
+  @@index([deletedAt])
+  @@map("race_record")
+}
+
+model SysRole {
+  id             String          @id @default(uuid()) @db.Uuid
+  code           String          @unique @db.VarChar(255)
+  name           String          @db.VarChar(255)
+  sort           Int
+  isEnabled      Boolean         @map("is_enabled")
+  remark         String          @db.VarChar(255)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sysUserRoles   SysUserRole[]
+
+  @@map("sys_role")
+}
+
+model SysUserGameSession {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  loginAt         DateTime  @default(now()) @map("login_at") @db.Timestamptz(6)
+  logoutAt        DateTime? @map("logout_at") @db.Timestamptz(6)
+  lastHeartbeatAt DateTime  @default(now()) @map("last_heartbeat_at") @db.Timestamptz(6)
+  onlineExpRewardedAt DateTime? @map("online_exp_rewarded_at") @db.Timestamptz(6)
+  status          String    @default("ONLINE") @db.VarChar(10)
+  duration        Int?
+  ip              String?   @db.VarChar(45)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sysUser         SysUser   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status, lastHeartbeatAt])
+  @@map("sys_user_game_session")
+}
+
+model SysUser {
+  id                  String               @id @default(uuid()) @db.Uuid
+  username            String               @db.VarChar(255)
+  password            String               @db.VarChar(255)
+  salt                String?              @db.VarChar(255)
+  score               Decimal              @db.Decimal(18, 6)
+  balance             Decimal              @db.Decimal(18, 6)
+  exp                 Decimal              @db.Decimal(18, 6)
+  level               Int
+  isEnabled           Boolean              @default(true) @map("is_enabled")
+  email               String?              @unique @db.VarChar(255)
+  emailVerifiedAt     DateTime?            @map("email_verified_at") @db.Timestamptz(6)
+  avatar              String?              @db.VarChar(255)
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt           DateTime?            @map("deleted_at") @db.Timestamptz(6)
+  houses              House[]
+  races               Race[]
+  raceRecords         RaceRecord[]
+  sysUserAttires      SysUserAttire[]
+  sysUserBans         SysUserBan[]
+  bannedBans          SysUserBan[]  @relation("BannedBy")
+  sysUserHouses SysUserHouse[]
+  sysUserRoles        SysUserRole[]
+  sysUserSetting      SysUserSetting?
+  teleports           Teleport[]
+  userVehicles        UserVehicle[]
+  userVehicleAttires  UserVehicleAttire[]
+  gameSessions        SysUserGameSession[]
+
+  @@unique([username])
+  @@index([deletedAt])
+  @@map("sys_user")
+}
+
+model SysUserAttire {
+  id        String   @id @default(uuid()) @db.Uuid
+  boneId    Int      @map("bone_id")
+  x         Decimal  @db.Decimal(18, 6)
+  y         Decimal  @db.Decimal(18, 6)
+  z         Decimal  @db.Decimal(18, 6)
+  rX        Decimal  @map("r_x") @db.Decimal(18, 6)
+  rY        Decimal  @map("r_y") @db.Decimal(18, 6)
+  rZ        Decimal  @map("r_z") @db.Decimal(18, 6)
+  sX        Decimal  @map("s_x") @db.Decimal(18, 6)
+  sY        Decimal  @map("s_y") @db.Decimal(18, 6)
+  sZ        Decimal  @map("s_z") @db.Decimal(18, 6)
+  attireId  String?  @map("attire_id") @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  isEnabled Boolean  @map("is_enabled")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  attire    Attire?  @relation(fields: [attireId], references: [id], onDelete: SetNull)
+  sysUser   SysUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([attireId])
+  @@index([userId])
+  @@map("sys_user_attire")
+}
+
+model SysUserBan {
+  id         String    @id @default(uuid()) @db.Uuid
+  endAt      DateTime? @map("end_at") @db.Timestamptz(6)
+  reason     String    @db.VarChar(255)
+  userId     String?   @map("user_id") @db.Uuid
+  bannedById String?   @map("banned_by_id") @db.Uuid
+  ip         String?   @map("ip") @db.VarChar(45)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+  createdAt  DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+  sysUser    SysUser?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  bannedBy   SysUser?  @relation("BannedBy", fields: [bannedById], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([bannedById])
+  @@map("sys_user_ban")
+}
+
+model SysUserHouse {
+  id        String        @id @default(uuid()) @db.Uuid
+  houseId   String        @map("house_id") @db.Uuid
+  sysUserId String        @map("sys_user_id") @db.Uuid
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  house     House         @relation(fields: [houseId], references: [id], onDelete: Cascade)
+  sysUser   SysUser       @relation(fields: [sysUserId], references: [id], onDelete: Cascade)
+
+  @@unique([houseId, sysUserId])
+  @@index([houseId])
+  @@index([sysUserId])
+  @@map("sys_user_house")
+}
+
+model SysUserRole {
+  sysRoleId String  @map("sys_role_id") @db.Uuid
+  sysUserId String  @map("sys_user_id") @db.Uuid
+  sysRole   SysRole @relation(fields: [sysRoleId], references: [id], onDelete: Cascade)
+  sysUser   SysUser @relation(fields: [sysUserId], references: [id], onDelete: Cascade)
+
+  @@id([sysRoleId, sysUserId])
+  @@index([sysRoleId])
+  @@index([sysUserId])
+  @@map("sys_user_role")
+}
+
+model SysUserSetting {
+  id                 String   @id @default(uuid()) @db.Uuid
+  skinId             Int      @default(0) @map("skin_id")
+  timeMinute         Int      @default(0) @map("time_minute")
+  timeHour           Int      @default(12) @map("time_hour")
+  weather            Int      @default(0)
+  prefix             String?  @db.VarChar(255)
+  suffix             String?  @db.VarChar(255)
+  invincible         Boolean  @default(true) @map("invincible")
+  vehicleFlip        Boolean  @default(true) @map("vehicle_flip")
+  vehicleAutoFix     Boolean  @default(true) @map("vehicle_auto_fix")
+  vehicleNoCollision Boolean  @default(true) @map("vehicle_no_collision")
+  showObject         Boolean  @default(true) @map("show_object")
+  showSpeed          Boolean  @default(true) @map("show_speed")
+  showNetstat        Boolean  @default(true) @map("show_netstat")
+  syncGameTime       Boolean  @default(true) @map("sync_game_time")
+  showName           Boolean  @default(true) @map("show_name")
+  showStunt          Boolean  @default(true) @map("show_stunt")
+  nitroType          String   @default("timer") @map("nitro_type") @db.VarChar(10)
+  userId             String?  @unique @map("user_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  sysUser            SysUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("sys_user_setting")
+}
+
+model Teleport {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String    @db.VarChar(255)
+  description String?   @db.VarChar(255)
+  x           Decimal   @db.Decimal(18, 6)
+  y           Decimal   @db.Decimal(18, 6)
+  z           Decimal   @db.Decimal(18, 6)
+  angle       Decimal   @db.Decimal(18, 6)
+  interiorId  Int       @map("interior_id")
+  isSystem    Boolean   @map("is_system")
+  isEnabled   Boolean   @map("is_enabled")
+  userId      String?   @map("user_id") @db.Uuid
+  houseId     String?   @unique @map("house_id") @db.Uuid
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz(6)
+  house       House?    @relation(fields: [houseId], references: [id], onDelete: SetNull)
+  sysUser     SysUser?  @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@unique([name])
+  @@index([houseId])
+  @@index([deletedAt])
+  @@map("teleport")
+}
+
+model MapIcon {
+  id        String   @id @default(uuid()) @db.Uuid
+  iconId    Int      @map("icon_id")
+  x         Decimal  @db.Decimal(18, 6)
+  y         Decimal  @db.Decimal(18, 6)
+  z         Decimal  @db.Decimal(18, 6)
+  index     Int      @default(0)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  @@index([deletedAt])
+  @@map("map_icon")
+}
+
+model Vehicle {
+  id                 String              @id @default(uuid()) @db.Uuid
+  name               String              @db.VarChar(255)
+  modelId            Int                 @map("model_id")
+  color1             Int
+  color2             Int
+  isEnabled          Boolean             @default(true) @map("is_enabled")
+  modComponents      String?             @map("mod_components") @db.VarChar(255)
+  paintjob           Int?
+  description        String?             @db.VarChar(255)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt          DateTime?           @map("deleted_at") @db.Timestamptz(6)
+  userVehicles       UserVehicle[]
+
+  @@unique([modelId])
+  @@index([deletedAt])
+  @@map("vehicle_catalog")
+}
+
+model UserVehicle {
+  id                 String              @id @default(uuid()) @db.Uuid
+  vehicleId          String              @map("vehicle_catalog_id") @db.Uuid
+  userId             String              @map("user_id") @db.Uuid
+  x                  Decimal             @db.Decimal(18, 6)
+  y                  Decimal             @db.Decimal(18, 6)
+  z                  Decimal             @db.Decimal(18, 6)
+  angle              Decimal             @db.Decimal(18, 6)
+  color1             Int
+  color2             Int
+  isLocked           Boolean             @map("is_locked")
+  allowGoto          Boolean             @default(true) @map("allow_goto")
+  isDefault          Boolean             @default(false) @map("is_default")
+  modComponents      String?             @map("mod_components") @db.VarChar(255)
+  paintjob           Int?
+  description        String?             @db.VarChar(255)
+  plateNumber        String?             @map("plate_number") @db.VarChar(255)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt          DateTime?           @map("deleted_at") @db.Timestamptz(6)
+  sysUser            SysUser             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle            Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  vehicleAttachments VehicleAttachment[]
+
+  @@index([vehicleId])
+  @@index([userId])
+  @@index([deletedAt])
+  @@map("user_vehicle")
+}
+
+model UserVehicleAttire {
+  id                 String              @id @default(uuid()) @db.Uuid
+  attireId           String              @map("attire_id") @db.Uuid
+  userId             String              @map("user_id") @db.Uuid
+  isEnabled          Boolean             @default(false) @map("is_enabled")
+  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  attire             Attire              @relation(fields: [attireId], references: [id], onDelete: Cascade)
+  sysUser            SysUser             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicleAttachments VehicleAttachment[]
+
+  @@index([attireId])
+  @@index([userId])
+  @@map("sys_user_vehicle_attire")
+}
+
+model VehicleAttachment {
+  id                  String             @id @default(uuid()) @db.Uuid
+  slotId              Int                @map("slot_id")
+  x                   Decimal            @db.Decimal(18, 6)
+  y                   Decimal            @db.Decimal(18, 6)
+  z                   Decimal            @db.Decimal(18, 6)
+  rX                  Decimal            @map("r_x") @db.Decimal(18, 6)
+  rY                  Decimal            @map("r_y") @db.Decimal(18, 6)
+  rZ                  Decimal            @map("r_z") @db.Decimal(18, 6)
+  isEnabled           Boolean            @default(true) @map("is_enabled")
+  userVehicleId       String?            @map("user_vehicle_id") @db.Uuid
+  userVehicleAttireId String?            @map("sys_user_vehicle_attire_id") @db.Uuid
+  userVehicle         UserVehicle?       @relation(fields: [userVehicleId], references: [id], onDelete: Cascade)
+  userVehicleAttire   UserVehicleAttire? @relation(fields: [userVehicleAttireId], references: [id], onDelete: Cascade)
+  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([userVehicleId, slotId])
+  @@unique([userVehicleAttireId])
+  @@index([userVehicleId])
+  @@index([userVehicleAttireId])
+  @@map("vehicle_attachment")
+}
+
+model SpawnPoint {
+  id        String   @id @default(uuid()) @db.Uuid
+  index     Int      @unique
+  x         Decimal  @db.Decimal(18, 6)
+  y         Decimal  @db.Decimal(18, 6)
+  z         Decimal  @db.Decimal(18, 6)
+  angle     Decimal  @db.Decimal(18, 6)
+  description String? @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("spawn_point")
+}
