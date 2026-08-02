@@ -96,11 +96,16 @@ function resolveArgs(player: Player, ctx: CpScriptContext, args: string[]): stri
 /** 运算模式应用 */
 function applyOp(current: number, op: Op, value: number): number {
   switch (op) {
-    case "+": return current + value;
-    case "-": return current - value;
-    case "*": return current * value;
-    case "/": return value === 0 ? current : current / value;
-    default: return value;
+    case "+":
+      return current + value;
+    case "-":
+      return current - value;
+    case "*":
+      return current * value;
+    case "/":
+      return value === 0 ? current : current / value;
+    default:
+      return value;
   }
 }
 
@@ -122,7 +127,10 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
   const veh = player.getVehicle();
 
   const err = (msg: string): void => {
-    player.sendClientMessage(COLOR_ERROR, `[赛车] ${ctx.raceName} 第${ctx.cpid + 1}个检查点脚本错误: ${msg}`);
+    player.sendClientMessage(
+      COLOR_ERROR,
+      `[赛车] ${ctx.raceName} 第${ctx.cpid + 1}个检查点脚本错误: ${msg}`,
+    );
   };
 
   switch (fn) {
@@ -142,7 +150,14 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
     }
     case "time": {
       const [hour, minute] = args.map(Number);
-      if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+      if (
+        !Number.isInteger(hour) ||
+        hour < 0 ||
+        hour > 23 ||
+        !Number.isInteger(minute) ||
+        minute < 0 ||
+        minute > 59
+      ) {
         return err("time 需要 时(0-23) 分(0-59)");
       }
       player.setTime(hour, minute);
@@ -158,15 +173,27 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       const model = Number(args[0]);
       if (!isValidVehicleModel(model)) return err("cveh 车辆ID需 400-611");
       const pos = player.getPos();
-      // 销毁旧脚本车辆（防累积）；新车辆登记到生命周期表，断线/离场时统一清理
+      // 销毁旧脚本车辆（防累积）；新车辆登记到生命周期表，断线/离场时统一清理。
+      // 注意：若玩家当前正坐在旧脚本车里（连续 cveh），清理后旧车已销毁，
+      // 不能再对它调用 destroy（会抛 "Cannot destroy before create" 异常中断本 CP 后续脚本）。
+      const oldScriptVeh = scriptVehicles.get(player.id);
       cleanupScriptVehicle(player.id);
-      const v = new Vehicle({ modelId: model, x: pos.x, y: pos.y, z: pos.z, zAngle: 0, color: [-1, -1], respawnDelay: 0 });
+      const v = new Vehicle({
+        modelId: model,
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+        zAngle: 0,
+        color: [-1, -1],
+        respawnDelay: 0,
+      });
       v.create();
       scriptVehicles.set(player.id, v);
       v.setVirtualWorld(player.getVirtualWorld());
       v.linkToInterior(player.getInterior());
       v.putPlayerIn(player, 0);
-      if (veh && player.getState() === PlayerStateEnum.DRIVER) {
+      // 司机在旧车里才搬移速度并销毁旧车；旧车是脚本车时已由 cleanupScriptVehicle 销毁
+      if (veh && oldScriptVeh !== veh && player.getState() === PlayerStateEnum.DRIVER) {
         const vv = veh.getVelocity();
         v.setVelocity(vv.x, vv.y, vv.z);
         veh.destroy();

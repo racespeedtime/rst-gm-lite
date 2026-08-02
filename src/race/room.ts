@@ -1,14 +1,29 @@
-import { Dialog, DialogStylesEnum, GameText, Player, PlayerEvent, RaceCheckpoint, RaceCpEvent, TextDraw } from "@infernus/core";
+import {
+  Dialog,
+  DialogStylesEnum,
+  GameText,
+  Player,
+  PlayerEvent,
+  RaceCheckpoint,
+  RaceCpEvent,
+  TextDraw,
+} from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scripts";
 import { isEditing } from "./editor";
-import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel, spawnRaceVehicleAt } from "./vehicle";
+import {
+  applyRaceNoCollision,
+  restorePersonalNoCollision,
+  getDefaultRaceModel,
+  spawnRaceVehicleAt,
+} from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve, isObserving, cleanupObserve } from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
+import { sessionManager } from "@/sessions/manager";
 import { formatTime } from "@/utils/format";
 import { MIN_Z } from "@/utils/map";
 import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR, COLOR_WHITE } from "@/utils/colors";
@@ -69,7 +84,10 @@ interface RaceRoom {
   /** 掉线重连：playerId -> 重连截止时间戳（窗口内不清理） */
   reconnectUntil: Map<number, number>;
   /** 掉线重连：playerId -> 断线时进度快照 */
-  reconnectSlots: Map<number, { cpIndex: number; lap: number; startTime: number; prevWorld: number }>;
+  reconnectSlots: Map<
+    number,
+    { cpIndex: number; lap: number; startTime: number; prevWorld: number }
+  >;
 }
 
 const rooms = new Map<number, RaceRoom>();
@@ -163,7 +181,10 @@ export function cleanupRacePlayer(playerId: number): void {
       // 比赛中且比赛支持重连 → 进入重连窗口（已完成玩家不开窗口：成绩已纪录，防重连后重复完成）
       const estMs = estimateRaceDurationMs(room);
       if (room.state === "RACING" && !pr.finished && estMs >= RECONNECT_SUPPORT_MIN_MS) {
-        const window = Math.min(RECONNECT_MAX_MS, Math.max(RECONNECT_MIN_MS, estMs * RECONNECT_RATIO));
+        const window = Math.min(
+          RECONNECT_MAX_MS,
+          Math.max(RECONNECT_MIN_MS, estMs * RECONNECT_RATIO),
+        );
         room.reconnectUntil.set(playerId, Date.now() + window);
         room.reconnectSlots.set(playerId, {
           cpIndex: pr.cpIndex,
@@ -176,7 +197,10 @@ export function cleanupRacePlayer(playerId: number): void {
         // 断线期间脚本车辆销毁（重连后玩家自己重新刷车/用脚本）
         cleanupScriptVehicle(playerId);
         // 房主断线：窗口内不转移房主（重连恢复），但保留窗口
-        broadcastToRoom(room, `[赛车] ${Player.getInstance(playerId)?.getName().name ?? "玩家"} 掉线，${Math.round(window / 1000)} 秒内可重连`);
+        broadcastToRoom(
+          room,
+          `[赛车] ${Player.getInstance(playerId)?.getName().name ?? "玩家"} 掉线，${Math.round(window / 1000)} 秒内可重连`,
+        );
         cleanupObserve(playerId);
         return;
       }
@@ -281,7 +305,10 @@ export async function createRaceRoom(player: Player, raceId: string): Promise<Ra
   };
   rooms.set(room.id, room);
   joinRoom(player, room);
-  player.sendClientMessage(COLOR_SUCCESS, `比赛房间已创建，赛道「${race.name}」（${room.laps} 圈），输入 /r j 可加入`);
+  player.sendClientMessage(
+    COLOR_SUCCESS,
+    `比赛房间已创建，赛道「${race.name}」（${room.laps} 圈），输入 /r j 可加入`,
+  );
   return room;
 }
 
@@ -387,7 +414,14 @@ function beginRace(room: RaceRoom): void {
         const veh = m.getVehicle()!;
         veh.setPos(first.x, first.y, first.z);
       } else {
-        spawnRaceVehicleAt(m, getDefaultRaceModel(room.cps), first.x, first.y, first.z, first.angle);
+        spawnRaceVehicleAt(
+          m,
+          getDefaultRaceModel(room.cps),
+          first.x,
+          first.y,
+          first.z,
+          first.angle,
+        );
       }
       // 显示第一个 CP（红色箭头，指向第二个）
       const second = room.cps[1];
@@ -402,8 +436,7 @@ function beginRace(room: RaceRoom): void {
 /** 创建比赛计时 UI（每人独立）。注意：TextDraw 不支持中文，只显示 ASCII 计时（赛道名不进 TextDraw） */
 function createRaceTd(player: Player, room: RaceRoom): void {
   const td = new TextDraw({ player, x: 320, y: 20, text: `00:00.000` });
-  td
-    .setFont(2)
+  td.setFont(2)
     .setLetterSize(0.5, 1.5)
     .setAlignment(2)
     .setColor("#ffffff")
@@ -422,7 +455,17 @@ function showNextCheckpoint(player: Player, cps: RaceRoom["cps"], cpIndex: numbe
     const first = cps[0];
     const second = cps[1];
     if (second) {
-      RaceCheckpoint.set(player, 0, first.x, first.y, first.z, second.x, second.y, second.z, first.size);
+      RaceCheckpoint.set(
+        player,
+        0,
+        first.x,
+        first.y,
+        first.z,
+        second.x,
+        second.y,
+        second.z,
+        first.size,
+      );
     }
     return;
   }
@@ -529,7 +572,12 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
           data: { raceId: room.raceId, userId: auth.userId, record: time },
         }),
         prisma.raceRecord.deleteMany({
-          where: { raceId: room.raceId, userId: auth.userId, deletedAt: null, record: { gt: time } },
+          where: {
+            raceId: room.raceId,
+            userId: auth.userId,
+            deletedAt: null,
+            record: { gt: time },
+          },
         }),
       ]);
       // 赛道排名：排除自己的历史纪录
@@ -553,7 +601,8 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   }
 
   // 个人结算对话框（对齐原版结算风格）
-  const rankLabel = rank === 1 ? "冠军" : rank === 2 ? "亚军" : rank === 3 ? "季军" : `第 ${rank} 名`;
+  const rankLabel =
+    rank === 1 ? "冠军" : rank === 2 ? "亚军" : rank === 3 ? "季军" : `第 ${rank} 名`;
   await new Dialog({
     style: DialogStylesEnum.MSGBOX,
     caption: "比赛完成",
@@ -561,11 +610,17 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
       `{98CDFE}赛道: {FFFFFF}${room.raceName}`,
       `{98CDFE}名次: {FFFFFF}${rankLabel}（No.${rank}）`,
       `{98CDFE}用时: {FFFFFF}${formatTime(time)}`,
-      isPB ? `{00FF00}★ 新个人纪录！` : prevRecord != null ? `{FFFFFF}个人最佳: ${formatTime(prevRecord)}` : "",
+      isPB
+        ? `{00FF00}★ 新个人纪录！`
+        : prevRecord != null
+          ? `{FFFFFF}个人最佳: ${formatTime(prevRecord)}`
+          : "",
       trackRank > 0 ? `{98CDFE}赛道排名: {FFFFFF}No.${trackRank}` : "",
     ].join("\n"),
     button1: "确定",
-  }).show(player).catch(() => {});
+  })
+    .show(player)
+    .catch(() => {});
 
   // 个人结算框展示期间比赛可能已结束 → 重新校验房间状态与玩家归属
   const curRoom = rooms.get(pr.roomId);
@@ -600,7 +655,14 @@ function endRoom(room: RaceRoom): void {
   if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
   if (room.endTimer) clearTimeoutSafe(room.endTimer);
   // 最终排名结算：完成者按用时升序，未完成者按进度（CP 数）降序
-  const ranked: { playerId: number; name: string; time: number; finished: boolean; cp: number; dist: number }[] = [];
+  const ranked: {
+    playerId: number;
+    name: string;
+    time: number;
+    finished: boolean;
+    cp: number;
+    dist: number;
+  }[] = [];
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
     if (!mp) continue;
@@ -655,7 +717,9 @@ function endRoom(room: RaceRoom): void {
       caption: `结算 · ${room.raceName}`,
       info: resultLines.join("\n") || "（无排名信息）",
       button1: "确定",
-    }).show(m).catch(() => {});
+    })
+      .show(m)
+      .catch(() => {});
   }
   destroyRaceTds(room);
   room.members.clear();
@@ -757,7 +821,7 @@ function tickRooms(): void {
         totalCp,
         dist,
         finished: mp.finished,
-        time: mp.finished ? room.resultIndex.get(m.id) ?? 0 : 0,
+        time: mp.finished ? (room.resultIndex.get(m.id) ?? 0) : 0,
       });
     }
     // 排序：完成者（按用时升序）> 未完成者（CP 多优先，同 CP 距离近优先）
@@ -793,7 +857,10 @@ export function initRaceSystem(): void {
         if (pr && rooms.get(pr.roomId)?.ownerId === player.id) {
           void startRace(player);
         } else {
-          player.sendClientMessage(COLOR_RACE, "用法: /r s 赛道名称 创建比赛 · /r j 加入 · /r l 离开");
+          player.sendClientMessage(
+            COLOR_RACE,
+            "用法: /r s 赛道名称 创建比赛 · /r j 加入 · /r l 离开",
+          );
         }
       }
     } else if (cmd === "j") {
@@ -824,7 +891,10 @@ export function initRaceSystem(): void {
     if (!isInRace(player.id)) return next();
     const main = strictMainCmd ?? command;
     if (isRaceCommandAllowed(main)) return next();
-    player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生");
+    player.sendClientMessage(
+      COLOR_ERROR,
+      "[比赛] 比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生",
+    );
     return false;
   }, true); // unshift 优先执行（在限频之前，避免双提示）
 
@@ -962,6 +1032,10 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     room.reconnectUntil.delete(player.id);
     room.reconnectSlots.delete(player.id);
     room.members.set(player.id, player);
+    // 恢复战局归属：prevWorld 对应战局若仍存在则加回，否则回公共大世界并修正
+    // prevWorld=0（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
+    const prevWorld = slot?.prevWorld ?? player.getVirtualWorld();
+    const joinedSession = sessionManager.rejoinPlayerSessionByWorld(player, prevWorld);
     playerRaces.set(player.id, {
       roomId: room.id,
       cpIndex: slot?.cpIndex ?? -1,
@@ -969,7 +1043,7 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       startTime: slot?.startTime ?? Date.now(),
       finished: false,
       // 恢复断线前所在世界（重连时玩家必然在世界 0，不能用作 prevWorld）
-      prevWorld: slot?.prevWorld ?? player.getVirtualWorld(),
+      prevWorld: joinedSession ? prevWorld : 0,
     });
     // 切回比赛世界 + 恢复 CP 显示
     player.setVirtualWorld(room.worldId);
@@ -980,7 +1054,10 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       applyRaceNoCollision(player, true);
     }
     broadcastToRoom(room, `[赛车] ${player.getName().name} 已重连比赛！`);
-    player.sendClientMessage(COLOR_SUCCESS, `已重连比赛「${room.raceName}」，继续第 ${(slot?.lap ?? 0) + 1} 圈`);
+    player.sendClientMessage(
+      COLOR_SUCCESS,
+      `已重连比赛「${room.raceName}」，继续第 ${(slot?.lap ?? 0) + 1} 圈`,
+    );
     // 房主重连 → 恢复房主身份
     if (room.ownerId === player.id || room.ownerUserId === auth.userId) {
       room.ownerId = player.id;

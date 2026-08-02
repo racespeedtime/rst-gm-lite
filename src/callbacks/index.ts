@@ -234,7 +234,7 @@ startVehicleSaveTimer();
 // 传送系统（/s /l /tpa 等 + 未知命令兜底 / // 传送点）
 initTeleport();
 initTpTimeoutLoop();
-PlayerEvent.onCommandError(async ({ player, command, cmdText, error, getSuggestion, next }) => {
+PlayerEvent.onCommandError(({ player, command, cmdText, error, getSuggestion, next }) => {
   // 命令不存在 → 尝试当作传送点（/名称 或 //名称）
   // 注意：command 已被解析器剥离斜杠，必须用 cmdText（保留原始 "/ls" 或 "//ls"）判断前缀
   if (error.type === "NOT_EXIST") {
@@ -248,17 +248,21 @@ PlayerEvent.onCommandError(async ({ player, command, cmdText, error, getSuggesti
       );
       return true;
     }
-    // 兜底传送：/名称 或 //名称 匹配系统/用户传送点；匹配到则已处理
-    if (await fallbackTeleport(player, used)) {
-      return true;
-    }
-    // 传送点也不存在 → 命令确实不存在：提示 + 最接近的命令建议（避免静默吞掉）
-    const { suggestion, distance } = getSuggestion();
-    if (suggestion && Number.isFinite(distance) && distance <= 4) {
-      player.sendClientMessage(COLOR_ERROR, `命令不存在: ${used}，你是不是想输入 /${suggestion}？`);
-    } else {
-      player.sendClientMessage(COLOR_ERROR, `命令不存在: ${used}`);
-    }
+    // 同步 return true 抑制客户端默认的 "Unknown command" 提示；
+    // 内部异步处理传送点/建议（infernus 忽略 async handler 的返回值）
+    void (async () => {
+      // 兜底传送：/名称 或 //名称 匹配系统/用户传送点；匹配到则已处理
+      if (await fallbackTeleport(player, used)) {
+        return;
+      }
+      // 传送点也不存在 → 命令确实不存在：提示 + 最接近的命令建议（避免静默吞掉）
+      const { suggestion, distance } = getSuggestion();
+      if (suggestion && Number.isFinite(distance) && distance <= 4) {
+        player.sendClientMessage(COLOR_ERROR, `命令不存在: ${used}，你是不是想输入 /${suggestion}？`);
+      } else {
+        player.sendClientMessage(COLOR_ERROR, `命令不存在: ${used}`);
+      }
+    })();
     return true;
   }
   return next();

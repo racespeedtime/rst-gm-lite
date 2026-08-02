@@ -32,7 +32,11 @@ export function setIntervalSafe(fn: () => void, ms: number): NodeJS.Timeout {
 /** 登记式 setTimeout（GameMode.onExit 自动清理） */
 export function setTimeoutSafe(fn: () => void, ms: number): NodeJS.Timeout {
   ensureInit();
-  const t = setTimeout(fn, ms);
+  const t = setTimeout(() => {
+    // 已触发的 timeout 从登记表移除，避免长期运行句柄累积
+    timeouts.delete(t);
+    fn();
+  }, ms);
   timeouts.add(t);
   return t;
 }

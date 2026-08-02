@@ -36,22 +36,27 @@ export async function openSessionSettingsMenu(player: Player, back?: MenuBack): 
         new Dialog({
           style: DialogStylesEnum.PASSWORD,
           caption: "私有战局",
-          info: "私有战局必须设置一个密码：",
+          info: "私有战局必须设置一个密码（≤32字符）：",
           button1: "确定",
           button2: "取消",
         }),
       );
       if (!pwdRes) return;
       if (pwdRes.response !== 1) return back?.();
-      if (!pwdRes.inputText.trim()) {
+      const pwd = pwdRes.inputText.trim();
+      if (!pwd) {
         player.sendClientMessage(COLOR_ERROR, "私有战局必须设置密码，未设置已取消");
+        return back?.();
+      }
+      if (pwd.length > 32) {
+        player.sendClientMessage(COLOR_ERROR, "战局密码最多 32 个字符");
         return back?.();
       }
       await updateSetting(player, {
         sessionType: "PRIVATE",
-        sessionPassword: pwdRes.inputText.trim(),
+        sessionPassword: pwd,
       });
-      notifySaved(player, `自身战局已设为私有，密码：${pwdRes.inputText.trim()}`);
+      notifySaved(player, `自身战局已设为私有，密码：${pwd}`);
     } else {
       await updateSetting(player, { sessionType: "PUBLIC" });
       notifySaved(player, "自身战局已设为公开");
@@ -66,7 +71,7 @@ export async function openSessionSettingsMenu(player: Player, back?: MenuBack): 
       new Dialog({
         style: DialogStylesEnum.PASSWORD,
         caption: "设置战局密码",
-        info: "输入自身战局密码（留空清除）：",
+        info: "输入自身战局密码（留空清除，≤32字符）：",
         button1: "确定",
         button2: "取消",
       }),
@@ -74,6 +79,10 @@ export async function openSessionSettingsMenu(player: Player, back?: MenuBack): 
     if (!pwdRes) return;
     if (pwdRes.response !== 1) return back?.();
     const pwd = pwdRes.inputText.trim();
+    if (pwd.length > 32) {
+      player.sendClientMessage(COLOR_ERROR, "战局密码最多 32 个字符");
+      return back?.();
+    }
     await updateSetting(player, { sessionPassword: pwd || null });
     notifySaved(player, pwd ? `战局密码已设为：${pwd}` : "战局密码已清除");
     return back?.();

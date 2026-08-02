@@ -123,13 +123,15 @@ export class SessionManager {
 
   /** 列出当前可加入的私人战局（未满、玩家未在其中） */
   listJoinableSessions(player: Player): Session[] {
-    return [...this.privateSessions.values()].filter(
-      (s) => !s.isFull && !s.has(player),
-    );
+    return [...this.privateSessions.values()].filter((s) => !s.isFull && !s.has(player));
   }
 
   /** 加入战局（有密码时校验） */
-  async joinSession(player: Player, session: Session, password?: string): Promise<{ ok: boolean; reason?: string }> {
+  async joinSession(
+    player: Player,
+    session: Session,
+    password?: string,
+  ): Promise<{ ok: boolean; reason?: string }> {
     if (session.isFull) return { ok: false, reason: "战局已满" };
     if (session.password && session.password !== password) {
       return { ok: false, reason: "战局密码错误" };
@@ -216,7 +218,10 @@ export class SessionManager {
   }
 
   /** 设置战局密码（房主操作，空串清除密码） */
-  async setPassword(owner: Player, password: string | null): Promise<{ ok: boolean; reason?: string }> {
+  async setPassword(
+    owner: Player,
+    password: string | null,
+  ): Promise<{ ok: boolean; reason?: string }> {
     const session = this.getPlayerSession(owner);
     if (!this.isOwner(owner, session) || session.id === 0) {
       return { ok: false, reason: "你不是房主" };
@@ -226,9 +231,28 @@ export class SessionManager {
     return { ok: true };
   }
 
+  /**
+   * 按世界恢复玩家战局归属（比赛掉线重连用）。
+   * 掉线时玩家已被移出战局（战局可能已解散）；重连后把玩家登记回
+   * prevWorld 对应的战局（若仍存在），否则回公共大世界。
+   * 返回是否加入了私人战局（供调用方决定 prevWorld 是否有效）。
+   */
+  rejoinPlayerSessionByWorld(player: Player, worldId: number): boolean {
+    this.publicWorld.members.delete(player.id);
+    this.playerSessions.delete(player.id);
+    const session = [...this.privateSessions.values()].find((s) => s.worldId === worldId);
+    if (session && !session.isFull) {
+      session.members.set(player.id, player);
+      this.playerSessions.set(player.id, session.id);
+      return true;
+    }
+    this.publicWorld.members.set(player.id, player);
+    this.playerSessions.set(player.id, 0);
+    return false;
+  }
+
   /** 处理玩家掉线：移出所在战局，房主掉线则转移或解散 */
-  handlePlayerDisconnect(player: Player): void {
-    const current = this.getPlayerSession(player);
+  handlePlayerDisconnect(player: Player): void {    const current = this.getPlayerSession(player);
     // 统一从 publicWorld.members 移除（防幽灵成员）
     this.publicWorld.members.delete(player.id);
     this.playerSessions.delete(player.id);
@@ -249,7 +273,9 @@ export class SessionManager {
       const next = members[Math.floor(Math.random() * members.length)];
       current.ownerUserId = this.getOwnerUserId(next);
       current.broadcast(`[战局] 房主 ${name} 已掉线，${next.getName().name} 成为新房主`);
-      logger.info(`[session] 战局「${current.name}」房主 ${name} 掉线，转移给 ${next.getName().name}`);
+      logger.info(
+        `[session] 战局「${current.name}」房主 ${name} 掉线，转移给 ${next.getName().name}`,
+      );
     } else {
       current.broadcast(`[战局] ${name} 离开了战局`);
     }

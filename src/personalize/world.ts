@@ -1,5 +1,13 @@
 import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
-import { getSetting, updateSetting, pickOption, notifySaved, toggleText, toggleSetting, COLOR_ERROR } from "./settings";
+import {
+  getSetting,
+  updateSetting,
+  pickOption,
+  notifySaved,
+  toggleText,
+  toggleSetting,
+  COLOR_ERROR,
+} from "./settings";
 import { openSpawnSettingsFlow } from "@/core/spawn";
 import { setHouseObjectsVisibleForPlayer } from "@/house";
 import { parseIntInRange } from "@/utils/parse";
@@ -21,6 +29,31 @@ const COLOR_PALETTE = [
 ];
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
+
+/**
+ * 颜色归一化为 hex：支持 #fff / #ffffff / (r,g,b) / (r,g,b,a)。
+ * 返回 "#rrggbb"（≤7）或 "#rrggbbaa"（9），保证兼容 player_color VarChar(9)；
+ * 非法输入返回 null。
+ */
+function normalizeHexColor(input: string): string | null {
+  const s = input.trim();
+  const hex = /^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.exec(s);
+  if (hex) {
+    let v = hex[1].toLowerCase();
+    if (v.length === 3) v = [...v].map((c) => c + c).join("");
+    return `#${v}`;
+  }
+  const rgba = /^\((\d{1,3}),(\d{1,3}),(\d{1,3})(,(\d{1,3}))?\)$/.exec(s);
+  if (rgba) {
+    const [r, g, b] = [rgba[1], rgba[2], rgba[3]].map((n) => Math.min(255, Number(n)));
+    const a = rgba[5] != null ? Math.min(255, Number(rgba[5])) : null;
+    const hexStr = [r, g, b]
+      .map((n) => n.toString(16).padStart(2, "0"))
+      .join("");
+    return a != null ? `#${hexStr}${a.toString(16).padStart(2, "0")}` : `#${hexStr}`;
+  }
+  return null;
+}
 
 /**
  * 世界个性化菜单
@@ -98,13 +131,14 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
       );
       if (!res || res.response !== 1) return;
       const input = res.inputText.trim();
-      const validHex = /^#?[0-9a-fA-F]{3}$|^#?[0-9a-fA-F]{6}$/.test(input);
-      const validRgba = /^\(\d{1,3},\d{1,3},\d{1,3}(,\d{1,3})?\)$/.test(input);
-      if (!validHex && !validRgba) {
+      // 归一化为 hex（#fff → #ffffff、(r,g,b) → #rrggbb、(r,g,b,a) → #rrggbbaa），
+      // 保证长度 ≤9 兼容 player_color VarChar(9)，否则 (255,255,255,255) 超长写库抛错
+      const hexColor = normalizeHexColor(input);
+      if (!hexColor) {
         player.sendClientMessage(COLOR_ERROR, "颜色格式不正确（支持 #fff / #ff0000 / (r,g,b,a)）");
         return;
       }
-      next = input.startsWith("#") ? input : input.startsWith("(") ? input : `#${input}`;
+      next = hexColor;
     }
     await updateSetting(player, { playerColor: next });
     player.setColor(next);
