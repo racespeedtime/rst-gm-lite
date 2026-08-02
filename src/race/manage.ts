@@ -217,12 +217,15 @@ async function deleteRaceFlow(player: Player, raceId: string): Promise<void> {
   }
   try {
     const cps = await prisma.raceCp.findMany({ where: { raceId } });
-    await prisma.raceCpScript.deleteMany({
-      where: { checkpointId: { in: cps.map((c) => c.id) } },
+    // 事务：脚本/CP/纪录/赛道软删 原子完成，中途失败整体回滚
+    await prisma.$transaction(async (tx) => {
+      await tx.raceCpScript.deleteMany({
+        where: { checkpointId: { in: cps.map((c) => c.id) } },
+      });
+      await tx.raceCp.deleteMany({ where: { raceId } });
+      await tx.raceRecord.deleteMany({ where: { raceId } });
+      await tx.race.update({ where: { id: raceId }, data: { deletedAt: new Date() } });
     });
-    await prisma.raceCp.deleteMany({ where: { raceId } });
-    await prisma.raceRecord.deleteMany({ where: { raceId } });
-    await prisma.race.update({ where: { id: raceId }, data: { deletedAt: new Date() } });
     player.sendClientMessage(COLOR_SUCCESS, `赛道「${race.name}」已删除`);
   } catch (e) {
     logger.error(`[race] 删除赛道失败`, e);
@@ -500,19 +503,21 @@ async function removeRaceFromGroup(player: Player, groupId: string): Promise<voi
   if (!res || res.response !== 1) return;
   const entry = entries[res.listItem];
   if (!entry) return;
-  await prisma.raceGroupRace.delete({
-    where: { raceGroupId_raceId: { raceGroupId: groupId, raceId: entry.raceId } },
-  });
-  // 删除后重排：组内后续赛道 index 前移，防空洞
+  // 事务：删除 + 组内后续赛道 index 前移（防空洞）原子完成
   const rest = entries
     .filter((e) => e.raceId !== entry.raceId)
     .map((e) => ({ id: e.raceId, index: e.index }));
-  await compactSortIndex(rest, entry.index, (id, index) =>
-    prisma.raceGroupRace.update({
-      where: { raceGroupId_raceId: { raceGroupId: groupId, raceId: id } },
-      data: { index },
-    }),
-  );
+  await prisma.$transaction(async (tx) => {
+    await tx.raceGroupRace.delete({
+      where: { raceGroupId_raceId: { raceGroupId: groupId, raceId: entry.raceId } },
+    });
+    await compactSortIndex(rest, entry.index, (id, index) =>
+      tx.raceGroupRace.update({
+        where: { raceGroupId_raceId: { raceGroupId: groupId, raceId: id } },
+        data: { index },
+      }),
+    );
+  });
   player.sendClientMessage(COLOR_SUCCESS, `已移除赛道「${entry.race.name}」`);
 }
 
@@ -548,8 +553,11 @@ async function deleteGroup(player: Player, groupId: string): Promise<void> {
     }),
   );
   if (!confirm || confirm.response !== 1) return;
-  await prisma.raceGroupRace.deleteMany({ where: { raceGroupId: groupId } });
-  await prisma.raceGroup.delete({ where: { id: groupId } });
+  // 事务：先删组内关联再删分组，中途失败整体回滚
+  await prisma.$transaction(async (tx) => {
+    await tx.raceGroupRace.deleteMany({ where: { raceGroupId: groupId } });
+    await tx.raceGroup.delete({ where: { id: groupId } });
+  });
   player.sendClientMessage(COLOR_SUCCESS, "分组已删除");
 }
 

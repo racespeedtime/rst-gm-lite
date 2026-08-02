@@ -7,8 +7,8 @@ import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
 
-/** 装扮数量上限：人物 20 槽位 / 车辆 15 槽位 */
-export const MAX_PLAYER_ATTIRE = 20;
+/** 装扮数量上限：人物 10 槽（平台 SetPlayerAttachedObject 上限 MAX_PLAYER_ATTACHED_OBJECTS=10）/ 车辆 15 槽 */
+export const MAX_PLAYER_ATTIRE = 10;
 export const MAX_VEHICLE_ATTIRE = 15;
 
 /** 玩家已应用的装扮对象（用于清理） */
@@ -722,36 +722,38 @@ async function confirmDeletePreset(player: Player, presetId: string, modelRef: n
   );
   if (!r || r.response !== 1) return;
   try {
-    if (kind === "人物") {
-      const deleted = await prisma.playerPreset.findUnique({ where: { id: presetId } });
-      await prisma.playerPresetItem.deleteMany({ where: { presetId } });
-      await prisma.playerPreset.delete({ where: { id: presetId } });
-      // 删除后重排：同皮肤后续预设 index 前移，防空洞
-      if (deleted) {
-        const rest = await prisma.playerPreset.findMany({
-          where: { userId: deleted.userId, skinId: deleted.skinId, deletedAt: null },
-          orderBy: { index: "asc" },
-          select: { id: true, index: true },
-        });
-        await compactSortIndex(rest, deleted.index, (id, index) =>
-          prisma.playerPreset.update({ where: { id }, data: { index } }),
-        );
+    // 事务：删除预设条目 + 预设本体 + 同皮肤/模型后续预设 index 前移（防空洞），中途失败整体回滚
+    await prisma.$transaction(async (tx) => {
+      if (kind === "人物") {
+        const deleted = await tx.playerPreset.findUnique({ where: { id: presetId } });
+        await tx.playerPresetItem.deleteMany({ where: { presetId } });
+        await tx.playerPreset.delete({ where: { id: presetId } });
+        if (deleted) {
+          const rest = await tx.playerPreset.findMany({
+            where: { userId: deleted.userId, skinId: deleted.skinId, deletedAt: null },
+            orderBy: { index: "asc" },
+            select: { id: true, index: true },
+          });
+          await compactSortIndex(rest, deleted.index, (id, index) =>
+            tx.playerPreset.update({ where: { id }, data: { index } }),
+          );
+        }
+      } else {
+        const deleted = await tx.vehiclePreset.findUnique({ where: { id: presetId } });
+        await tx.vehiclePresetItem.deleteMany({ where: { presetId } });
+        await tx.vehiclePreset.delete({ where: { id: presetId } });
+        if (deleted) {
+          const rest = await tx.vehiclePreset.findMany({
+            where: { userId: deleted.userId, modelId: deleted.modelId, deletedAt: null },
+            orderBy: { index: "asc" },
+            select: { id: true, index: true },
+          });
+          await compactSortIndex(rest, deleted.index, (id, index) =>
+            tx.vehiclePreset.update({ where: { id }, data: { index } }),
+          );
+        }
       }
-    } else {
-      const deleted = await prisma.vehiclePreset.findUnique({ where: { id: presetId } });
-      await prisma.vehiclePresetItem.deleteMany({ where: { presetId } });
-      await prisma.vehiclePreset.delete({ where: { id: presetId } });
-      if (deleted) {
-        const rest = await prisma.vehiclePreset.findMany({
-          where: { userId: deleted.userId, modelId: deleted.modelId, deletedAt: null },
-          orderBy: { index: "asc" },
-          select: { id: true, index: true },
-        });
-        await compactSortIndex(rest, deleted.index, (id, index) =>
-          prisma.vehiclePreset.update({ where: { id }, data: { index } }),
-        );
-      }
-    }
+    });
     player.sendClientMessage(COLOR_SUCCESS, `${kind}预设已删除`);
   } catch (e) {
     logger.error(`[attire] 删除预设失败`, e);

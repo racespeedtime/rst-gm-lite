@@ -344,18 +344,27 @@ async function doRegister(player: Player, name: string): Promise<{ userId: strin
   if (!pwd) {
     return null;
   }
-  // 创建用户 + 默认设置 + 游戏会话
+  const ip = player.getIp().ip || null;
+  // 创建用户 + 默认设置 + 游戏会话（事务：任一步失败整体回滚，不留"无会话的半成品用户"）
   try {
-    const user = await prisma.sysUser.create({
-      data: {
-        username: name,
-        password: await hashPassword(pwd),
-        sysUserSetting: { create: {} },
-      },
+    const { userId, sessionId } = await prisma.$transaction(async (tx) => {
+      const user = await tx.sysUser.create({
+        data: {
+          username: name,
+          password: await hashPassword(pwd),
+          sysUserSetting: { create: {} },
+        },
+      });
+      const session = await tx.sysUserGameSession.create({
+        data: { userId: user.id, ip },
+      });
+      return { userId: user.id, sessionId: session.id };
     });
-    const sessionId = await openGameSession(player, user.id);
+    // 事务外登记会话起始与中间态（内存态不参与事务）
+    sessionStartedAt.set(player.id, new Date());
+    pendingSessions.set(player.id, { sessionId, userId });
     player.sendClientMessage(COLOR_SUCCESS, `注册成功，欢迎你，${name}`);
-    return { userId: user.id, sessionId };
+    return { userId, sessionId };
   } catch (e) {
     logger.error(`[auth] 注册失败 ${name}`, e);
     player.sendClientMessage(COLOR_ERROR, "注册失败，请重试");

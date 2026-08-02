@@ -24,9 +24,15 @@ export function exitEdit(playerId: number): void {
   editStates.delete(playerId);
 }
 
-/** 计算赛道总长度（相邻 CP 欧氏距离累加） */
-export async function recalcRaceLength(raceId: string): Promise<void> {
-  const cps = await prisma.raceCp.findMany({
+/** 计算赛道总长度（相邻 CP 欧氏距离累加）；支持传入事务客户端 */
+export async function recalcRaceLength(
+  raceId: string,
+  client: {
+    raceCp: { findMany: typeof prisma.raceCp.findMany };
+    race: { update: typeof prisma.race.update };
+  } = prisma,
+): Promise<void> {
+  const cps = await client.raceCp.findMany({
     where: { raceId },
     orderBy: { index: "asc" },
   });
@@ -37,7 +43,7 @@ export async function recalcRaceLength(raceId: string): Promise<void> {
     const dz = Number(cps[i].z) - Number(cps[i + 1].z);
     total += Math.sqrt(dx * dx + dy * dy + dz * dz);
   }
-  await prisma.race.update({ where: { id: raceId }, data: { totalLength: total } });
+  await client.race.update({ where: { id: raceId }, data: { totalLength: total } });
 }
 
 /** 校验玩家可编辑赛道（作者本人或 OP） */
@@ -347,41 +353,47 @@ async function moveCp(player: Player, cp: { id: string; raceId: string | null })
   player.sendClientMessage(COLOR_SUCCESS, "CP 已移动");
 }
 
-/** 删除 CP（后续 index 前移） */
+/** 删除 CP（后续 index 前移）——事务内完成，中途失败整体回滚 */
 async function deleteCp(player: Player, cp: { id: string; index: number; raceId: string | null }): Promise<void> {
   const state = editStates.get(player.id);
   if (!state || !cp.raceId) return;
-  await prisma.raceCpScript.deleteMany({ where: { checkpointId: cp.id } });
-  await prisma.raceCp.delete({ where: { id: cp.id } });
-  await prisma.raceCp.updateMany({
-    where: { raceId: cp.raceId, index: { gt: cp.index } },
-    data: { index: { decrement: 1 } },
+  const raceId: string = cp.raceId; // 闭包内捕获（TS 不在嵌套函数中保留参数窄化）
+  await prisma.$transaction(async (tx) => {
+    await tx.raceCpScript.deleteMany({ where: { checkpointId: cp.id } });
+    await tx.raceCp.delete({ where: { id: cp.id } });
+    await tx.raceCp.updateMany({
+      where: { raceId, index: { gt: cp.index } },
+      data: { index: { decrement: 1 } },
+    });
+    await recalcRaceLength(raceId, tx);
   });
-  await recalcRaceLength(cp.raceId);
   player.sendClientMessage(COLOR_SUCCESS, "CP 已删除");
 }
 
-/** 在指定 CP 后插入新 CP（后续 index 后移） */
+/** 在指定 CP 后插入新 CP（后续 index 后移）——事务内完成，中途失败整体回滚 */
 async function insertCp(player: Player, cp: { raceId: string | null; index: number }): Promise<void> {
   const pos = player.getPos();
   const state = editStates.get(player.id);
   if (!state || !cp.raceId) return;
-  await prisma.raceCp.updateMany({
-    where: { raceId: cp.raceId, index: { gt: cp.index } },
-    data: { index: { increment: 1 } },
+  const raceId: string = cp.raceId; // 闭包内捕获（TS 不在嵌套函数中保留参数窄化）
+  await prisma.$transaction(async (tx) => {
+    await tx.raceCp.updateMany({
+      where: { raceId, index: { gt: cp.index } },
+      data: { index: { increment: 1 } },
+    });
+    await tx.raceCp.create({
+      data: {
+        raceId,
+        index: cp.index + 1,
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+        angle: player.getFacingAngle().angle,
+        size: 8,
+      },
+    });
+    await recalcRaceLength(raceId, tx);
   });
-  await prisma.raceCp.create({
-    data: {
-      raceId: cp.raceId,
-      index: cp.index + 1,
-      x: pos.x,
-      y: pos.y,
-      z: pos.z,
-      angle: player.getFacingAngle().angle,
-      size: 8,
-    },
-  });
-  await recalcRaceLength(cp.raceId);
   player.sendClientMessage(COLOR_SUCCESS, "已插入新 CP");
 }
 
