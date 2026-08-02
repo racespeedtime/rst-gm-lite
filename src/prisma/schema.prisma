@@ -25,8 +25,8 @@ model Attire {
   createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt          DateTime?           @map("deleted_at") @db.Timestamptz(6)
-  sysUserAttire      SysUserAttire[]
-  userVehicleAttires UserVehicleAttire[]
+  playerPresetItems  PlayerPresetItem[]
+  vehiclePresetItems VehiclePresetItem[]
 
   @@index([deletedAt])
   @@map("attire")
@@ -44,7 +44,6 @@ model House {
   sysUser       SysUser?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   houseModels   HouseModel[]
   race          Race?
-  sysUserHouses SysUserHouse[]
   teleport      Teleport?
 
   @@index([userId])
@@ -154,7 +153,6 @@ model RaceCpScript {
 
   @@index([raceId])
   @@index([checkpointId])
-  @@unique([raceId, index])
   @@map("race_cp_script")
 }
 
@@ -195,7 +193,6 @@ model SysUserGameSession {
   loginAt         DateTime  @default(now()) @map("login_at") @db.Timestamptz(6)
   logoutAt        DateTime? @map("logout_at") @db.Timestamptz(6)
   lastHeartbeatAt DateTime  @default(now()) @map("last_heartbeat_at") @db.Timestamptz(6)
-  onlineExpRewardedAt DateTime? @map("online_exp_rewarded_at") @db.Timestamptz(6)
   status          String    @default("ONLINE") @db.VarChar(10)
   duration        Int?
   ip              String?   @db.VarChar(45)
@@ -213,59 +210,28 @@ model SysUser {
   username            String               @db.VarChar(255)
   password            String               @db.VarChar(255)
   salt                String?              @db.VarChar(255)
-  score               Decimal              @db.Decimal(18, 6)
-  balance             Decimal              @db.Decimal(18, 6)
-  exp                 Decimal              @db.Decimal(18, 6)
-  level               Int
   isEnabled           Boolean              @default(true) @map("is_enabled")
   email               String?              @unique @db.VarChar(255)
   emailVerifiedAt     DateTime?            @map("email_verified_at") @db.Timestamptz(6)
-  avatar              String?              @db.VarChar(255)
   createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt           DateTime?            @map("deleted_at") @db.Timestamptz(6)
   houses              House[]
   races               Race[]
   raceRecords         RaceRecord[]
-  sysUserAttires      SysUserAttire[]
   sysUserBans         SysUserBan[]
   bannedBans          SysUserBan[]  @relation("BannedBy")
-  sysUserHouses SysUserHouse[]
   sysUserRoles        SysUserRole[]
   sysUserSetting      SysUserSetting?
   teleports           Teleport[]
   userVehicles        UserVehicle[]
-  userVehicleAttires  UserVehicleAttire[]
+  playerPresets       PlayerPreset[]
+  vehiclePresets      VehiclePreset[]
   gameSessions        SysUserGameSession[]
 
   @@unique([username])
   @@index([deletedAt])
   @@map("sys_user")
-}
-
-model SysUserAttire {
-  id        String   @id @default(uuid()) @db.Uuid
-  boneId    Int      @map("bone_id")
-  x         Decimal  @db.Decimal(18, 6)
-  y         Decimal  @db.Decimal(18, 6)
-  z         Decimal  @db.Decimal(18, 6)
-  rX        Decimal  @map("r_x") @db.Decimal(18, 6)
-  rY        Decimal  @map("r_y") @db.Decimal(18, 6)
-  rZ        Decimal  @map("r_z") @db.Decimal(18, 6)
-  sX        Decimal  @map("s_x") @db.Decimal(18, 6)
-  sY        Decimal  @map("s_y") @db.Decimal(18, 6)
-  sZ        Decimal  @map("s_z") @db.Decimal(18, 6)
-  attireId  String?  @map("attire_id") @db.Uuid
-  userId    String?  @map("user_id") @db.Uuid
-  isEnabled Boolean  @map("is_enabled")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
-  attire    Attire?  @relation(fields: [attireId], references: [id], onDelete: SetNull)
-  sysUser   SysUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([attireId])
-  @@index([userId])
-  @@map("sys_user_attire")
 }
 
 model SysUserBan {
@@ -283,20 +249,6 @@ model SysUserBan {
   @@index([userId])
   @@index([bannedById])
   @@map("sys_user_ban")
-}
-
-model SysUserHouse {
-  id        String        @id @default(uuid()) @db.Uuid
-  houseId   String        @map("house_id") @db.Uuid
-  sysUserId String        @map("sys_user_id") @db.Uuid
-  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  house     House         @relation(fields: [houseId], references: [id], onDelete: Cascade)
-  sysUser   SysUser       @relation(fields: [sysUserId], references: [id], onDelete: Cascade)
-
-  @@unique([houseId, sysUserId])
-  @@index([houseId])
-  @@index([sysUserId])
-  @@map("sys_user_house")
 }
 
 model SysUserRole {
@@ -331,10 +283,13 @@ model SysUserSetting {
   showStunt          Boolean  @default(true) @map("show_stunt")
   nitroType          String   @default("timer") @map("nitro_type") @db.VarChar(10)
   userId             String?  @unique @map("user_id") @db.Uuid
+  defaultPlayerPresetId String? @map("default_player_preset_id") @db.Uuid
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
   sysUser            SysUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  defaultPlayerPreset PlayerPreset? @relation(fields: [defaultPlayerPresetId], references: [id], onDelete: SetNull)
 
+  @@index([defaultPlayerPresetId])
   @@map("sys_user_setting")
 }
 
@@ -379,94 +334,122 @@ model MapIcon {
   @@map("map_icon")
 }
 
-model Vehicle {
-  id                 String              @id @default(uuid()) @db.Uuid
-  name               String              @db.VarChar(255)
-  modelId            Int                 @map("model_id")
-  color1             Int
-  color2             Int
-  isEnabled          Boolean             @default(true) @map("is_enabled")
-  modComponents      String?             @map("mod_components") @db.VarChar(255)
-  paintjob           Int?
-  description        String?             @db.VarChar(255)
-  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
-  deletedAt          DateTime?           @map("deleted_at") @db.Timestamptz(6)
-  userVehicles       UserVehicle[]
-
-  @@unique([modelId])
-  @@index([deletedAt])
-  @@map("vehicle_catalog")
-}
-
 model UserVehicle {
-  id                 String              @id @default(uuid()) @db.Uuid
-  vehicleId          String              @map("vehicle_catalog_id") @db.Uuid
-  userId             String              @map("user_id") @db.Uuid
-  x                  Decimal             @db.Decimal(18, 6)
-  y                  Decimal             @db.Decimal(18, 6)
-  z                  Decimal             @db.Decimal(18, 6)
-  angle              Decimal             @db.Decimal(18, 6)
-  color1             Int
-  color2             Int
-  isLocked           Boolean             @map("is_locked")
-  allowGoto          Boolean             @default(true) @map("allow_goto")
-  isDefault          Boolean             @default(false) @map("is_default")
-  modComponents      String?             @map("mod_components") @db.VarChar(255)
-  paintjob           Int?
-  description        String?             @db.VarChar(255)
-  plateNumber        String?             @map("plate_number") @db.VarChar(255)
-  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
-  deletedAt          DateTime?           @map("deleted_at") @db.Timestamptz(6)
-  sysUser            SysUser             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  vehicle            Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
-  vehicleAttachments VehicleAttachment[]
+  id              String              @id @default(uuid()) @db.Uuid
+  modelId         Int                 @map("model_id")
+  userId          String              @map("user_id") @db.Uuid
+  x               Decimal             @db.Decimal(18, 6)
+  y               Decimal             @db.Decimal(18, 6)
+  z               Decimal             @db.Decimal(18, 6)
+  angle           Decimal             @db.Decimal(18, 6)
+  isLocked        Boolean             @map("is_locked")
+  allowGoto       Boolean             @default(true) @map("allow_goto")
+  isDefault       Boolean             @default(false) @map("is_default")
+  description     String?             @db.VarChar(255)
+  plateNumber     String?             @map("plate_number") @db.VarChar(255)
+  defaultPresetId String?             @map("default_preset_id") @db.Uuid
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt       DateTime?           @map("deleted_at") @db.Timestamptz(6)
+  sysUser         SysUser             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  defaultPreset   VehiclePreset?      @relation(fields: [defaultPresetId], references: [id], onDelete: SetNull)
 
-  @@index([vehicleId])
+  @@index([modelId])
   @@index([userId])
+  @@index([defaultPresetId])
   @@index([deletedAt])
+  @@unique([userId, modelId])
   @@map("user_vehicle")
 }
 
-model UserVehicleAttire {
-  id                 String              @id @default(uuid()) @db.Uuid
-  attireId           String              @map("attire_id") @db.Uuid
-  userId             String              @map("user_id") @db.Uuid
-  isEnabled          Boolean             @default(false) @map("is_enabled")
-  createdAt          DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
-  attire             Attire              @relation(fields: [attireId], references: [id], onDelete: Cascade)
-  sysUser            SysUser             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  vehicleAttachments VehicleAttachment[]
+model PlayerPreset {
+  id          String            @id @default(uuid()) @db.Uuid
+  userId      String            @map("user_id") @db.Uuid
+  skinId      Int               @default(0) @map("skin_id")
+  index       Int               @default(0)
+  name        String?           @db.VarChar(255)
+  createdAt   DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime          @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt   DateTime?         @map("deleted_at") @db.Timestamptz(6)
+  sysUser     SysUser           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items       PlayerPresetItem[]
+  settings    SysUserSetting[]
 
-  @@index([attireId])
+  @@unique([userId, skinId, index])
   @@index([userId])
-  @@map("sys_user_vehicle_attire")
+  @@index([deletedAt])
+  @@map("player_preset")
 }
 
-model VehicleAttachment {
-  id                  String             @id @default(uuid()) @db.Uuid
-  slotId              Int                @map("slot_id")
-  x                   Decimal            @db.Decimal(18, 6)
-  y                   Decimal            @db.Decimal(18, 6)
-  z                   Decimal            @db.Decimal(18, 6)
-  rX                  Decimal            @map("r_x") @db.Decimal(18, 6)
-  rY                  Decimal            @map("r_y") @db.Decimal(18, 6)
-  rZ                  Decimal            @map("r_z") @db.Decimal(18, 6)
-  isEnabled           Boolean            @default(true) @map("is_enabled")
-  userVehicleId       String?            @map("user_vehicle_id") @db.Uuid
-  userVehicleAttireId String?            @map("sys_user_vehicle_attire_id") @db.Uuid
-  userVehicle         UserVehicle?       @relation(fields: [userVehicleId], references: [id], onDelete: Cascade)
-  userVehicleAttire   UserVehicleAttire? @relation(fields: [userVehicleAttireId], references: [id], onDelete: Cascade)
-  createdAt           DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+model PlayerPresetItem {
+  id        String        @id @default(uuid()) @db.Uuid
+  presetId  String        @map("preset_id") @db.Uuid
+  attireId  String        @map("attire_id") @db.Uuid
+  boneId    Int           @map("bone_id")
+  x         Decimal       @db.Decimal(18, 6)
+  y         Decimal       @db.Decimal(18, 6)
+  z         Decimal       @db.Decimal(18, 6)
+  rX        Decimal       @map("r_x") @db.Decimal(18, 6)
+  rY        Decimal       @map("r_y") @db.Decimal(18, 6)
+  rZ        Decimal       @map("r_z") @db.Decimal(18, 6)
+  sX        Decimal       @map("s_x") @db.Decimal(18, 6)
+  sY        Decimal       @map("s_y") @db.Decimal(18, 6)
+  sZ        Decimal       @map("s_z") @db.Decimal(18, 6)
+  createdAt DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  preset    PlayerPreset  @relation(fields: [presetId], references: [id], onDelete: Cascade)
+  attire    Attire        @relation(fields: [attireId], references: [id], onDelete: Cascade)
 
-  @@unique([userVehicleId, slotId])
-  @@unique([userVehicleAttireId])
-  @@index([userVehicleId])
-  @@index([userVehicleAttireId])
-  @@map("vehicle_attachment")
+  @@unique([presetId, attireId])
+  @@index([presetId])
+  @@index([attireId])
+  @@map("player_preset_item")
+}
+
+model VehiclePreset {
+  id             String              @id @default(uuid()) @db.Uuid
+  userId         String              @map("user_id") @db.Uuid
+  modelId        Int                 @map("model_id")
+  index          Int                 @default(0)
+  name           String?             @db.VarChar(255)
+  color1         Int                 @default(0)
+  color2         Int                 @default(0)
+  paintjob       Int?
+  modComponents  String?             @map("mod_components") @db.VarChar(255)
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt      DateTime?           @map("deleted_at") @db.Timestamptz(6)
+  sysUser        SysUser             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items          VehiclePresetItem[]
+  vehicles       UserVehicle[]
+
+  @@unique([userId, modelId, index])
+  @@index([userId])
+  @@index([modelId])
+  @@index([deletedAt])
+  @@map("vehicle_preset")
+}
+
+model VehiclePresetItem {
+  id        String          @id @default(uuid()) @db.Uuid
+  presetId  String          @map("preset_id") @db.Uuid
+  attireId  String          @map("attire_id") @db.Uuid
+  slotId    Int             @map("slot_id")
+  x         Decimal         @db.Decimal(18, 6)
+  y         Decimal         @db.Decimal(18, 6)
+  z         Decimal         @db.Decimal(18, 6)
+  rX        Decimal         @map("r_x") @db.Decimal(18, 6)
+  rY        Decimal         @map("r_y") @db.Decimal(18, 6)
+  rZ        Decimal         @map("r_z") @db.Decimal(18, 6)
+  createdAt DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  preset    VehiclePreset   @relation(fields: [presetId], references: [id], onDelete: Cascade)
+  attire    Attire          @relation(fields: [attireId], references: [id], onDelete: Cascade)
+
+  @@unique([presetId, slotId])
+  @@index([presetId])
+  @@index([attireId])
+  @@map("vehicle_preset_item")
 }
 
 model SpawnPoint {
