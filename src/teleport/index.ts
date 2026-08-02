@@ -6,6 +6,7 @@ import { isSuperAdmin } from "@/admin/op";
 import { sessionManager } from "@/sessions/manager";
 import { isInRace } from "@/race/room";
 import { showDialog } from "@/utils/dialog";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
 import { setIntervalSafe } from "@/core/timers";
 
@@ -304,14 +305,14 @@ export function initTpTimeoutLoop(): void {
   setIntervalSafe(() => updateTpTimeouts(), 1000);
 }
 
-/** 面板入口：传送菜单（传送点列表 / 创建传送点 / OP 管理） */
+/** 面板入口：传送菜单（系统/我的传送点列表 / 创建传送点 / OP 管理） */
 export async function openTeleportMenu(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "传送",
-      info: "1. 系统传送点列表\n2. 创建个人传送点\n3. 管理传送点（OP）",
+      info: "1. 系统传送点\n2. 我的传送点\n3. 创建传送点\n4. 管理传送点（OP）",
       button1: "确定",
       button2: "关闭",
     }),
@@ -322,8 +323,10 @@ export async function openTeleportMenu(player: Player, back?: MenuBack): Promise
   if (res.listItem === 0) {
     await listSystemTeleports(player, toThis);
   } else if (res.listItem === 1) {
-    await createTeleportFlow(player, toThis);
+    await listMyTeleports(player, toThis);
   } else if (res.listItem === 2) {
+    await createTeleportFlow(player, toThis);
+  } else if (res.listItem === 3) {
     if (isSuperAdmin(player)) {
       await manageTeleports(player, toThis);
     } else {
@@ -333,7 +336,7 @@ export async function openTeleportMenu(player: Player, back?: MenuBack): Promise
   }
 }
 
-/** 系统传送点列表 */
+/** 系统传送点列表（分页选择传送） */
 async function listSystemTeleports(player: Player, back?: MenuBack): Promise<void> {
   const points = await prisma.teleport.findMany({
     where: { isSystem: true, isEnabled: true, deletedAt: null },
@@ -343,24 +346,43 @@ async function listSystemTeleports(player: Player, back?: MenuBack): Promise<voi
     player.sendClientMessage(COLOR_WHITE, "暂无系统传送点");
     return back?.();
   }
-  const options = points.map((p) => `/${p.name}${p.description ? `（${p.description}）` : ""}`);
-  const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
-  const r = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "系统传送点",
-      info,
-      button1: "传送",
-      button2: "取消",
-    }),
-  );
-  if (!r) return;
-  if (r.response !== 1) return back?.();
-  const point = points[r.listItem];
-  if (!point) return back?.();
+  const r = await showPagedDialog(player, {
+    caption: "系统传送点",
+    data: points,
+    format: (p) => `/${p.name}${p.description ? `（${p.description}）` : ""}`,
+    button1: "传送",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const point = r.item;
   teleportTo(player, Number(point.x), Number(point.y), Number(point.z), Number(point.angle), point.interiorId);
   player.sendClientMessage(COLOR_WHITE, `[传送] 你传送到了 ${point.name}`);
+  return back?.();
+}
+
+/** 我的传送点列表（// 用户点，分页选择传送） */
+async function listMyTeleports(player: Player, back?: MenuBack): Promise<void> {
+  const auth = getAuthState(player.id);
+  if (!auth) return;
+  const points = await prisma.teleport.findMany({
+    where: { isSystem: false, isEnabled: true, deletedAt: null, userId: auth.userId },
+    orderBy: { name: "asc" },
+  });
+  if (points.length === 0) {
+    player.sendClientMessage(COLOR_WHITE, "你还没有个人传送点，创建后输入 //名称 或在此选择使用");
+    return back?.();
+  }
+  const r = await showPagedDialog(player, {
+    caption: "我的传送点",
+    data: points,
+    format: (p) => `//${p.name}${p.description ? `（${p.description}）` : ""}`,
+    button1: "传送",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const point = r.item;
+  teleportTo(player, Number(point.x), Number(point.y), Number(point.z), Number(point.angle), point.interiorId);
+  player.sendClientMessage(COLOR_WHITE, `[传送] 你传送到了 //${point.name}`);
   return back?.();
 }
 
@@ -439,7 +461,7 @@ async function createTeleportFlow(player: Player, back?: MenuBack): Promise<void
   return back?.();
 }
 
-/** OP 管理传送点：列表 → 删除（二次验证） */
+/** OP 管理传送点：分页列表 → 删除（二次验证） */
 async function manageTeleports(player: Player, back?: MenuBack): Promise<void> {
   const points = await prisma.teleport.findMany({
     where: { deletedAt: null },
@@ -449,22 +471,15 @@ async function manageTeleports(player: Player, back?: MenuBack): Promise<void> {
     player.sendClientMessage(COLOR_WHITE, "暂无传送点");
     return back?.();
   }
-  const options = points.map((p) => `${p.isSystem ? "/" : "//"}${p.name}${p.description ? `（${p.description}）` : ""}`);
-  const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
-  const r = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "管理传送点",
-      info,
-      button1: "删除",
-      button2: "取消",
-    }),
-  );
-  if (!r) return;
-  if (r.response !== 1) return back?.();
-  const point = points[r.listItem];
-  if (!point) return back?.();
+  const r = await showPagedDialog(player, {
+    caption: "管理传送点",
+    data: points,
+    format: (p) => `${p.isSystem ? "/" : "//"}${p.name}${p.description ? `（${p.description}）` : ""}`,
+    button1: "删除",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const point = r.item;
   // 二次验证删除
   const confirm = await showDialog(
     player,

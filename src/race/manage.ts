@@ -4,6 +4,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
 import { showDialog } from "@/utils/dialog";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import { formatTime } from "@/utils/format";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, COLOR_RACE } from "@/utils/colors";
 import { swapSortIndex, nextSortIndex, compactSortIndex } from "@/utils/sort";
@@ -99,7 +100,7 @@ async function createRaceFlow(player: Player, back?: MenuBack): Promise<void> {
   }
 }
 
-/** 赛道列表（全部/我的） */
+/** 赛道列表（全部/我的，分页） */
 async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   const where = {
@@ -112,22 +113,15 @@ async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBac
     player.sendClientMessage(COLOR_WHITE, mode === "MINE" ? "你还没有创建赛道" : "暂无赛道");
     return back?.();
   }
-  const options = races.map((r) => `${r.name}${r.description ? `（${r.description}）` : ""} ${Math.round(Number(r.totalLength))}m`);
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: mode === "MINE" ? "我的赛道" : "赛道列表",
-      info: options.map((o, i) => `${i + 1}. ${o}`).join("\n"),
-      button1: "选择",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  const race = races[res.listItem];
-  if (!race) return back?.();
-  await raceDetailFlow(player, race.id, back);
+  const r = await showPagedDialog(player, {
+    caption: mode === "MINE" ? "我的赛道" : "赛道列表",
+    data: races,
+    format: (race) => `${race.name}${race.description ? `（${race.description}）` : ""} ${Math.round(Number(race.totalLength))}m`,
+    button1: "选择",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  await raceDetailFlow(player, r.item.id, back);
 }
 
 /** 赛道详情：开始比赛/编辑/纪录/删除 */
@@ -246,7 +240,7 @@ async function deleteRaceFlow(player: Player, raceId: string, back?: MenuBack): 
   }
 }
 
-/** 赛道分组（OP 管理） */
+/** 赛道分组（OP 管理，分页） */
 async function raceGroupFlow(player: Player, back?: MenuBack): Promise<void> {
   const groups = await prisma.raceGroup.findMany({
     where: { deletedAt: null },
@@ -260,37 +254,29 @@ async function raceGroupFlow(player: Player, back?: MenuBack): Promise<void> {
     }
     return back?.();
   }
-  const options = groups.map((g) => `${g.name}（${g.races.length} 条赛道）`);
-  if (isSuperAdmin(player)) {
-    options.push("↕ 重排分组顺序", "创建分组");
+  const isOp = isSuperAdmin(player);
+  const rows: { label: string; run: () => Promise<void> }[] = groups.map((g) => ({
+    label: `${g.name}（${g.races.length} 条赛道）`,
+    run: () => groupDetailFlow(player, g.id, () => raceGroupFlow(player, back)),
+  }));
+  if (isOp) {
+    rows.push(
+      { label: "↕ 重排分组顺序", run: () => reorderGroups(player, back) },
+      { label: "创建分组", run: () => createGroupFlow(player, back) },
+    );
   }
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "赛道分组",
-      info: options.map((o, i) => `${i + 1}. ${o}`).join("\n"),
-      button1: "查看",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  if (res.listItem < groups.length) {
-    const group = groups[res.listItem];
-    if (group) await groupDetailFlow(player, group.id, back);
-    return;
-  }
-  // OP 扩展项
-  if (!isSuperAdmin(player)) return back?.();
-  if (res.listItem === groups.length) {
-    await reorderGroups(player, back);
-  } else if (res.listItem === groups.length + 1) {
-    await createGroupFlow(player, back);
-  }
+  const r = await showPagedDialog(player, {
+    caption: "赛道分组",
+    data: rows,
+    format: (row) => row.label,
+    button1: "查看",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  await r.item.run();
 }
 
-/** 重排分组顺序：列出分组 → 选择上移/下移（与相邻分组交换 index） */
+/** 重排分组顺序：分页列出分组 → 选择上移/下移（与相邻分组交换 index） */
 async function reorderGroups(player: Player, back?: MenuBack): Promise<void> {
   const groups = await prisma.raceGroup.findMany({
     where: { deletedAt: null },
@@ -300,22 +286,16 @@ async function reorderGroups(player: Player, back?: MenuBack): Promise<void> {
     player.sendClientMessage(COLOR_WHITE, "分组数量不足，无法重排");
     return back?.();
   }
-  const options = groups.map((g) => `${g.name}（第 ${g.index + 1} 位）`);
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "重排分组",
-      info: options.map((o, i) => `${i + 1}. ${o}`).join("\n"),
-      button1: "选择",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  const idx = res.listItem;
-  const group = groups[idx];
-  if (!group) return back?.();
+  const r = await showPagedDialog(player, {
+    caption: "重排分组",
+    data: groups.map((g, i) => ({ group: g, i })),
+    format: ({ group }) => `${group.name}（第 ${group.index + 1} 位）`,
+    button1: "选择",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const idx = r.item.i;
+  const group = r.item.group;
   const dir = await showDialog(
     player,
     new Dialog({
@@ -340,46 +320,44 @@ async function reorderGroups(player: Player, back?: MenuBack): Promise<void> {
   await raceGroupFlow(player, back);
 }
 
-/** 分组详情 */
+/** 分组详情（分页：组内赛道 + OP 管理项） */
 async function groupDetailFlow(player: Player, groupId: string, back?: MenuBack): Promise<void> {
   const group = await prisma.raceGroup.findUnique({
     where: { id: groupId },
     include: { races: { include: { race: true }, orderBy: { index: "asc" } } },
   });
   if (!group) return;
-  const options = [...group.races.map((gr) => `比赛: ${gr.race.name}`)];
-  if (isSuperAdmin(player)) {
-    options.push("添加赛道", "移除赛道", "↕ 重排组内赛道", "修改分组名", "删除分组（二次验证）");
+  const isOp = isSuperAdmin(player);
+  const rows: { label: string; run: () => Promise<void> }[] = group.races.map((gr) => ({
+    label: `比赛: ${gr.race.name}`,
+    run: async () => {
+      await createRaceRoom(player, gr.raceId);
+      // 开赛后回到上一层（分组列表），与原来"返回 back"行为一致
+      await back?.();
+    },
+  }));
+  if (isOp) {
+    const toThis = () => groupDetailFlow(player, groupId, back);
+    rows.push(
+      { label: "添加赛道", run: () => addRaceToGroup(player, groupId, toThis) },
+      { label: "移除赛道", run: () => removeRaceFromGroup(player, groupId, toThis) },
+      { label: "↕ 重排组内赛道", run: () => reorderGroupRaces(player, groupId, toThis) },
+      { label: "修改分组名", run: () => renameGroup(player, groupId, toThis) },
+      { label: "删除分组（二次验证）", run: () => deleteGroup(player, groupId, toThis) },
+    );
   }
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: `分组「${group.name}」`,
-      info: options.map((o, i) => `${i + 1}. ${o}`).join("\n"),
-      button1: "确定",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  const idx = res.listItem;
-  if (idx < group.races.length) {
-    const gr = group.races[idx];
-    await createRaceRoom(player, gr.raceId);
-    return back?.();
-  }
-  if (!isSuperAdmin(player)) return back?.();
-  const adminIdx = idx - group.races.length;
-  const toThis = () => groupDetailFlow(player, groupId, back);
-  if (adminIdx === 0) await addRaceToGroup(player, groupId, toThis);
-  else if (adminIdx === 1) await removeRaceFromGroup(player, groupId, toThis);
-  else if (adminIdx === 2) await reorderGroupRaces(player, groupId, toThis);
-  else if (adminIdx === 3) await renameGroup(player, groupId, toThis);
-  else if (adminIdx === 4) await deleteGroup(player, groupId, toThis);
+  const r = await showPagedDialog(player, {
+    caption: `分组「${group.name}」`,
+    data: rows,
+    format: (row) => row.label,
+    button1: "确定",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  await r.item.run();
 }
 
-/** 重排组内赛道顺序：列出赛道 → 选择上移/下移（交换 index） */
+/** 重排组内赛道顺序：分页列出赛道 → 选择上移/下移（交换 index） */
 async function reorderGroupRaces(player: Player, groupId: string, back?: MenuBack): Promise<void> {
   const entries = await prisma.raceGroupRace.findMany({
     where: { raceGroupId: groupId },
@@ -390,22 +368,16 @@ async function reorderGroupRaces(player: Player, groupId: string, back?: MenuBac
     player.sendClientMessage(COLOR_WHITE, "组内赛道不足，无法重排");
     return back?.();
   }
-  const options = entries.map((e) => `${e.race.name}（第 ${e.index + 1} 位）`);
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "重排组内赛道",
-      info: options.map((o, i) => `${i + 1}. ${o}`).join("\n"),
-      button1: "选择",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  const idx = res.listItem;
-  const entry = entries[idx];
-  if (!entry) return back?.();
+  const r = await showPagedDialog(player, {
+    caption: "重排组内赛道",
+    data: entries.map((e, i) => ({ entry: e, i })),
+    format: ({ entry }) => `${entry.race.name}（第 ${entry.index + 1} 位）`,
+    button1: "选择",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const idx = r.item.i;
+  const entry = r.item.entry;
   const dir = await showDialog(
     player,
     new Dialog({
@@ -432,7 +404,7 @@ async function reorderGroupRaces(player: Player, groupId: string, back?: MenuBac
         data: { index },
       }),
   );
-  player.sendClientMessage(COLOR_SUCCESS, `「${entry.race.name}」已${dir.listItem === 0 ? "上移" : "下移"}`);
+  player.sendClientMessage(COLOR_SUCCESS, `赛道「${entry.race.name}」已${dir.listItem === 0 ? "上移" : "下移"}`);
   await groupDetailFlow(player, groupId, back);
 }
 
@@ -464,22 +436,20 @@ async function addRaceToGroup(player: Player, groupId: string, back?: MenuBack):
   const races = await prisma.race.findMany({
     where: { isEnabled: true, deletedAt: null },
     orderBy: { name: "asc" },
-    take: 50,
   });
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "添加赛道",
-      info: races.map((r, i) => `${i + 1}. ${r.name}`).join("\n"),
-      button1: "添加",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  const race = races[res.listItem];
-  if (!race) return back?.();
+  if (races.length === 0) {
+    player.sendClientMessage(COLOR_WHITE, "暂无赛道可添加");
+    return back?.();
+  }
+  const r = await showPagedDialog(player, {
+    caption: "添加赛道",
+    data: races,
+    format: (race) => race.name,
+    button1: "添加",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const race = r.item;
   // 判重：该赛道已在分组中则拒绝（race_group_race 有复合主键，重复会抛异常）
   const dup = await prisma.raceGroupRace.findUnique({
     where: { raceGroupId_raceId: { raceGroupId: groupId, raceId: race.id } },
@@ -514,19 +484,15 @@ async function removeRaceFromGroup(player: Player, groupId: string, back?: MenuB
     player.sendClientMessage(COLOR_WHITE, "分组内没有赛道");
     return back?.();
   }
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "移除赛道",
-      info: entries.map((e, i) => `${i + 1}. ${e.race.name}`).join("\n"),
-      button1: "移除",
-      button2: "取消",
-    }),
-  );
-  if (!res || res.response !== 1) return;
-  const entry = entries[res.listItem];
-  if (!entry) return;
+  const r = await showPagedDialog(player, {
+    caption: "移除赛道",
+    data: entries,
+    format: (e) => e.race.name,
+    button1: "移除",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const entry = r.item;
   // 事务：删除 + 组内后续赛道 index 前移（防空洞）原子完成
   const rest = entries
     .filter((e) => e.raceId !== entry.raceId)
@@ -543,6 +509,7 @@ async function removeRaceFromGroup(player: Player, groupId: string, back?: MenuB
     );
   });
   player.sendClientMessage(COLOR_SUCCESS, `已移除赛道「${entry.race.name}」`);
+  return back?.();
 }
 
 async function renameGroup(player: Player, groupId: string, back?: MenuBack): Promise<void> {
@@ -589,27 +556,25 @@ async function deleteGroup(player: Player, groupId: string, back?: MenuBack): Pr
   return back?.();
 }
 
-/** OP 管理赛道 */
+/** OP 管理赛道（分页） */
 async function adminRaceFlow(player: Player, back?: MenuBack): Promise<void> {
   const races = await prisma.race.findMany({
     where: { deletedAt: null },
     orderBy: { createdAt: "desc" },
-    take: 50,
   });
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "管理赛道（OP）",
-      info: races.map((r, i) => `${i + 1}. ${r.name}`).join("\n"),
-      button1: "管理",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  const race = races[res.listItem];
-  if (!race) return back?.();
+  if (races.length === 0) {
+    player.sendClientMessage(COLOR_WHITE, "暂无赛道");
+    return back?.();
+  }
+  const r = await showPagedDialog(player, {
+    caption: "管理赛道（OP）",
+    data: races,
+    format: (race) => race.name,
+    button1: "管理",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const race = r.item;
   const opts = ["编辑赛道", "删除赛道（二次验证）", "创建分组"];
   const r2 = await showDialog(
     player,

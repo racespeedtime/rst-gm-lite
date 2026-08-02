@@ -6,6 +6,7 @@ import { invalidateSettingCache, getSetting } from "@/personalize/settings";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
 
 /** 装扮数量上限：人物 10 槽（平台 SetPlayerAttachedObject 上限 MAX_PLAYER_ATTACHED_OBJECTS=10）/ 车辆 15 槽 */
@@ -405,21 +406,15 @@ async function addPlayerPresetItem(player: Player, presetId: string, skinId: num
     player.sendClientMessage(COLOR_WHITE, "系统装扮库为空，请联系管理员添加");
     return back?.();
   }
-  const options = attires.map((a) => `${a.name}（模型${a.modelId} 骨${a.boneId}）`);
-  const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
-  const r = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "选择装扮",
-      info,
-      button1: "确定",
-      button2: "取消",
-    }),
-  );
-  if (!r || r.response !== 1) return;
-  const attire = attires[r.listItem];
-  if (!attire) return;
+  const r = await showPagedDialog(player, {
+    caption: "选择装扮",
+    data: attires,
+    format: (a) => `${a.name}（模型${a.modelId} 骨${a.boneId}）`,
+    button1: "确定",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const attire = r.item;
   // 骨骼选择
   const boneOptions = [
     "1 脊柱", "2 头", "3 左上臂", "4 右上臂", "5 左手", "6 右手",
@@ -676,22 +671,15 @@ async function addVehiclePresetItem(player: Player, presetId: string, modelId: n
     player.sendClientMessage(COLOR_WHITE, "车辆装扮库为空，请联系管理员添加");
     return back?.();
   }
-  const options = attires.map((a) => `${a.name}（模型${a.modelId}）`);
-  const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
-  const r = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "选择挂件",
-      info,
-      button1: "确定",
-      button2: "取消",
-    }),
-  );
-  if (!r) return;
-  if (r.response !== 1) return back?.();
-  const attire = attires[r.listItem];
-  if (!attire) return back?.();
+  const r = await showPagedDialog(player, {
+    caption: "选择挂件",
+    data: attires,
+    format: (a) => `${a.name}（模型${a.modelId}）`,
+    button1: "确定",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const attire = r.item;
   // 挂载偏移（沿用默认）
   const offsetRes = await showDialog(
     player,

@@ -4,6 +4,7 @@ import { logger } from "@/logger";
 import { isSuperAdmin, sendNoPermission } from "@/admin/op";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
+import { showPagedDialog } from "@/utils/pagedDialog";
 
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 
@@ -133,21 +134,15 @@ async function editAttire(player: Player, back: MenuBack): Promise<void> {
     player.sendClientMessage(COLOR_WHITE, "装扮库为空");
     return back();
   }
-  const options = attires.map((a) => `${a.name}（${a.type} 模型${a.modelId}）`);
-  const r = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "选择要编辑的装扮",
-      info: options.map((o, i) => `${i + 1}. ${o}`).join("\n"),
-      button1: "确定",
-      button2: "取消",
-    }),
-  );
-  if (!r) return;
-  if (r.response !== 1) return back();
-  const attire = attires[r.listItem];
-  if (!attire) return back();
+  const r = await showPagedDialog(player, {
+    caption: "选择要编辑的装扮",
+    data: attires,
+    format: (a) => `${a.name}（${a.type} 模型${a.modelId}）`,
+    button1: "确定",
+    button2: "取消",
+  });
+  if (!r) return back();
+  const attire = r.item;
   // 修改装配参数
   const offsetRes = await showDialog(
     player,
@@ -189,21 +184,15 @@ async function deleteAttire(player: Player, back: MenuBack): Promise<void> {
     player.sendClientMessage(COLOR_WHITE, "装扮库为空");
     return back();
   }
-  const options = attires.map((a) => `${a.name}（${a.type}）`);
-  const r = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "选择要删除的装扮",
-      info: options.map((o, i) => `${i + 1}. ${o}`).join("\n"),
-      button1: "确定",
-      button2: "取消",
-    }),
-  );
-  if (!r) return;
-  if (r.response !== 1) return back();
-  const attire = attires[r.listItem];
-  if (!attire) return back();
+  const r = await showPagedDialog(player, {
+    caption: "选择要删除的装扮",
+    data: attires,
+    format: (a) => `${a.name}（${a.type}）`,
+    button1: "确定",
+    button2: "取消",
+  });
+  if (!r) return back();
+  const attire = r.item;
   const confirm = await showDialog(
     player,
     new Dialog({

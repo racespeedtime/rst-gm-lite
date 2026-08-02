@@ -2,6 +2,7 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { showDialog } from "@/utils/dialog";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
 import { spawnVehicle, getOwnedVehicle, destroyPlayerVehicle } from "./index";
 import { parseIntInRange } from "@/utils/parse";
@@ -64,7 +65,7 @@ async function spawnVehicleFlow(player: Player, back?: MenuBack): Promise<void> 
   return back?.();
 }
 
-/** 爱车列表：列出该玩家的所有爱车，选择刷出 */
+/** 爱车列表：列出该玩家的所有爱车（分页），选择刷出 */
 async function listVehiclesFlow(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
@@ -76,22 +77,15 @@ async function listVehiclesFlow(player: Player, back?: MenuBack): Promise<void> 
     player.sendClientMessage(COLOR_WHITE, "你还没有爱车，先刷一辆吧（/c 车辆ID）");
     return back?.();
   }
-  const options = vehicles.map((v) => `模型 ${v.modelId}${v.plateNumber ? `（${v.plateNumber}）` : ""}`);
-  const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: `我的爱车（${vehicles.length} 辆）`,
-      info,
-      button1: "刷出",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  const uv = vehicles[res.listItem];
-  if (!uv) return back?.();
+  const r = await showPagedDialog(player, {
+    caption: `我的爱车（${vehicles.length} 辆）`,
+    data: vehicles,
+    format: (v) => `模型 ${v.modelId}${v.plateNumber ? `（${v.plateNumber}）` : ""}`,
+    button1: "刷出",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const uv = r.item;
   await spawnVehicle(player, uv.modelId);
   return back?.();
 }

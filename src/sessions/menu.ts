@@ -3,6 +3,7 @@ import { sessionManager } from "./manager";
 import { getSetting } from "@/personalize/settings";
 import { openSessionSettingsMenu } from "@/personalize/sessionSettings";
 import { showDialog } from "@/utils/dialog";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
 
 import { COLOR_ERROR } from "@/utils/colors";
@@ -69,33 +70,22 @@ export async function openSessionMenu(player: Player, back?: MenuBack): Promise<
   await items[res.listItem].run();
 }
 
-/** 加入战局流程 */
+/** 加入战局流程（分页） */
 async function joinSessionFlow(player: Player, back?: MenuBack): Promise<void> {
   const list = sessionManager.listJoinableSessions(player);
   if (list.length === 0) {
     player.sendClientMessage(COLOR_ERROR, "当前没有可加入的战局，你可以创建一个");
     return back?.();
   }
-  const info = list
-    .map(
-      (s, i) =>
-        `${i + 1}. ${s.name}（${s.memberCount}/${s.capacity}人）${s.password ? "【需要密码】" : ""}`,
-    )
-    .join("\n");
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "加入战局",
-      info,
-      button1: "加入",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  const target = list[res.listItem];
-  if (!target) return back?.();
+  const r = await showPagedDialog(player, {
+    caption: "加入战局",
+    data: list,
+    format: (s) => `${s.name}（${s.memberCount}/${s.capacity}人）${s.password ? "【需要密码】" : ""}`,
+    button1: "加入",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const target = r.item;
   if (!target.password) {
     const result = await sessionManager.joinSession(player, target);
     if (!result.ok) player.sendClientMessage(COLOR_ERROR, result.reason!);
@@ -219,7 +209,7 @@ async function setPasswordFlow(player: Player, back?: MenuBack): Promise<void> {
   return back?.();
 }
 
-/** 踢人流程 */
+/** 踢人流程（分页） */
 async function kickMemberFlow(player: Player, back?: MenuBack): Promise<void> {
   const session = sessionManager.getPlayerSession(player);
   const others = sessionManager.getMembers(session).filter((p) => p.id !== player.id);
@@ -227,21 +217,15 @@ async function kickMemberFlow(player: Player, back?: MenuBack): Promise<void> {
     player.sendClientMessage(COLOR_ERROR, "战局内没有其他成员");
     return back?.();
   }
-  const info = others.map((p, i) => `${i + 1}. ${p.getName().name}`).join("\n");
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "踢人",
-      info,
-      button1: "踢出",
-      button2: "取消",
-    }),
-  );
-  if (!res) return;
-  if (res.response !== 1) return back?.();
-  const target = others[res.listItem];
-  if (!target) return back?.();
+  const r = await showPagedDialog(player, {
+    caption: "踢人",
+    data: others,
+    format: (p) => p.getName().name,
+    button1: "踢出",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  const target = r.item;
   const result = await sessionManager.kickMember(player, target);
   if (!result.ok) player.sendClientMessage(COLOR_ERROR, result.reason!);
   return back?.();
