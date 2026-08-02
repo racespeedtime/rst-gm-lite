@@ -2,7 +2,9 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { getSetting, updateSetting } from "./settings";
 import { spawnPlayer } from "@/core/spawn";
 import { sessionManager } from "@/sessions/manager";
+import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
+import { COLOR_ERROR } from "@/utils/colors";
 
 /**
  * 玩家认证成功后的"大厅"（对话框序列）：
@@ -36,7 +38,13 @@ export async function runLobby(player: Player): Promise<void> {
   if (spawnRes.response === 1) {
     const mode = spawnRes.listItem === 1 ? "LAST_POSITION" : "RANDOM";
     if (mode !== currentSpawn) {
-      await updateSetting(player, { spawnMode: mode });
+      // 写库失败不致命：提示后按当前设置进入，避免设置保存异常把玩家踢出服务器
+      try {
+        await updateSetting(player, { spawnMode: mode });
+      } catch (e) {
+        logger.error(`[lobby] ${player.getName().name} 保存出生方式失败`, e);
+        player.sendClientMessage(COLOR_ERROR, "出生设置保存失败，本次按当前设置进入");
+      }
     }
   }
 
