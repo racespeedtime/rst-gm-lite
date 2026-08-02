@@ -1,6 +1,17 @@
 import { Player } from "@infernus/core";
-import { getSetting, updateSetting, pickOption, notifySaved, toggleText, COLOR_ERROR } from "./settings";
+import { prisma } from "@/prisma";
+import { getAuthState } from "@/auth/auth";
+import {
+  getSetting,
+  updateSetting,
+  pickOption,
+  notifySaved,
+  toggleText,
+  COLOR_ERROR,
+} from "./settings";
 import { syncVehicleAutoState, syncNoCollisionState } from "@/core/vehicleAuto";
+import { getOwnedVehicle } from "@/vehicles";
+import { applyVehiclePreset } from "@/attire";
 import type { MenuBack } from "@/core/panel";
 
 /**
@@ -34,6 +45,16 @@ export async function openVehicleMenu(player: Player, back?: MenuBack): Promise<
         player.sendClientMessage(COLOR_ERROR, "你已关闭爱车装扮显示，装扮将不再展示");
       } else {
         notifySaved(player, "爱车装扮已开启显示");
+      }
+      // 立即生效：重新应用当前爱车（关闭则移除挂件，开启则恢复；
+      // applyVehiclePreset 内部清理旧挂件后按开关决定是否挂）
+      const veh = getOwnedVehicle(player.id);
+      const auth = getAuthState(player.id);
+      if (veh && auth) {
+        const uv = await prisma.userVehicle.findUnique({
+          where: { userId_modelId: { userId: auth.userId, modelId: veh.getModel() } },
+        });
+        await applyVehiclePreset(veh, uv?.defaultPresetId ?? null, player.id);
       }
       break;
     }

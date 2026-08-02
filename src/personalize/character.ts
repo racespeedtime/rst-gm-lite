@@ -1,9 +1,17 @@
 import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
-import { getSetting, updateSetting, pickOption, notifySaved, toggleText, COLOR_ERROR } from "./settings";
+import {
+  getSetting,
+  updateSetting,
+  pickOption,
+  notifySaved,
+  toggleText,
+  COLOR_ERROR,
+} from "./settings";
 import { applyInvincibleState } from "@/core/invincible";
 import { applyPlayerStyle } from "@/core/playerStyle";
+import { applyPlayerPreset } from "@/attire";
 import { parseIntInRange } from "@/utils/parse";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
@@ -41,6 +49,8 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     } else {
       notifySaved(player, "人物装扮已开启显示");
     }
+    // 立即生效：关闭则清空当前挂载，开启则重新应用默认预设（applyPlayerPreset 内部先清空再按开关应用）
+    await applyPlayerPreset(player, setting.defaultPlayerPresetId ?? null);
     return;
   }
   if (index === 1) {
