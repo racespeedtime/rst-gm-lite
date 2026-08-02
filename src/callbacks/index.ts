@@ -24,7 +24,7 @@ import { initRaceCommands } from "@/race/manage";
 import { initObserve, cleanupObserve } from "@/core/observe";
 import { initPlayerInfo } from "@/core/profile";
 import { initInvincible, applyInvincibleState, cleanupInvincible } from "@/core/invincible";
-import { initVehicleAuto, cleanupVehicleAuto, syncVehicleAutoState } from "@/core/vehicleAuto";
+import { initVehicleAuto, cleanupVehicleAuto, syncVehicleAutoState, syncNoCollisionState } from "@/core/vehicleAuto";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
 import { initColandreas } from "@/core/colandreas";
 import {
@@ -77,6 +77,8 @@ async function handlePlayerConnect(player: Player) {
     await applyInvincibleState(player);
     // 车辆自动状态：autoFix 子弹拦截名单同步写入（onWeaponShot 同步热路径用）
     if (loginSetting) syncVehicleAutoState(player, loginSetting);
+    // 无碰撞按个人设置（非比赛状态；比赛中由比赛系统强制覆盖）
+    syncNoCollisionState(player, loginSetting?.vehicleNoCollision ?? false);
     // 应用玩家标识（NameTag 显隐 + 聊天前后缀缓存）
     await applyPlayerStyle(player);
     // 同步给新人：让已隐藏 NameTag 的玩家对新登录者隐藏

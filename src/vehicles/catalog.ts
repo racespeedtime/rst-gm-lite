@@ -77,3 +77,12 @@ const VEHICLE_NAMES: Record<number, string> = {
 export function vehicleName(modelId: number): string {
   return VEHICLE_NAMES[modelId] ?? `模型${modelId}`;
 }
+
+/**
+ * 校验车辆模型 ID 是否有效（400-611 为 SA-MP 全部有效车型）。
+ * 所有车辆相关输入入口统一走这里（/c 刷车、面板刷车、cveh 脚本、测试赛道发车），
+ * 防止无效 ID 刷出隐形/崩溃车辆。
+ */
+export function isValidVehicleModel(modelId: number): boolean {
+  return Number.isInteger(modelId) && modelId >= 400 && modelId <= 611;
+}

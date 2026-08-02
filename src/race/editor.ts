@@ -5,6 +5,7 @@ import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
+import { spawnRaceVehicleAt, getDefaultRaceModel } from "./vehicle";
 
 import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
 
@@ -65,9 +66,22 @@ export async function enterRaceEdit(player: Player, raceId: string): Promise<voi
     const cps = await prisma.raceCp.findMany({
       where: { raceId },
       orderBy: { index: "asc" },
+      include: { raceCpScripts: { orderBy: { index: "asc" } } },
     });
     // 先查库成功再登记状态，避免 DB 异常后残留编辑态
     editStates.set(player.id, { raceId, cpIndex: cps.length > 0 ? 0 : -1 });
+    // 编辑/测试用车：刷出默认比赛车（首个 CP 有 cveh 换车用其车型，否则 411）并放入车内
+    const model = getDefaultRaceModel(cps.map((c) => ({ scripts: c.raceCpScripts.map((s) => s.script) })));
+    if (cps.length > 0) {
+      // 已有 CP：车放到第一个 CP（起点），玩家上车
+      spawnRaceVehicleAt(player, model, Number(cps[0].x), Number(cps[0].y), Number(cps[0].z), Number(cps[0].angle));
+      player.sendClientMessage(COLOR_RACE, "已刷出测试车辆并传送到赛道起点");
+    } else {
+      // 新赛道还没有 CP：在当前位置发车，放置第一个 CP 后可从起点测试
+      const pos = player.getPos();
+      spawnRaceVehicleAt(player, model, pos.x, pos.y, pos.z, player.getFacingAngle().angle);
+      player.sendClientMessage(COLOR_RACE, "已刷出测试车辆，放置第一个 CP 后可测试赛道");
+    }
   } catch (e) {
     logger.error(`[race] 进入编辑模式失败 ${raceId}`, e);
     player.sendClientMessage(COLOR_ERROR, "进入编辑模式失败，请稍后重试");
@@ -571,7 +585,7 @@ async function editRaceInfo(player: Player): Promise<void> {
   player.sendClientMessage(COLOR_SUCCESS, "赛道名称已更新");
 }
 
-/** 测试赛道：传送到第一个 CP 起点 */
+/** 测试赛道：刷出默认比赛车（首个 CP 有 cveh 换车用其车型，否则 411）放到第一个 CP 起点 */
 async function testRace(player: Player): Promise<void> {
   const state = editStates.get(player.id);
   if (!state) return;
@@ -583,12 +597,20 @@ async function testRace(player: Player): Promise<void> {
     player.sendClientMessage(COLOR_ERROR, "赛道还没有CP");
     return;
   }
-  if (player.isInAnyVehicle()) {
-    player.getVehicle()!.setPos(Number(first.x), Number(first.y), Number(first.z));
-  } else {
-    player.setPos(Number(first.x), Number(first.y), Number(first.z));
-  }
-  player.sendClientMessage(COLOR_RACE, "已传送到赛道起点（测试模式）");
+  const cps = await prisma.raceCp.findMany({
+    where: { raceId: state.raceId },
+    orderBy: { index: "asc" },
+    include: { raceCpScripts: { orderBy: { index: "asc" } } },
+  });
+  spawnRaceVehicleAt(
+    player,
+    getDefaultRaceModel(cps.map((c) => ({ scripts: c.raceCpScripts.map((s) => s.script) }))),
+    Number(first.x),
+    Number(first.y),
+    Number(first.z),
+    Number(first.angle),
+  );
+  player.sendClientMessage(COLOR_RACE, "已刷出测试车辆并传送到赛道起点（测试模式）");
 }
 
 /** 初始化编辑命令 */

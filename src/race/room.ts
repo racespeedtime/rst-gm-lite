@@ -4,6 +4,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scripts";
 import { isEditing } from "./editor";
+import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel, spawnRaceVehicleAt } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve, isObserving, cleanupObserve } from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
@@ -372,18 +373,20 @@ function beginRace(room: RaceRoom): void {
       mp.lap = 0;
       mp.startTime = now;
       mp.finished = false;
+      // 比赛中强制无碰撞（防他人车辆穿模阻挡），结束/离开时按个人设置恢复
+      applyRaceNoCollision(m, true);
       // 切到比赛独立世界（车辆同步）
       m.setVirtualWorld(room.worldId);
       if (m.isInAnyVehicle()) {
         m.getVehicle()!.setVirtualWorld(room.worldId);
       }
-      // 传送到第一个 CP 前
+      // 传送到第一个 CP 前；无车则刷默认比赛车（首个 CP 有 cveh 换车用其车型，否则 411）并放入车内
       const first = room.cps[0];
       if (m.isInAnyVehicle()) {
         const veh = m.getVehicle()!;
         veh.setPos(first.x, first.y, first.z);
       } else {
-        m.setPos(first.x, first.y, first.z);
+        spawnRaceVehicleAt(m, getDefaultRaceModel(room.cps), first.x, first.y, first.z, first.angle);
       }
       // 显示第一个 CP（红色箭头，指向第二个）
       const second = room.cps[1];
@@ -642,6 +645,8 @@ function endRoom(room: RaceRoom): void {
     const prevWorld = mp?.prevWorld ?? 0;
     playerRaces.delete(m.id);
     restorePlayerAfterRace(m, prevWorld);
+    // 无碰撞恢复为个人设置（比赛中强制开启）
+    void restorePersonalNoCollision(m);
     void new Dialog({
       style: DialogStylesEnum.MSGBOX,
       caption: `结算 · ${room.raceName}`,
@@ -697,6 +702,8 @@ export function leaveRace(player: Player): void {
   }
   // 恢复原世界 + 个人时间天气
   restorePlayerAfterRace(player, pr.prevWorld);
+  // 无碰撞恢复为个人设置（比赛中强制开启）
+  void restorePersonalNoCollision(player);
 }
 
 /**
@@ -960,6 +967,8 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     if (room.state === "RACING") {
       createRaceTd(player, room);
       showNextCheckpoint(player, room.cps, slot?.cpIndex ?? -1);
+      // 重新强制无碰撞（重连是全新连接，碰撞状态已重置）
+      applyRaceNoCollision(player, true);
     }
     broadcastToRoom(room, `[赛车] ${player.getName().name} 已重连比赛！`);
     player.sendClientMessage(COLOR_SUCCESS, `已重连比赛「${room.raceName}」，继续第 ${(slot?.lap ?? 0) + 1} 圈`);

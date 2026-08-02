@@ -42,6 +42,18 @@ export function syncVehicleAutoState(player: Player, setting: { vehicleAutoFix: 
   }
 }
 
+/**
+ * 无碰撞（vehicleNoCollision）：隐藏其他玩家车辆的碰撞。
+ * 登录/切换设置时按个人设置应用；比赛期间由 race/room 强制开启，结束时按此恢复。
+ */
+export function syncNoCollisionState(player: Player, enabled: boolean): void {
+  try {
+    player.disableRemoteVehicleCollisions(enabled);
+  } catch (e) {
+    logger.warn(`[vehAuto] 设置无碰撞失败 ${player.id}`, e);
+  }
+}
+
 /** 判断玩家开的是否是自己的爱车（对齐原版 canAutoFix 的 pInfo.veh 语义） */
 function isOwnVehicle(player: Player, veh: Vehicle): boolean {
   return getOwnedVehicle(player.id) === veh;

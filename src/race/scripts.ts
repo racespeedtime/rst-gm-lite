@@ -1,5 +1,6 @@
 import { Player, PlayerStateEnum, Vehicle } from "@infernus/core";
 import { logger } from "@/logger";
+import { isValidVehicleModel } from "@/vehicles/catalog";
 
 import { COLOR_RACE, COLOR_ERROR } from "@/utils/colors";
 
@@ -30,6 +31,21 @@ export function cleanupScriptVehicle(playerId: number): void {
     v.destroy();
   }
   scriptVehicles.delete(playerId);
+}
+
+/**
+ * 提取脚本数组中第一个 cveh 换车指令的车型 ID（无则 null）。
+ * 用于开赛/测试前决定默认车辆（赛道第一个 CP 有换车则用它，否则默认 411）。
+ */
+export function getFirstCvehModel(scripts: string[]): number | null {
+  for (const script of scripts) {
+    const [fn, raw] = script.trim().split(/\s+/);
+    if (fn === "cveh") {
+      const model = Number(raw);
+      if (isValidVehicleModel(model)) return model;
+    }
+  }
+  return null;
 }
 
 /**
@@ -140,7 +156,7 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
     }
     case "cveh": {
       const model = Number(args[0]);
-      if (!Number.isInteger(model) || model < 400 || model > 611) return err("cveh 车辆ID需 400-611");
+      if (!isValidVehicleModel(model)) return err("cveh 车辆ID需 400-611");
       const pos = player.getPos();
       // 销毁旧脚本车辆（防累积）；新车辆登记到生命周期表，断线/离场时统一清理
       cleanupScriptVehicle(player.id);

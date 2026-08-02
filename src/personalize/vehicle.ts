@@ -1,6 +1,6 @@
 import { Player } from "@infernus/core";
 import { getSetting, updateSetting, pickOption, notifySaved, toggleText, COLOR_ERROR } from "./settings";
-import { syncVehicleAutoState } from "@/core/vehicleAuto";
+import { syncVehicleAutoState, syncNoCollisionState } from "@/core/vehicleAuto";
 import type { MenuBack } from "@/core/panel";
 
 /**
@@ -55,6 +55,8 @@ export async function openVehicleMenu(player: Player, back?: MenuBack): Promise<
       const next = !setting.vehicleNoCollision;
       await updateSetting(player, { vehicleNoCollision: next });
       notifySaved(player, `无碰撞模式已${next ? "开启" : "关闭"}`);
+      // 立即应用（非比赛状态；比赛中由比赛系统强制开启，恢复时按此设置）
+      syncNoCollisionState(player, next);
       break;
     }
     case 4: {

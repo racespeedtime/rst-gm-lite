@@ -6,7 +6,7 @@ import { cleanupAttire, applyVehiclePreset } from "@/attire";
 import { isInRace } from "@/race/room";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
-import { VEHICLE_CATEGORIES, vehicleName } from "./catalog";
+import { VEHICLE_CATEGORIES, vehicleName, isValidVehicleModel } from "./catalog";
 import type { UserVehicleModel } from "@/prisma/generated/prisma/models/UserVehicle";
 
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
@@ -74,7 +74,7 @@ export async function getOrCreateUserVehicle(
 /** 应用车辆外观（默认预设的 颜色/paintjob/改装件） */
 /** 刷车（懒创建爱车 + 一人一车 + 完整预设外观 + 氮气） */
 export async function spawnVehicle(player: Player, modelId: number): Promise<boolean> {
-  if (modelId < 400 || modelId > 611) {
+  if (!isValidVehicleModel(modelId)) {
     player.sendClientMessage(COLOR_ERROR, "车辆ID需在 400-611 之间");
     return false;
   }
