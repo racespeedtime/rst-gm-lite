@@ -53,7 +53,16 @@ async function handlePlayerConnect(player: Player) {
     // 1. 默认字符集 gbk（须在所有文本交互前设置）
     player.charset = DEFAULT_CHARSET;
 
-    // 2. 登录界面过场：随机音效 + 镜头插值滑动（认证对话框期间）
+    // 2. 先进观战模式（隐藏玩家）：否则连接后客户端默认已出生在世界 0，
+    //    认证/大厅选择期间人就已经出现在世界（虚空/默认点）。观战模式下
+    //    玩家不可见、不参与世界，正式出生（spawnPlayer/重连恢复）时再解除。
+    try {
+      player.toggleSpectating(true);
+    } catch (e) {
+      logger.warn(`[auth] ${player.getName().name} 进入观战模式失败`, e);
+    }
+
+    // 3. 登录界面过场：随机音效 + 镜头插值滑动（认证对话框期间）
     playLoginCamera(player);
 
     // 3. 认证流程（对话框驱动：登录 / 注册）
@@ -89,6 +98,8 @@ async function handlePlayerConnect(player: Player) {
       // 重连路径绕过了下方常规注册：补上战局成员登记 + 聊天范围，避免重连玩家不在任何战局
       sessionManager.onPlayerAuthenticated(player);
       initChatState(player.id);
+      // 解除连接时的观战模式，恢复可见（比赛世界）
+      player.toggleSpectating(false);
       if (auth.isSuperAdmin) {
         player.sendClientMessage(COLOR_INFO, "你已登录为系统管理员，按 Y 打开万能面板");
       }
