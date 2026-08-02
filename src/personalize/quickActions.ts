@@ -142,7 +142,11 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
     run: () => stopObserve(player),
   });
 
-  const index = await pickOption(player, "快捷操作", rows.map((r) => r.label));
+  const index = await pickOption(
+    player,
+    "快捷操作",
+    rows.map((r) => r.label),
+  );
   if (index < 0) return back?.();
   await rows[index].run();
 }

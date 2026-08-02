@@ -1,4 +1,13 @@
-import { BulletHitTypesEnum, GameText, KeysEnum, isPressed, Player, PlayerEvent, PlayerStateEnum, Vehicle } from "@infernus/core";
+import {
+  BulletHitTypesEnum,
+  GameText,
+  KeysEnum,
+  isPressed,
+  Player,
+  PlayerEvent,
+  PlayerStateEnum,
+  Vehicle,
+} from "@infernus/core";
 import { getSetting } from "@/personalize/settings";
 import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe } from "@/core/timers";

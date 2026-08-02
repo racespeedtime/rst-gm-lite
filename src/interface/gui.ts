@@ -4,7 +4,14 @@ import { getAuthState } from "@/auth/auth";
 import { setIntervalSafe } from "@/core/timers";
 import { getObserveTarget } from "@/core/observe";
 import { getSetting } from "@/personalize/settings";
-import { createSpeed2d, createSpeed3d, destroySpeed2d, destroySpeed3d, updateSpeed2d, updateSpeed3d } from "./speedometer";
+import {
+  createSpeed2d,
+  createSpeed3d,
+  destroySpeed2d,
+  destroySpeed3d,
+  updateSpeed2d,
+  updateSpeed3d,
+} from "./speedometer";
 import { createNetstat, destroyNetstat, updateNetstat } from "./netstat";
 import type { NetstatState } from "./netstat";
 import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUserSetting";
@@ -107,7 +114,8 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
 function getDisplaySpeed(player: Player): number {
   const st = getObserveTarget(player.id);
   if (st) {
-    const inst = st.kind === "player" ? Player.getInstance(st.targetId) : Vehicle.getInstance(st.targetId);
+    const inst =
+      st.kind === "player" ? Player.getInstance(st.targetId) : Vehicle.getInstance(st.targetId);
     return inst ? inst.getSpeed() : 0;
   }
   const veh = player.isInAnyVehicle() ? player.getVehicle() : null;

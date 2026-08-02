@@ -1,4 +1,11 @@
-import { BoneIdsEnum, Dialog, DialogStylesEnum, DynamicObject, Player, Vehicle } from "@infernus/core";
+import {
+  BoneIdsEnum,
+  Dialog,
+  DialogStylesEnum,
+  DynamicObject,
+  Player,
+  Vehicle,
+} from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -112,7 +119,15 @@ export async function applyVehiclePreset(
         rz: Number(item.rZ),
       });
       obj.create();
-      obj.attachToVehicle(vehicle, Number(item.x), Number(item.y), Number(item.z), Number(item.rX), Number(item.rY), Number(item.rZ));
+      obj.attachToVehicle(
+        vehicle,
+        Number(item.x),
+        Number(item.y),
+        Number(item.z),
+        Number(item.rX),
+        Number(item.rY),
+        Number(item.rZ),
+      );
       objs.push(obj);
     } catch (e) {
       logger.error(`[attire] 车辆挂件创建失败 ${item.attire.name}`, e);
@@ -227,7 +242,11 @@ async function playerPresetMenu(player: Player, back?: MenuBack): Promise<void> 
 }
 
 /** 人物预设列表：创建/选择预设/重排入口（重排后直接刷新本列表） */
-async function showPlayerPresetList(player: Player, skinId: number, back?: MenuBack): Promise<void> {
+async function showPlayerPresetList(
+  player: Player,
+  skinId: number,
+  back?: MenuBack,
+): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const setting = await prisma.sysUserSetting.findUnique({ where: { userId: auth.userId } });
@@ -241,7 +260,9 @@ async function showPlayerPresetList(player: Player, skinId: number, back?: MenuB
   const options = [`创建新预设（上限3套）`];
   for (const p of presets) {
     const mark = setting?.defaultPlayerPresetId === p.id ? "（默认）" : "";
-    options.push(`预设${p.index + 1}${p.name ? `（${p.name}）` : ""} ${p._count.items}/${MAX_PLAYER_ATTIRE}件${mark}`);
+    options.push(
+      `预设${p.index + 1}${p.name ? `（${p.name}）` : ""} ${p._count.items}/${MAX_PLAYER_ATTIRE}件${mark}`,
+    );
     options.push(`↕ 上移/下移「${p.name ? p.name : `预设${p.index + 1}`}」`);
   }
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
@@ -272,7 +293,13 @@ async function showPlayerPresetList(player: Player, skinId: number, back?: MenuB
 }
 
 /** 预设重排：上移/下移（与相邻预设交换 index），完成后刷新当前皮肤列表 */
-async function reorderPreset(player: Player, skinId: number, presets: { id: string; index: number }[], presetId: string, back?: MenuBack): Promise<void> {
+async function reorderPreset(
+  player: Player,
+  skinId: number,
+  presets: { id: string; index: number }[],
+  presetId: string,
+  back?: MenuBack,
+): Promise<void> {
   const idx = presets.findIndex((p) => p.id === presetId);
   if (idx < 0) return;
   const label = presets[idx].index + 1;
@@ -290,7 +317,10 @@ async function reorderPreset(player: Player, skinId: number, presets: { id: stri
   if (res.response !== 1) return back?.();
   const target = res.listItem === 0 ? presets[idx - 1] : presets[idx + 1];
   if (!target) {
-    player.sendClientMessage(COLOR_ERROR, res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设");
+    player.sendClientMessage(
+      COLOR_ERROR,
+      res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设",
+    );
     return back?.();
   }
   await swapSortIndex(presets[idx], target, (id, index) =>
@@ -300,7 +330,12 @@ async function reorderPreset(player: Player, skinId: number, presets: { id: stri
   await showPlayerPresetList(player, skinId, back);
 }
 
-async function createPlayerPreset(player: Player, skinId: number, presets: { index: number }[], back?: MenuBack): Promise<void> {
+async function createPlayerPreset(
+  player: Player,
+  skinId: number,
+  presets: { index: number }[],
+  back?: MenuBack,
+): Promise<void> {
   if (presets.length >= 3) {
     player.sendClientMessage(COLOR_ERROR, "每个皮肤最多 3 套预设");
     return back?.();
@@ -335,7 +370,12 @@ async function createPlayerPreset(player: Player, skinId: number, presets: { ind
 }
 
 /** 预设详情：应用/添加装扮/移除装扮/设为默认/删除 */
-async function playerPresetDetail(player: Player, presetId: string, skinId: number, back?: MenuBack): Promise<void> {
+async function playerPresetDetail(
+  player: Player,
+  presetId: string,
+  skinId: number,
+  back?: MenuBack,
+): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const setting = await prisma.sysUserSetting.findUnique({ where: { userId: auth.userId } });
@@ -392,7 +432,12 @@ async function playerPresetDetail(player: Player, presetId: string, skinId: numb
 }
 
 /** 添加装扮到人物预设：选装扮 → 选骨骼 → 输入偏移 */
-async function addPlayerPresetItem(player: Player, presetId: string, skinId: number, back?: MenuBack): Promise<void> {
+async function addPlayerPresetItem(
+  player: Player,
+  presetId: string,
+  skinId: number,
+  back?: MenuBack,
+): Promise<void> {
   const count = await prisma.playerPresetItem.count({ where: { presetId } });
   if (count >= MAX_PLAYER_ATTIRE) {
     player.sendClientMessage(COLOR_ERROR, `人物预设最多 ${MAX_PLAYER_ATTIRE} 件装扮`);
@@ -417,9 +462,24 @@ async function addPlayerPresetItem(player: Player, presetId: string, skinId: num
   const attire = r.item;
   // 骨骼选择
   const boneOptions = [
-    "1 脊柱", "2 头", "3 左上臂", "4 右上臂", "5 左手", "6 右手",
-    "7 左大腿", "8 右大腿", "9 左脚", "10 右脚", "11 右小腿", "12 左小腿",
-    "13 左小臂", "14 右小臂", "15 左肩", "16 右肩", "17 颈", "18 下巴",
+    "1 脊柱",
+    "2 头",
+    "3 左上臂",
+    "4 右上臂",
+    "5 左手",
+    "6 右手",
+    "7 左大腿",
+    "8 右大腿",
+    "9 左脚",
+    "10 右脚",
+    "11 右小腿",
+    "12 左小腿",
+    "13 左小臂",
+    "14 右小臂",
+    "15 左肩",
+    "16 右肩",
+    "17 颈",
+    "18 下巴",
   ];
   const boneRes = await showDialog(
     player,
@@ -449,7 +509,17 @@ async function addPlayerPresetItem(player: Player, presetId: string, skinId: num
   if (offsetRes.response !== 1) return back?.();
   const nums = offsetRes.inputText.trim()
     ? offsetRes.inputText.trim().split(/\s+/).map(Number)
-    : [Number(attire.x), Number(attire.y), Number(attire.z), Number(attire.rX), Number(attire.rY), Number(attire.rZ), Number(attire.sX), Number(attire.sY), Number(attire.sZ)];
+    : [
+        Number(attire.x),
+        Number(attire.y),
+        Number(attire.z),
+        Number(attire.rX),
+        Number(attire.rY),
+        Number(attire.rZ),
+        Number(attire.sX),
+        Number(attire.sY),
+        Number(attire.sZ),
+      ];
   if (nums.length !== 9 || nums.some((n) => !Number.isFinite(n))) {
     player.sendClientMessage(COLOR_ERROR, "需要 9 个数字（X Y Z 偏移 / 旋转 / 缩放）");
     return back?.();
@@ -460,9 +530,15 @@ async function addPlayerPresetItem(player: Player, presetId: string, skinId: num
         presetId,
         attireId: attire.id,
         boneId,
-        x: nums[0], y: nums[1], z: nums[2],
-        rX: nums[3], rY: nums[4], rZ: nums[5],
-        sX: nums[6], sY: nums[7], sZ: nums[8],
+        x: nums[0],
+        y: nums[1],
+        z: nums[2],
+        rX: nums[3],
+        rY: nums[4],
+        rZ: nums[5],
+        sX: nums[6],
+        sY: nums[7],
+        sZ: nums[8],
       },
     });
     player.sendClientMessage(COLOR_SUCCESS, `已添加装扮 ${attire.name}`);
@@ -501,7 +577,11 @@ async function vehiclePresetMenu(player: Player, back?: MenuBack): Promise<void>
 }
 
 /** 车辆预设列表：创建/选择预设/重排入口（重排后直接刷新本列表） */
-async function showVehiclePresetList(player: Player, modelId: number, back?: MenuBack): Promise<void> {
+async function showVehiclePresetList(
+  player: Player,
+  modelId: number,
+  back?: MenuBack,
+): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const presets = await prisma.vehiclePreset.findMany({
@@ -511,7 +591,9 @@ async function showVehiclePresetList(player: Player, modelId: number, back?: Men
   });
   const options = [`创建新预设（上限3套）`];
   for (const p of presets) {
-    options.push(`预设${p.index + 1}${p.name ? `（${p.name}）` : ""} ${p._count.items}/${MAX_VEHICLE_ATTIRE}槽`);
+    options.push(
+      `预设${p.index + 1}${p.name ? `（${p.name}）` : ""} ${p._count.items}/${MAX_VEHICLE_ATTIRE}槽`,
+    );
     options.push(`↕ 上移/下移「${p.name ? p.name : `预设${p.index + 1}`}」`);
   }
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
@@ -542,7 +624,13 @@ async function showVehiclePresetList(player: Player, modelId: number, back?: Men
 }
 
 /** 车辆预设重排：上移/下移（与相邻预设交换 index），完成后刷新当前模型列表 */
-async function reorderVehiclePreset(player: Player, modelId: number, presets: { id: string; index: number }[], presetId: string, back?: MenuBack): Promise<void> {
+async function reorderVehiclePreset(
+  player: Player,
+  modelId: number,
+  presets: { id: string; index: number }[],
+  presetId: string,
+  back?: MenuBack,
+): Promise<void> {
   const idx = presets.findIndex((p) => p.id === presetId);
   if (idx < 0) return;
   const label = presets[idx].index + 1;
@@ -560,7 +648,10 @@ async function reorderVehiclePreset(player: Player, modelId: number, presets: { 
   if (res.response !== 1) return back?.();
   const target = res.listItem === 0 ? presets[idx - 1] : presets[idx + 1];
   if (!target) {
-    player.sendClientMessage(COLOR_ERROR, res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设");
+    player.sendClientMessage(
+      COLOR_ERROR,
+      res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设",
+    );
     return back?.();
   }
   await swapSortIndex(presets[idx], target, (id, index) =>
@@ -570,7 +661,12 @@ async function reorderVehiclePreset(player: Player, modelId: number, presets: { 
   await showVehiclePresetList(player, modelId, back);
 }
 
-async function createVehiclePreset(player: Player, modelId: number, presets: { index: number }[], back?: MenuBack): Promise<void> {
+async function createVehiclePreset(
+  player: Player,
+  modelId: number,
+  presets: { index: number }[],
+  back?: MenuBack,
+): Promise<void> {
   if (presets.length >= 3) {
     player.sendClientMessage(COLOR_ERROR, "每个车辆模型最多 3 套预设");
     return back?.();
@@ -607,7 +703,12 @@ async function createVehiclePreset(player: Player, modelId: number, presets: { i
 }
 
 /** 车辆预设详情：应用/添加挂件/删除 */
-async function vehiclePresetDetail(player: Player, presetId: string, modelId: number, back?: MenuBack): Promise<void> {
+async function vehiclePresetDetail(
+  player: Player,
+  presetId: string,
+  modelId: number,
+  back?: MenuBack,
+): Promise<void> {
   const items = await prisma.vehiclePresetItem.findMany({
     where: { presetId },
     include: { attire: true },
@@ -657,7 +758,12 @@ async function vehiclePresetDetail(player: Player, presetId: string, modelId: nu
 }
 
 /** 添加挂件到车辆预设 */
-async function addVehiclePresetItem(player: Player, presetId: string, modelId: number, back?: MenuBack): Promise<void> {
+async function addVehiclePresetItem(
+  player: Player,
+  presetId: string,
+  modelId: number,
+  back?: MenuBack,
+): Promise<void> {
   const count = await prisma.vehiclePresetItem.count({ where: { presetId } });
   if (count >= MAX_VEHICLE_ATTIRE) {
     player.sendClientMessage(COLOR_ERROR, `车辆预设最多 ${MAX_VEHICLE_ATTIRE} 个挂件`);
@@ -695,7 +801,14 @@ async function addVehiclePresetItem(player: Player, presetId: string, modelId: n
   if (offsetRes.response !== 1) return back?.();
   const nums = offsetRes.inputText.trim()
     ? offsetRes.inputText.trim().split(/\s+/).map(Number)
-    : [Number(attire.x), Number(attire.y), Number(attire.z), Number(attire.rX), Number(attire.rY), Number(attire.rZ)];
+    : [
+        Number(attire.x),
+        Number(attire.y),
+        Number(attire.z),
+        Number(attire.rX),
+        Number(attire.rY),
+        Number(attire.rZ),
+      ];
   if (nums.length !== 6 || nums.some((n) => !Number.isFinite(n))) {
     player.sendClientMessage(COLOR_ERROR, "需要 6 个数字（偏移X Y Z / 旋转X Y Z）");
     return back?.();
@@ -706,8 +819,12 @@ async function addVehiclePresetItem(player: Player, presetId: string, modelId: n
         presetId,
         attireId: attire.id,
         slotId: count,
-        x: nums[0], y: nums[1], z: nums[2],
-        rX: nums[3], rY: nums[4], rZ: nums[5],
+        x: nums[0],
+        y: nums[1],
+        z: nums[2],
+        rX: nums[3],
+        rY: nums[4],
+        rZ: nums[5],
       },
     });
     player.sendClientMessage(COLOR_SUCCESS, `已添加挂件 ${attire.name}`);
@@ -720,7 +837,12 @@ async function addVehiclePresetItem(player: Player, presetId: string, modelId: n
 }
 
 /** 删除预设（二次验证） */
-async function confirmDeletePreset(player: Player, presetId: string, modelRef: number, kind: "人物" | "车辆"): Promise<void> {
+async function confirmDeletePreset(
+  player: Player,
+  presetId: string,
+  modelRef: number,
+  kind: "人物" | "车辆",
+): Promise<void> {
   const r = await showDialog(
     player,
     new Dialog({

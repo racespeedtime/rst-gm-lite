@@ -71,10 +71,19 @@ export async function enterRaceEdit(player: Player, raceId: string): Promise<voi
     // 先查库成功再登记状态，避免 DB 异常后残留编辑态
     editStates.set(player.id, { raceId, cpIndex: cps.length > 0 ? 0 : -1 });
     // 编辑/测试用车：刷出默认比赛车（首个 CP 有 cveh 换车用其车型，否则 411）并放入车内
-    const model = getDefaultRaceModel(cps.map((c) => ({ scripts: c.raceCpScripts.map((s) => s.script) })));
+    const model = getDefaultRaceModel(
+      cps.map((c) => ({ scripts: c.raceCpScripts.map((s) => s.script) })),
+    );
     if (cps.length > 0) {
       // 已有 CP：车放到第一个 CP（起点），玩家上车
-      spawnRaceVehicleAt(player, model, Number(cps[0].x), Number(cps[0].y), Number(cps[0].z), Number(cps[0].angle));
+      spawnRaceVehicleAt(
+        player,
+        model,
+        Number(cps[0].x),
+        Number(cps[0].y),
+        Number(cps[0].z),
+        Number(cps[0].angle),
+      );
       player.sendClientMessage(COLOR_RACE, "已刷出测试车辆并传送到赛道起点");
     } else {
       // 新赛道还没有 CP：在当前位置发车，放置第一个 CP 后可从起点测试
@@ -214,7 +223,10 @@ async function cpListMenu(player: Player): Promise<void> {
     await showEditMenu(player);
     return;
   }
-  const options = cps.map((c) => `CP${c.index + 1}（${Number(c.x).toFixed(1)}, ${Number(c.y).toFixed(1)}, ${Number(c.z).toFixed(1)}）`);
+  const options = cps.map(
+    (c) =>
+      `CP${c.index + 1}（${Number(c.x).toFixed(1)}, ${Number(c.y).toFixed(1)}, ${Number(c.z).toFixed(1)}）`,
+  );
   const res = await showDialog(
     player,
     new Dialog({
@@ -352,7 +364,10 @@ async function reorderCp(player: Player): Promise<void> {
   );
   await recalcRaceLength(state.raceId);
   state.cpIndex = target.index; // 当前聚焦的 CP 跟随移动
-  player.sendClientMessage(COLOR_SUCCESS, `CP${state.cpIndex + 1} 顺序已${res.listItem === 0 ? "前移" : "后移"}`);
+  player.sendClientMessage(
+    COLOR_SUCCESS,
+    `CP${state.cpIndex + 1} 顺序已${res.listItem === 0 ? "前移" : "后移"}`,
+  );
   await cpDetailMenu(player);
 }
 
@@ -368,7 +383,10 @@ async function moveCp(player: Player, cp: { id: string; raceId: string | null })
 }
 
 /** 删除 CP（后续 index 前移）——事务内完成，中途失败整体回滚 */
-async function deleteCp(player: Player, cp: { id: string; index: number; raceId: string | null }): Promise<void> {
+async function deleteCp(
+  player: Player,
+  cp: { id: string; index: number; raceId: string | null },
+): Promise<void> {
   const state = editStates.get(player.id);
   if (!state || !cp.raceId) return;
   const raceId: string = cp.raceId; // 闭包内捕获（TS 不在嵌套函数中保留参数窄化）
@@ -385,7 +403,10 @@ async function deleteCp(player: Player, cp: { id: string; index: number; raceId:
 }
 
 /** 在指定 CP 后插入新 CP（后续 index 后移）——事务内完成，中途失败整体回滚 */
-async function insertCp(player: Player, cp: { raceId: string | null; index: number }): Promise<void> {
+async function insertCp(
+  player: Player,
+  cp: { raceId: string | null; index: number },
+): Promise<void> {
   const pos = player.getPos();
   const state = editStates.get(player.id);
   if (!state || !cp.raceId) return;
@@ -529,7 +550,12 @@ async function cpScriptMenu(player: Player, cp: { id: string }): Promise<void> {
 }
 
 /** 脚本重排：上移/下移（与相邻脚本交换 index），完成后刷新脚本列表 */
-async function reorderScript(player: Player, cp: { id: string }, scripts: { id: string; index: number; script: string }[], target: { id: string; index: number }): Promise<void> {
+async function reorderScript(
+  player: Player,
+  cp: { id: string },
+  scripts: { id: string; index: number; script: string }[],
+  target: { id: string; index: number },
+): Promise<void> {
   const idx = scripts.findIndex((s) => s.id === target.id);
   if (idx < 0) return;
   const res = await showDialog(
@@ -548,7 +574,10 @@ async function reorderScript(player: Player, cp: { id: string }, scripts: { id: 
   }
   const neighbor = res.listItem === 0 ? scripts[idx - 1] : scripts[idx + 1];
   if (!neighbor) {
-    player.sendClientMessage(COLOR_ERROR, res.listItem === 0 ? "已是第一条脚本" : "已是最后一条脚本");
+    player.sendClientMessage(
+      COLOR_ERROR,
+      res.listItem === 0 ? "已是第一条脚本" : "已是最后一条脚本",
+    );
     await cpScriptMenu(player, cp);
     return;
   }

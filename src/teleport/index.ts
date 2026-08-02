@@ -54,7 +54,14 @@ export function cleanupTeleport(playerId: number): void {
 }
 
 /** 传送到指定位置（区分车内/步行，保留朝向） */
-export function teleportTo(player: Player, x: number, y: number, z: number, angle: number, interiorId: number): void {
+export function teleportTo(
+  player: Player,
+  x: number,
+  y: number,
+  z: number,
+  angle: number,
+  interiorId: number,
+): void {
   player.setInterior(interiorId);
   if (player.isInAnyVehicle()) {
     const veh = player.getVehicle()!;
@@ -96,7 +103,14 @@ export async function fallbackTeleport(player: Player, rawCommand: string): Prom
       where: { name: teleName, isEnabled: true, deletedAt: null, isSystem: !isUserTele },
     });
     if (!point) return false;
-    teleportTo(player, Number(point.x), Number(point.y), Number(point.z), Number(point.angle), point.interiorId);
+    teleportTo(
+      player,
+      Number(point.x),
+      Number(point.y),
+      Number(point.z),
+      Number(point.angle),
+      point.interiorId,
+    );
     if (isUserTele) {
       player.sendClientMessage(COLOR_WHITE, `[传送] 你传送到了 //${teleName}`);
     } else {
@@ -152,7 +166,10 @@ export function initTeleport(): void {
   PlayerEvent.onCommandText(["tp", "tpa"], async ({ player, subcommand, next }) => {
     const arg = subcommand[0];
     if (arg === "ban") {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 当前精简版通过面板的『世界个性化→接受传送』控制是否接收请求");
+      player.sendClientMessage(
+        COLOR_WHITE,
+        "[TP] 当前精简版通过面板的『世界个性化→接受传送』控制是否接收请求",
+      );
       return next();
     }
     if (tpGotoId.has(player.id) || tpFromId.has(player.id)) {
@@ -210,9 +227,14 @@ export function initTeleport(): void {
     tpFromId.set(target.id, player.id);
     tpTimeoutAt.set(player.id, timeout);
     tpTimeoutAt.set(target.id, timeout);
-    target.sendClientMessage(COLOR_INFO, `[TP] ${player.getName().name}(${player.id}) 请求传送到你身边，/ta 同意 /td 拒绝`);
+    target.sendClientMessage(
+      COLOR_INFO,
+      `[TP] ${player.getName().name}(${player.id}) 请求传送到你身边，/ta 同意 /td 拒绝`,
+    );
     player.sendClientMessage(COLOR_INFO, `[TP] 请求已发至 ${target.getName().name}(${target.id})`);
-    new GameText("~n~~n~~n~~n~~n~~n~~n~~n~~w~Player want to move ~r~you~w~.", 3000, 3).forPlayer(target);
+    new GameText("~n~~n~~n~~n~~n~~n~~n~~n~~w~Player want to move ~r~you~w~.", 3000, 3).forPlayer(
+      target,
+    );
     return next();
   });
 
@@ -257,9 +279,22 @@ export function initTeleport(): void {
     }
     const pos = player.getPos();
     // 用 teleportTo 统一处理人车分离（车内/步行分别移动），避免 setPos 后玩家与车分离
-    teleportTo(from, pos.x + Math.random() * 3, pos.y, pos.z + Math.random() * 3, player.getFacingAngle().angle, player.getInterior());
-    from.sendClientMessage(COLOR_INFO, `[TP] ${player.getName().name}(${player.id}) 同意了你的传送请求`);
-    player.sendClientMessage(COLOR_INFO, `[TP] 你同意了 ${from.getName().name}(${from.id}) 的传送请求`);
+    teleportTo(
+      from,
+      pos.x + Math.random() * 3,
+      pos.y,
+      pos.z + Math.random() * 3,
+      player.getFacingAngle().angle,
+      player.getInterior(),
+    );
+    from.sendClientMessage(
+      COLOR_INFO,
+      `[TP] ${player.getName().name}(${player.id}) 同意了你的传送请求`,
+    );
+    player.sendClientMessage(
+      COLOR_INFO,
+      `[TP] 你同意了 ${from.getName().name}(${from.id}) 的传送请求`,
+    );
     initTp(from.id);
     initTp(player.id);
     return next();
@@ -274,7 +309,10 @@ export function initTeleport(): void {
     }
     const from = Player.getInstance(fromId);
     if (from) {
-      from.sendClientMessage(COLOR_INFO, `[TP] ${player.getName().name}(${player.id}) 拒绝了你的传送请求`);
+      from.sendClientMessage(
+        COLOR_INFO,
+        `[TP] ${player.getName().name}(${player.id}) 拒绝了你的传送请求`,
+      );
     }
     player.sendClientMessage(COLOR_INFO, `[TP] 你拒绝了传送请求`);
     initTp(fromId);
@@ -355,7 +393,14 @@ async function listSystemTeleports(player: Player, back?: MenuBack): Promise<voi
   });
   if (!r) return back?.();
   const point = r.item;
-  teleportTo(player, Number(point.x), Number(point.y), Number(point.z), Number(point.angle), point.interiorId);
+  teleportTo(
+    player,
+    Number(point.x),
+    Number(point.y),
+    Number(point.z),
+    Number(point.angle),
+    point.interiorId,
+  );
   player.sendClientMessage(COLOR_WHITE, `[传送] 你传送到了 ${point.name}`);
   return back?.();
 }
@@ -381,7 +426,14 @@ async function listMyTeleports(player: Player, back?: MenuBack): Promise<void> {
   });
   if (!r) return back?.();
   const point = r.item;
-  teleportTo(player, Number(point.x), Number(point.y), Number(point.z), Number(point.angle), point.interiorId);
+  teleportTo(
+    player,
+    Number(point.x),
+    Number(point.y),
+    Number(point.z),
+    Number(point.angle),
+    point.interiorId,
+  );
   player.sendClientMessage(COLOR_WHITE, `[传送] 你传送到了 //${point.name}`);
   return back?.();
 }
@@ -474,7 +526,8 @@ async function manageTeleports(player: Player, back?: MenuBack): Promise<void> {
   const r = await showPagedDialog(player, {
     caption: "管理传送点",
     data: points,
-    format: (p) => `${p.isSystem ? "/" : "//"}${p.name}${p.description ? `（${p.description}）` : ""}`,
+    format: (p) =>
+      `${p.isSystem ? "/" : "//"}${p.name}${p.description ? `（${p.description}）` : ""}`,
     button1: "删除",
     button2: "取消",
   });

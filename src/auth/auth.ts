@@ -75,9 +75,7 @@ export async function closePlayerSession(playerId: number): Promise<void> {
         data: {
           logoutAt: new Date(),
           status: "OFFLINE",
-          duration: startedAt
-            ? Math.floor((Date.now() - startedAt.getTime()) / 1000)
-            : undefined,
+          duration: startedAt ? Math.floor((Date.now() - startedAt.getTime()) / 1000) : undefined,
         },
       });
     } catch (e) {
@@ -338,7 +336,10 @@ export async function changeOwnPassword(player: Player, back?: MenuBack): Promis
  * 注册流程：密码 + 确认密码 → 创建用户与默认设置 → 创建会话
  * 返回 { userId, sessionId }，失败返回 null
  */
-async function doRegister(player: Player, name: string): Promise<{ userId: string; sessionId: string } | null> {
+async function doRegister(
+  player: Player,
+  name: string,
+): Promise<{ userId: string; sessionId: string } | null> {
   // 注册前校验 IP 封禁（新用户无 userId，走 IP 维度）——防止被 IP 封禁者注册新号绕过
   const ip = player.getIp().ip;
   const denied = await checkLoginAllowed("", ip);

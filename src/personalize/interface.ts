@@ -1,5 +1,12 @@
 import { Player } from "@infernus/core";
-import { getSetting, updateSetting, pickOption, notifySaved, toggleText, toggleSetting } from "./settings";
+import {
+  getSetting,
+  updateSetting,
+  pickOption,
+  notifySaved,
+  toggleText,
+  toggleSetting,
+} from "./settings";
 import type { MenuBack } from "@/core/panel";
 
 /**

@@ -29,7 +29,10 @@ async function markStaleSessionsOffline(cutoff: Date): Promise<number> {
         data: {
           status: "OFFLINE",
           logoutAt: s.lastHeartbeatAt,
-          duration: Math.max(0, Math.floor((s.lastHeartbeatAt.getTime() - s.loginAt.getTime()) / 1000)),
+          duration: Math.max(
+            0,
+            Math.floor((s.lastHeartbeatAt.getTime() - s.loginAt.getTime()) / 1000),
+          ),
         },
       }),
     ),

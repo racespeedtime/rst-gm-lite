@@ -11,7 +11,9 @@ import { logger } from "@/logger";
  */
 
 /** 查询用户未失效的封禁（返回原因；无封禁返回 null） */
-export async function getActiveBan(userId: string): Promise<{ reason: string; endAt: Date | null } | null> {
+export async function getActiveBan(
+  userId: string,
+): Promise<{ reason: string; endAt: Date | null } | null> {
   const ban = await prisma.sysUserBan.findFirst({
     where: {
       userId,
@@ -25,7 +27,9 @@ export async function getActiveBan(userId: string): Promise<{ reason: string; en
 }
 
 /** 查询 IP 未失效的封禁（返回原因；无封禁返回 null） */
-export async function getActiveIpBan(ip: string): Promise<{ reason: string; endAt: Date | null } | null> {
+export async function getActiveIpBan(
+  ip: string,
+): Promise<{ reason: string; endAt: Date | null } | null> {
   const ban = await prisma.sysUserBan.findFirst({
     where: {
       ip,
@@ -61,19 +65,27 @@ export async function checkLoginAllowed(
   if (ip) {
     const ipBan = await getActiveIpBan(ip);
     if (ipBan) {
-      return { reason: `当前 IP 已被封禁${banReasonText(ipBan.reason, ipBan.endAt)}`, type: "banned" };
+      return {
+        reason: `当前 IP 已被封禁${banReasonText(ipBan.reason, ipBan.endAt)}`,
+        type: "banned",
+      };
     }
   }
   return null;
 }
 
 /** 把账号/IP 对应的在线玩家即时踢出（封禁即时生效） */
-function kickOnlineForBan(target: { userId?: string | null; ip?: string | null }, reason: string): void {
+function kickOnlineForBan(
+  target: { userId?: string | null; ip?: string | null },
+  reason: string,
+): void {
   for (const p of Player.getInstances()) {
     if (p.isNpc() || !p.isConnected()) continue;
     const auth = getAuthState(p.id);
     const pIp = p.getIp().ip;
-    const match = (target.userId && auth?.userId === target.userId) || (target.ip && target.ip !== "" && pIp === target.ip);
+    const match =
+      (target.userId && auth?.userId === target.userId) ||
+      (target.ip && target.ip !== "" && pIp === target.ip);
     if (match) {
       p.sendClientMessage("#ff5555", `[系统] 你已被封禁：${reason}`);
       p.kick();
@@ -91,7 +103,12 @@ async function isUserSuperAdmin(userId: string): Promise<boolean> {
 }
 
 /** OP 封禁：/ban <用户名> <时长分钟> <原因>；时长 0 = 永久。封禁后即时踢出在线玩家 */
-export async function banUser(op: Player, username: string, minutes: number, reason: string): Promise<void> {
+export async function banUser(
+  op: Player,
+  username: string,
+  minutes: number,
+  reason: string,
+): Promise<void> {
   const user = await prisma.sysUser.findUnique({ where: { username } });
   if (!user) {
     op.sendClientMessage("#ff5555", `用户 ${username} 不存在`);
@@ -110,7 +127,11 @@ export async function banUser(op: Player, username: string, minutes: number, rea
   const endAt = minutes > 0 ? new Date(Date.now() + minutes * 60_000) : null;
   // 已有未失效封禁 → 更新；否则新增
   const existing = await prisma.sysUserBan.findFirst({
-    where: { userId: user.id, revokedAt: null, OR: [{ endAt: null }, { endAt: { gt: new Date() } }] },
+    where: {
+      userId: user.id,
+      revokedAt: null,
+      OR: [{ endAt: null }, { endAt: { gt: new Date() } }],
+    },
   });
   if (existing) {
     await prisma.sysUserBan.update({
@@ -130,7 +151,12 @@ export async function banUser(op: Player, username: string, minutes: number, rea
 }
 
 /** OP IP 封禁：/banip <IP> <时长分钟> <原因>；时长 0 = 永久 */
-export async function banIp(op: Player, ip: string, minutes: number, reason: string): Promise<void> {
+export async function banIp(
+  op: Player,
+  ip: string,
+  minutes: number,
+  reason: string,
+): Promise<void> {
   const endAt = minutes > 0 ? new Date(Date.now() + minutes * 60_000) : null;
   const opUserId = getAuthState(op.id)?.userId ?? null;
   const existing = await prisma.sysUserBan.findFirst({
@@ -155,10 +181,17 @@ export async function unbanUser(op: Player, username: string): Promise<void> {
     return;
   }
   const res = await prisma.sysUserBan.updateMany({
-    where: { userId: user.id, revokedAt: null, OR: [{ endAt: null }, { endAt: { gt: new Date() } }] },
+    where: {
+      userId: user.id,
+      revokedAt: null,
+      OR: [{ endAt: null }, { endAt: { gt: new Date() } }],
+    },
     data: { revokedAt: new Date() },
   });
-  op.sendClientMessage(res.count > 0 ? "#55ff55" : "#ff5555", res.count > 0 ? `已解封 ${username}` : `${username} 当前未被封禁`);
+  op.sendClientMessage(
+    res.count > 0 ? "#55ff55" : "#ff5555",
+    res.count > 0 ? `已解封 ${username}` : `${username} 当前未被封禁`,
+  );
 }
 
 /** OP 解封 IP：/unbanip <IP> */
@@ -167,5 +200,8 @@ export async function unbanIp(op: Player, ip: string): Promise<void> {
     where: { ip, revokedAt: null, OR: [{ endAt: null }, { endAt: { gt: new Date() } }] },
     data: { revokedAt: new Date() },
   });
-  op.sendClientMessage(res.count > 0 ? "#55ff55" : "#ff5555", res.count > 0 ? `已解封 IP ${ip}` : `IP ${ip} 当前未被封禁`);
+  op.sendClientMessage(
+    res.count > 0 ? "#55ff55" : "#ff5555",
+    res.count > 0 ? `已解封 IP ${ip}` : `IP ${ip} 当前未被封禁`,
+  );
 }

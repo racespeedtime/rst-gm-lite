@@ -94,7 +94,10 @@ async function collectProfileStats(userId: string): Promise<ProfileStats | null>
   );
   const lastRaceAt =
     raceRecords.length > 0
-      ? raceRecords.reduce((latest, r) => (r.createdAt > latest ? r.createdAt : latest), raceRecords[0].createdAt)
+      ? raceRecords.reduce(
+          (latest, r) => (r.createdAt > latest ? r.createdAt : latest),
+          raceRecords[0].createdAt,
+        )
       : null;
 
   return {

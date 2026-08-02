@@ -167,7 +167,14 @@ async function manageCurrentVehicle(player: Player, back?: MenuBack): Promise<vo
     if (!r) return;
     if (r.response !== 1) return toThis();
     const [c1, c2] = r.inputText.trim().split(/\s+/).map(Number);
-    if (!Number.isInteger(c1) || c1 < 0 || c1 > 255 || !Number.isInteger(c2) || c2 < 0 || c2 > 255) {
+    if (
+      !Number.isInteger(c1) ||
+      c1 < 0 ||
+      c1 > 255 ||
+      !Number.isInteger(c2) ||
+      c2 < 0 ||
+      c2 > 255
+    ) {
       player.sendClientMessage(COLOR_ERROR, "颜色代码需为 0-255 的整数");
       return toThis();
     }
@@ -185,7 +192,10 @@ async function manageCurrentVehicle(player: Player, back?: MenuBack): Promise<vo
       p.sendClientMessage(COLOR_ERROR, "该车已被锁，你被移出");
       kicked++;
     }
-    player.sendClientMessage(COLOR_SUCCESS, kicked > 0 ? `已踢出 ${kicked} 名乘客` : "车内没有其他乘客");
+    player.sendClientMessage(
+      COLOR_SUCCESS,
+      kicked > 0 ? `已踢出 ${kicked} 名乘客` : "车内没有其他乘客",
+    );
     return toThis();
   } else if (res.listItem === 4) {
     destroyPlayerVehicle(player.id);

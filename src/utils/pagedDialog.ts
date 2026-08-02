@@ -41,7 +41,14 @@ export async function showPagedDialog<T>(
   player: Player,
   options: PagedDialogOptions<T>,
 ): Promise<PagedDialogResult<T> | null> {
-  const { data, format, pageSize = 10, selectable = true, button1 = "确定", button2 = "取消" } = options;
+  const {
+    data,
+    format,
+    pageSize = 10,
+    selectable = true,
+    button1 = "确定",
+    button2 = "取消",
+  } = options;
   if (data.length === 0) return null;
 
   const pageCount = Math.max(1, Math.ceil(data.length / pageSize));

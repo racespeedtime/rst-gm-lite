@@ -116,7 +116,8 @@ async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBac
   const r = await showPagedDialog(player, {
     caption: mode === "MINE" ? "我的赛道" : "赛道列表",
     data: races,
-    format: (race) => `${race.name}${race.description ? `（${race.description}）` : ""} ${Math.round(Number(race.totalLength))}m`,
+    format: (race) =>
+      `${race.name}${race.description ? `（${race.description}）` : ""} ${Math.round(Number(race.totalLength))}m`,
     button1: "选择",
     button2: "取消",
   });
@@ -310,13 +311,19 @@ async function reorderGroups(player: Player, back?: MenuBack): Promise<void> {
   if (dir.response !== 1) return back?.();
   const target = dir.listItem === 0 ? groups[idx - 1] : groups[idx + 1];
   if (!target) {
-    player.sendClientMessage(COLOR_ERROR, dir.listItem === 0 ? "已是第一个分组" : "已是最后一个分组");
+    player.sendClientMessage(
+      COLOR_ERROR,
+      dir.listItem === 0 ? "已是第一个分组" : "已是最后一个分组",
+    );
     return back?.();
   }
   await swapSortIndex(group, target, (id, index) =>
     prisma.raceGroup.update({ where: { id }, data: { index } }),
   );
-  player.sendClientMessage(COLOR_SUCCESS, `分组「${group.name}」已${dir.listItem === 0 ? "上移" : "下移"}`);
+  player.sendClientMessage(
+    COLOR_SUCCESS,
+    `分组「${group.name}」已${dir.listItem === 0 ? "上移" : "下移"}`,
+  );
   await raceGroupFlow(player, back);
 }
 
@@ -392,7 +399,10 @@ async function reorderGroupRaces(player: Player, groupId: string, back?: MenuBac
   if (dir.response !== 1) return back?.();
   const target = dir.listItem === 0 ? entries[idx - 1] : entries[idx + 1];
   if (!target) {
-    player.sendClientMessage(COLOR_ERROR, dir.listItem === 0 ? "已是第一条赛道" : "已是最后一条赛道");
+    player.sendClientMessage(
+      COLOR_ERROR,
+      dir.listItem === 0 ? "已是第一条赛道" : "已是最后一条赛道",
+    );
     return back?.();
   }
   await swapSortIndex(
@@ -404,7 +414,10 @@ async function reorderGroupRaces(player: Player, groupId: string, back?: MenuBac
         data: { index },
       }),
   );
-  player.sendClientMessage(COLOR_SUCCESS, `赛道「${entry.race.name}」已${dir.listItem === 0 ? "上移" : "下移"}`);
+  player.sendClientMessage(
+    COLOR_SUCCESS,
+    `赛道「${entry.race.name}」已${dir.listItem === 0 ? "上移" : "下移"}`,
+  );
   await groupDetailFlow(player, groupId, back);
 }
 
@@ -474,7 +487,11 @@ async function addRaceToGroup(player: Player, groupId: string, back?: MenuBack):
   return back?.();
 }
 
-async function removeRaceFromGroup(player: Player, groupId: string, back?: MenuBack): Promise<void> {
+async function removeRaceFromGroup(
+  player: Player,
+  groupId: string,
+  back?: MenuBack,
+): Promise<void> {
   const entries = await prisma.raceGroupRace.findMany({
     where: { raceGroupId: groupId },
     include: { race: true },

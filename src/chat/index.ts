@@ -148,8 +148,14 @@ export function initChat(): void {
       return next();
     }
     const safeMsg = sanitizeChatText(msg);
-    target.sendClientMessage(PM_COLOR, `[pm] ${player.getName().name}(${player.id}) 对你说: ${safeMsg}`);
-    player.sendClientMessage(PM_COLOR, `[pm] 你对 ${target.getName().name}(${target.id}) 说: ${safeMsg}`);
+    target.sendClientMessage(
+      PM_COLOR,
+      `[pm] ${player.getName().name}(${player.id}) 对你说: ${safeMsg}`,
+    );
+    player.sendClientMessage(
+      PM_COLOR,
+      `[pm] 你对 ${target.getName().name}(${target.id}) 说: ${safeMsg}`,
+    );
     new GameText("Private message Sent", 1000, 3).forPlayer(player);
     new GameText("Private message Received", 1000, 3).forPlayer(target);
     target.playSound(1057);

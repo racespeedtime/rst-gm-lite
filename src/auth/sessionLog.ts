@@ -30,7 +30,13 @@ function formatDate(d: Date | null): string {
 
 /** 登录记录单行展示（index 为全局序号，跨页连续） */
 function formatSessionLine(
-  s: { loginAt: Date | null; logoutAt: Date | null; duration: number | null; ip: string | null; status: string },
+  s: {
+    loginAt: Date | null;
+    logoutAt: Date | null;
+    duration: number | null;
+    ip: string | null;
+    status: string;
+  },
   index: number,
 ): string {
   return (

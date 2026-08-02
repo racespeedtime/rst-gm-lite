@@ -29,7 +29,12 @@ async function loadSpawnPoints(): Promise<{ x: number; y: number; z: number; ang
 }
 
 /** 获取一个随机出生点 */
-export async function getRandomSpawnPoint(): Promise<{ x: number; y: number; z: number; angle: number } | null> {
+export async function getRandomSpawnPoint(): Promise<{
+  x: number;
+  y: number;
+  z: number;
+  angle: number;
+} | null> {
   const points = await loadSpawnPoints();
   if (points.length === 0) return null;
   return points[Math.floor(Math.random() * points.length)];

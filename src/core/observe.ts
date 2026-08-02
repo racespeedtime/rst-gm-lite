@@ -1,4 +1,13 @@
-import { Dialog, DialogStylesEnum, Player, PlayerEvent, PlayerStateEnum, SpectateModesEnum, Vehicle, VehicleEvent } from "@infernus/core";
+import {
+  Dialog,
+  DialogStylesEnum,
+  Player,
+  PlayerEvent,
+  PlayerStateEnum,
+  SpectateModesEnum,
+  Vehicle,
+  VehicleEvent,
+} from "@infernus/core";
 
 import { COLOR_ORANGE, COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
 
@@ -27,7 +36,10 @@ export function startObservePlayer(observer: Player, target: Player): void {
     observer.sendClientMessage(COLOR_ORANGE, "[TV] 不能观看自己");
     return;
   }
-  if (!target.isConnected() || [PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState())) {
+  if (
+    !target.isConnected() ||
+    [PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState())
+  ) {
     observer.sendClientMessage(COLOR_ORANGE, "[TV] 对方当前无法被观看");
     return;
   }
@@ -93,7 +105,11 @@ export function cleanupObserve(playerId: number): void {
 function retracePlayer(observer: Player, state: ObserveState): void {
   if (state.kind === "player") {
     const target = Player.getInstance(state.targetId);
-    if (target && target.isConnected() && ![PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState())) {
+    if (
+      target &&
+      target.isConnected() &&
+      ![PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState())
+    ) {
       startObservePlayer(observer, target);
       return;
     }
@@ -122,7 +138,9 @@ async function suggestStop(observer: Player): Promise<void> {
     info: "你观察的对象已无法继续跟踪，是否停止观战？",
     button1: "是",
     button2: "否",
-  }).show(observer).catch(() => null);
+  })
+    .show(observer)
+    .catch(() => null);
   if (res && res.response) {
     observeStates.delete(observer.id);
     observer.toggleSpectating(false);

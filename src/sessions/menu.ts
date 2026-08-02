@@ -21,8 +21,14 @@ function findOnlinePlayer(name: string): Player | undefined {
  */
 export async function openSessionMenu(player: Player, back?: MenuBack): Promise<void> {
   const items: { label: string; run: () => Promise<void> }[] = [];
-  items.push({ label: "加入战局", run: () => joinSessionFlow(player, () => openSessionMenu(player, back)) });
-  items.push({ label: "创建私人战局", run: () => createSessionFlow(player, () => openSessionMenu(player, back)) });
+  items.push({
+    label: "加入战局",
+    run: () => joinSessionFlow(player, () => openSessionMenu(player, back)),
+  });
+  items.push({
+    label: "创建私人战局",
+    run: () => createSessionFlow(player, () => openSessionMenu(player, back)),
+  });
   items.push({
     label: "回到公共大世界",
     run: async () => {
@@ -49,10 +55,16 @@ export async function openSessionMenu(player: Player, back?: MenuBack): Promise<
   }
   const current = sessionManager.getPlayerSession(player);
   if (current.id !== 0 && sessionManager.isOwner(player, current)) {
-    items.push({ label: "我的战局管理", run: () => openOwnerMenu(player, () => openSessionMenu(player, back)) });
+    items.push({
+      label: "我的战局管理",
+      run: () => openOwnerMenu(player, () => openSessionMenu(player, back)),
+    });
   }
   // 战局设置（原一级菜单并入）：自身战局类型/密码/启动进入方式
-  items.push({ label: "战局设置", run: () => openSessionSettingsMenu(player, () => openSessionMenu(player, back)) });
+  items.push({
+    label: "战局设置",
+    run: () => openSessionSettingsMenu(player, () => openSessionMenu(player, back)),
+  });
 
   const info = items.map((item, i) => `${i + 1}. ${item.label}`).join("\n");
   const res = await showDialog(
@@ -80,7 +92,8 @@ async function joinSessionFlow(player: Player, back?: MenuBack): Promise<void> {
   const r = await showPagedDialog(player, {
     caption: "加入战局",
     data: list,
-    format: (s) => `${s.name}（${s.memberCount}/${s.capacity}人）${s.password ? "【需要密码】" : ""}`,
+    format: (s) =>
+      `${s.name}（${s.memberCount}/${s.capacity}人）${s.password ? "【需要密码】" : ""}`,
     button1: "加入",
     button2: "取消",
   });
@@ -169,7 +182,10 @@ async function createSessionFlow(player: Player, back?: MenuBack): Promise<void>
 /** 房主管理菜单：设置密码 / 踢人 / 邀请 */
 async function openOwnerMenu(player: Player, back?: MenuBack): Promise<void> {
   const items: { label: string; run: () => Promise<void> }[] = [
-    { label: "设置战局密码", run: () => setPasswordFlow(player, () => openOwnerMenu(player, back)) },
+    {
+      label: "设置战局密码",
+      run: () => setPasswordFlow(player, () => openOwnerMenu(player, back)),
+    },
     { label: "踢人", run: () => kickMemberFlow(player, () => openOwnerMenu(player, back)) },
     { label: "邀请玩家", run: () => inviteFlow(player, () => openOwnerMenu(player, back)) },
   ];

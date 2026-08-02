@@ -1,4 +1,11 @@
-import { Dialog, DialogStylesEnum, Dynamic3DTextLabel, Player, PlayerEvent, Vehicle } from "@infernus/core";
+import {
+  Dialog,
+  DialogStylesEnum,
+  Dynamic3DTextLabel,
+  Player,
+  PlayerEvent,
+  Vehicle,
+} from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -119,7 +126,10 @@ export async function spawnVehicle(player: Player, modelId: number): Promise<boo
       playerVehLabels.set(player.id, label);
     }
     veh.putPlayerIn(player, 0);
-    player.sendClientMessage(COLOR_SUCCESS, `刷车成功！爱车模型 [${modelId}]，/cc 换色，/c wode 召唤`);
+    player.sendClientMessage(
+      COLOR_SUCCESS,
+      `刷车成功！爱车模型 [${modelId}]，/cc 换色，/c wode 召唤`,
+    );
     return true;
   } catch (e) {
     logger.error(`[veh] ${player.getName().name} 刷车失败 ${modelId}`, e);
@@ -249,7 +259,14 @@ export function initVehicleCommands(): void {
     }
     const c1 = +subcommand[0];
     const c2 = +subcommand[1];
-    if (!Number.isInteger(c1) || c1 < 0 || c1 > 255 || !Number.isInteger(c2) || c2 < 0 || c2 > 255) {
+    if (
+      !Number.isInteger(c1) ||
+      c1 < 0 ||
+      c1 > 255 ||
+      !Number.isInteger(c2) ||
+      c2 < 0 ||
+      c2 > 255
+    ) {
       player.sendClientMessage(COLOR_ERROR, "用法: /cc 颜色代码1 颜色代码2（0-255）");
       return next();
     }
@@ -302,7 +319,10 @@ export function initVehicleCommands(): void {
       p.sendClientMessage(COLOR_ERROR, "该车已被锁，你被移出");
       kicked++;
     }
-    player.sendClientMessage(COLOR_SUCCESS, kicked > 0 ? `已踢出 ${kicked} 名乘客` : "车内没有其他乘客");
+    player.sendClientMessage(
+      COLOR_SUCCESS,
+      kicked > 0 ? `已踢出 ${kicked} 名乘客` : "车内没有其他乘客",
+    );
     return next();
   });
 }

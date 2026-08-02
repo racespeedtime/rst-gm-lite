@@ -14,8 +14,16 @@ export function playLoginCamera(player: Player): void {
   const pos = player.getPos();
   player.playSound(sound, pos.x, pos.y, pos.z);
   // 随机起止点（全图范围），60 秒滑动
-  const from = { x: Math.random() * 6000 - 3000, y: Math.random() * 6000 - 3000, z: Math.random() * 120 + 50 };
-  const to = { x: Math.random() * 6000 - 3000, y: Math.random() * 6000 - 3000, z: Math.random() * 120 + 50 };
+  const from = {
+    x: Math.random() * 6000 - 3000,
+    y: Math.random() * 6000 - 3000,
+    z: Math.random() * 120 + 50,
+  };
+  const to = {
+    x: Math.random() * 6000 - 3000,
+    y: Math.random() * 6000 - 3000,
+    z: Math.random() * 120 + 50,
+  };
   player.interpolateCameraPos(from.x, from.y, from.z, to.x, to.y, to.z, 60_000, 1); // CAMERA_MOVE
 }
 
