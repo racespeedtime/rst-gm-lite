@@ -83,28 +83,28 @@ export async function openWorldMenu(player: Player): Promise<void> {
     let next: string;
     if (colorIndex < COLOR_PALETTE.length) {
       next = COLOR_PALETTE[colorIndex].value;
-      } else {
-        // 自定义颜色：输入（校验格式）
-        const res = await showDialog(
-          player,
-          new Dialog({
-            style: DialogStylesEnum.INPUT,
-            caption: "游戏内颜色",
-            info: "输入颜色（支持 #fff / #ff0000 / (r,g,b,a)）：",
-            button1: "确定",
-            button2: "取消",
-          }),
-        );
-        if (!res || res.response !== 1) return;
-        const input = res.inputText.trim();
-        const validHex = /^#?[0-9a-fA-F]{3}$|^#?[0-9a-fA-F]{6}$/.test(input);
-        const validRgba = /^\(\d{1,3},\d{1,3},\d{1,3}(,\d{1,3})?\)$/.test(input);
-        if (!validHex && !validRgba) {
-          player.sendClientMessage(COLOR_ERROR, "颜色格式不正确（支持 #fff / #ff0000 / (r,g,b,a)）");
-          return;
-        }
-        next = input.startsWith("#") ? input : input.startsWith("(") ? input : `#${input}`;
+    } else {
+      // 自定义颜色：输入（校验格式）
+      const res = await showDialog(
+        player,
+        new Dialog({
+          style: DialogStylesEnum.INPUT,
+          caption: "游戏内颜色",
+          info: "输入颜色（支持 #fff / #ff0000 / (r,g,b,a)）：",
+          button1: "确定",
+          button2: "取消",
+        }),
+      );
+      if (!res || res.response !== 1) return;
+      const input = res.inputText.trim();
+      const validHex = /^#?[0-9a-fA-F]{3}$|^#?[0-9a-fA-F]{6}$/.test(input);
+      const validRgba = /^\(\d{1,3},\d{1,3},\d{1,3}(,\d{1,3})?\)$/.test(input);
+      if (!validHex && !validRgba) {
+        player.sendClientMessage(COLOR_ERROR, "颜色格式不正确（支持 #fff / #ff0000 / (r,g,b,a)）");
+        return;
       }
+      next = input.startsWith("#") ? input : input.startsWith("(") ? input : `#${input}`;
+    }
     await updateSetting(player, { playerColor: next });
     player.setColor(next);
     notifySaved(player, `游戏内颜色已设为：${next}`);

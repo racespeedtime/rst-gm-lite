@@ -456,18 +456,6 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   if (now - last < 1000) return;
   room.lastCpAt.set(player.id, now);
 
-  // 防作弊瞬移检测：到达下一个 CP 时距上一 CP 过远（速度过低时几乎不可能到达）
-  if (pr.cpIndex >= 0) {
-    const lastCp = room.cps[pr.cpIndex];
-    const pos = player.getPos();
-    const dist = Math.hypot(pos.x - lastCp.x, pos.y - lastCp.y, pos.z - lastCp.z);
-    // 距离阈值 = CP 尺寸 + 容差；远大于正常通行距离即视为异常
-    if (dist > Math.max(200, lastCp.size * 10)) {
-      player.sendClientMessage(COLOR_ERROR, "[赛车] 检测到异常移动，已忽略本次检查点");
-      return;
-    }
-  }
-
   pr.cpIndex++;
 
   // 最后一圈且到达最后一个 CP → 完成

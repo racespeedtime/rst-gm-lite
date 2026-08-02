@@ -9,9 +9,6 @@ import { getSetting, updateSetting, pickOption, notifySaved, toggleText, toggleS
  * 4. 速度表 2d 显示（开启 2d 时联动总开关）
  * 5. 速度表 3d 显示（与 2d 互斥）
  * 6. 特技显示
- *
- * 注：当前仅保存开关状态（骨架），
- * 速度表 / 网络信息 TextDraw 的实际绘制后续单独实现。
  */
 export async function openInterfaceMenu(player: Player): Promise<void> {
   const setting = await getSetting(player);

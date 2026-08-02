@@ -125,6 +125,11 @@ export function initChat(): void {
       player.sendClientMessage(COLOR_ERROR, "用法: /pm 玩家ID 消息内容");
       return next();
     }
+    // 私聊同样受聊天限频约束（防高频骚扰）
+    if (!allowChat(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "发言过于频繁，请稍后再试");
+      return next();
+    }
     const target = Player.getInstance(targetId);
     if (!target || target.isNpc()) {
       player.sendClientMessage(COLOR_ERROR, "无效的玩家ID");

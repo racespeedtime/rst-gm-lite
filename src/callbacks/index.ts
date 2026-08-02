@@ -9,7 +9,7 @@ import { lockPlayer, unlockPlayer } from "@/core/interaction";
 import { initPanel } from "@/core/panel";
 import { initRateLimit, cleanupRateLimit } from "@/core/ratelimit";
 import { sessionManager } from "@/sessions/manager";
-import { getSetting } from "@/personalize/settings";
+import { getSetting, invalidateSettingCache } from "@/personalize/settings";
 import { cleanupChat, initChat, initChatState } from "@/chat";
 import { initSpawnSystem, savePlayerPosition } from "@/core/spawn";
 import { runLobby } from "@/personalize/lobby";
@@ -169,6 +169,10 @@ PlayerEvent.onDisconnect(({ player, next }) => {
   cleanupVehicleAuto(player.id);
   // 玩家标识：清理 NameTag/聊天名缓存
   cleanupPlayerStyle(player.id);
+  // 设置缓存：按 userId 失效（防长期运行内存累积）
+  if (leavingUserId) {
+    invalidateSettingCache(leavingUserId);
+  }
   // 关闭游戏会话 + 清理内存态（内部含 clearAuthState）
   void closePlayerSession(player.id);
   return next();
@@ -189,7 +193,7 @@ initRateLimit();
 // 出生系统（定时保存在线位置）
 initSpawnSystem();
 
-// GUI 系统（速度表 / 网络信息，每 500ms 刷新，timer 由 GameMode.onExit 统一清理）
+// GUI 系统（速度表 / 网络信息，每 200ms 刷新，timer 由 GameMode.onExit 统一清理）
 initGui();
 
 // 爱车系统（刷车命令 + 位置定时保存）

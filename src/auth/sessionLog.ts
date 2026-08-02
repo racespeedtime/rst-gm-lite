@@ -37,7 +37,7 @@ async function showSessionLog(player: Player, userId: string, title: string): Pr
   }
   const lines = logs.map(
     (s, i) =>
-      `${RECENT_LIMIT - i}. 登录 ${formatDate(s.loginAt)}${s.logoutAt ? ` → ${formatDate(s.logoutAt)}` : ""}` +
+      `${i + 1}. 登录 ${formatDate(s.loginAt)}${s.logoutAt ? ` → ${formatDate(s.logoutAt)}` : ""}` +
       ` 时长 ${formatDuration(s.duration)}${s.ip ? ` IP:${s.ip}` : ""} ${s.status === "ONLINE" ? "{00FF00}在线" : "{808080}离线"}`,
   );
   await showDialog(

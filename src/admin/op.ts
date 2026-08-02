@@ -6,7 +6,7 @@ import { showUserSessionLogs } from "@/auth/sessionLog";
 import { showProfileByUsername } from "@/core/profile";
 import { hashPassword } from "@/auth/password";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
-import { banUser, unbanUser } from "@/core/ban";
+import { banUser, unbanUser, banIp, unbanIp } from "@/core/ban";
 import { showDialog } from "@/utils/dialog";
 
 import { COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
@@ -146,6 +146,38 @@ export function initOpCommands(): void {
       return next();
     }
     await unbanUser(player, username);
+    return next();
+  });
+
+  // IP 封禁：/banip IP 时长(分钟,0=永久) 原因
+  PlayerEvent.onCommandText("banip", async ({ player, subcommand, next }) => {
+    if (!isSuperAdmin(player)) {
+      sendNoPermission(player);
+      return next();
+    }
+    const ip = subcommand[0];
+    const minutes = Number(subcommand[1]);
+    const reason = subcommand.slice(2).join(" ").trim() || "无";
+    if (!ip || !Number.isInteger(minutes) || minutes < 0) {
+      player.sendClientMessage(COLOR_ERROR, "用法: /banip IP 时长分钟(0=永久) 原因");
+      return next();
+    }
+    await banIp(player, ip, minutes, reason);
+    return next();
+  });
+
+  // IP 解封：/unbanip IP
+  PlayerEvent.onCommandText("unbanip", async ({ player, subcommand, next }) => {
+    if (!isSuperAdmin(player)) {
+      sendNoPermission(player);
+      return next();
+    }
+    const ip = subcommand[0];
+    if (!ip) {
+      player.sendClientMessage(COLOR_ERROR, "用法: /unbanip IP");
+      return next();
+    }
+    await unbanIp(player, ip);
     return next();
   });
 }

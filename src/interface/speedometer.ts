@@ -71,7 +71,7 @@ export function createSpeed2d(player: Player): TextDraw[] {
 /**
  * 刷新 2d 速度表文本与刻度颜色。
  * 刻度逻辑（每格 = 10km/h）：
- * - 前 18 格（0-170）：越过变黄 REACHED_FAST，未达灰色
+ * - 前 17 格（0-170）：越过变黄 REACHED_FAST，未达灰色
  * - 后 3 格（170/180/190 红区）：越过变红 REACHED_HIGH，未达半透明
  */
 export function updateSpeed2d(tds: TextDraw[], speed: number): void {

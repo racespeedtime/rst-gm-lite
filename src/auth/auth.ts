@@ -46,6 +46,14 @@ export function getOnlineSessionIds(): string[] {
   return [...ids];
 }
 
+/** 查找某 userId 当前在线的玩家 id（用于同账号多开检测） */
+export function findOnlinePlayerIdByUserId(userId: string): number | null {
+  for (const [pid, auth] of authStates) {
+    if (auth.userId === userId) return pid;
+  }
+  return null;
+}
+
 /** 玩家断开时关闭游戏会话（记录登出时间与时长） */
 export async function closePlayerSession(playerId: number): Promise<void> {
   let auth = authStates.get(playerId);
@@ -149,6 +157,15 @@ export async function runAuthFlow(player: Player): Promise<AuthState | null> {
     // 老用户 → 登录
     const sessionId = await doLogin(player, user.id, name);
     if (!sessionId) return null;
+    // 同账号多开检测：该账号已在别处登录 → 踢掉旧的（后登入优先，防账号共用）
+    const oldId = findOnlinePlayerIdByUserId(user.id);
+    if (oldId != null && oldId !== player.id) {
+      const old = Player.getInstance(oldId);
+      if (old) {
+        old.sendClientMessage(COLOR_ERROR, "你的账号在别处登录，你已被挤下线");
+        old.kick();
+      }
+    }
     const auth: AuthState = {
       userId: user.id,
       username: name,
@@ -178,8 +195,8 @@ export async function runAuthFlow(player: Player): Promise<AuthState | null> {
 async function doLogin(player: Player, userId: string, name: string): Promise<string | null> {
   const user = await prisma.sysUser.findUnique({ where: { id: userId } });
   if (!user) return null;
-  // 登录前校验：封禁 / 账号禁用 → 直接拒绝（不进入密码流程）
-  const denied = await checkLoginAllowed(userId);
+  // 登录前校验：封禁（账号/IP）/ 账号禁用 → 直接拒绝（不进入密码流程）
+  const denied = await checkLoginAllowed(userId, player.getIp().ip);
   if (denied) {
     player.sendClientMessage(COLOR_ERROR, `[系统] ${denied.reason}`);
     player.kick();

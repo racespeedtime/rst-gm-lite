@@ -5,9 +5,11 @@ import { showDialog } from "@/utils/dialog";
 
 import { COLOR_ERROR } from "@/utils/colors";
 
-/** 按用户名查找在线玩家 */
+/** 按用户名查找在线玩家（大小写不敏感，排除 NPC） */
 function findOnlinePlayer(name: string): Player | undefined {
-  return Player.getInstances().find((p) => p.getName().name === name);
+  return Player.getInstances().find(
+    (p) => !p.isNpc() && p.isConnected() && p.getName().name.toLowerCase() === name.toLowerCase(),
+  );
 }
 
 /**

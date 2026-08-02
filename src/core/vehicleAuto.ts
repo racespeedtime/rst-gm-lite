@@ -148,8 +148,7 @@ export function initVehicleAuto(): void {
     const driver = veh.getLastDriver();
     if (driver && driver.isConnected() && !driver.isNpc() && autoFixSet.has(driver.id)) {
       if (isOwnVehicle(driver, veh)) {
-        next();
-        return false; // 对齐原版：阻止这次射击对车辆造成的伤害
+        return false; // 对齐原版：阻止这次射击对车辆造成的伤害（直接返回，不调用 next 避免语义干扰）
       }
     }
     return next();

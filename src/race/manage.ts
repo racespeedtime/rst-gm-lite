@@ -5,7 +5,7 @@ import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
 import { showDialog } from "@/utils/dialog";
 import { formatTime } from "@/utils/format";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
+import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, COLOR_RACE } from "@/utils/colors";
 import { swapSortIndex, nextSortIndex, compactSortIndex } from "@/utils/sort";
 import { createRaceRoom } from "./room";
 import { enterRaceEdit, canEditRace } from "./editor";
@@ -145,6 +145,8 @@ async function raceDetailFlow(player: Player, raceId: string): Promise<void> {
   const idx = res.listItem;
   if (idx === 0) {
     await createRaceRoom(player, raceId);
+    // 建好房间后提示下一步（对齐 /r s 流程，避免首次使用者不知道要开始）
+    player.sendClientMessage(COLOR_RACE, "输入 /r s 开始比赛（倒计时 5 秒后开跑）");
   } else if (idx === 1) {
     await leaderboardFlow(player, raceId);
   } else if (mine && idx === 2) {
