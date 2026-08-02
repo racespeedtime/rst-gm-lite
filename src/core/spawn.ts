@@ -6,6 +6,7 @@ import { invalidateSettingCache } from "@/personalize/settings";
 import { showDialog } from "@/utils/dialog";
 import { setIntervalSafe } from "@/core/timers";
 import { getSafeGroundZ } from "@/core/colandreas";
+import { isInRace } from "@/race/room";
 import { isInsideMap } from "@/utils/map";
 import { COLOR_SUCCESS } from "@/utils/colors";
 
@@ -76,10 +77,12 @@ export async function spawnPlayer(player: Player): Promise<void> {
   player.spawn();
 }
 
-/** 保存玩家当前在线位置（超出地图范围不保存） */
+/** 保存玩家当前在线位置（超出地图范围不保存；比赛中在独立世界，跳过防污染） */
 export async function savePlayerPosition(player: Player): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
+  // 比赛中：玩家在比赛独立世界（world≥5000），保存会污染 LAST_POSITION 出生点，跳过
+  if (isInRace(player.id)) return;
   const pos = player.getPos();
   const angle = player.getFacingAngle().angle;
   if (!isInsideMap(pos.x, pos.y, pos.z)) return;

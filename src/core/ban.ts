@@ -44,17 +44,19 @@ function banReasonText(reason: string, endAt: Date | null): string {
   return `（原因：${reason}）${until}`;
 }
 
-/** 登录前校验：账号封禁/IP 封禁/禁用 → 返回拒绝原因；允许返回 null */
+/** 登录前校验：账号封禁/IP 封禁/禁用 → 返回拒绝原因；允许返回 null。userId 为空（注册流程）时跳过账号维度只查 IP */
 export async function checkLoginAllowed(
   userId: string,
   ip?: string,
 ): Promise<{ reason: string; type: "banned" | "disabled" } | null> {
-  const user = await prisma.sysUser.findUnique({ where: { id: userId } });
-  if (!user) return { reason: "账号不存在", type: "disabled" };
-  if (!user.isEnabled) return { reason: "账号已被禁用", type: "disabled" };
-  const ban = await getActiveBan(userId);
-  if (ban) {
-    return { reason: `账号已被封禁${banReasonText(ban.reason, ban.endAt)}`, type: "banned" };
+  if (userId) {
+    const user = await prisma.sysUser.findUnique({ where: { id: userId } });
+    if (!user) return { reason: "账号不存在", type: "disabled" };
+    if (!user.isEnabled) return { reason: "账号已被禁用", type: "disabled" };
+    const ban = await getActiveBan(userId);
+    if (ban) {
+      return { reason: `账号已被封禁${banReasonText(ban.reason, ban.endAt)}`, type: "banned" };
+    }
   }
   if (ip) {
     const ipBan = await getActiveIpBan(ip);
@@ -79,6 +81,15 @@ function kickOnlineForBan(target: { userId?: string | null; ip?: string | null }
   }
 }
 
+/** 判断用户是否为超管（查角色表，供封禁自我保护） */
+async function isUserSuperAdmin(userId: string): Promise<boolean> {
+  const roles = await prisma.sysUserRole.findMany({
+    where: { sysUserId: userId },
+    include: { sysRole: true },
+  });
+  return roles.some((r) => r.sysRole.code === "SUPER_ADMIN");
+}
+
 /** OP 封禁：/ban <用户名> <时长分钟> <原因>；时长 0 = 永久。封禁后即时踢出在线玩家 */
 export async function banUser(op: Player, username: string, minutes: number, reason: string): Promise<void> {
   const user = await prisma.sysUser.findUnique({ where: { username } });
@@ -86,8 +97,17 @@ export async function banUser(op: Player, username: string, minutes: number, rea
     op.sendClientMessage("#ff5555", `用户 ${username} 不存在`);
     return;
   }
-  const endAt = minutes > 0 ? new Date(Date.now() + minutes * 60_000) : null;
+  // 自我保护：不能封禁自己或其他 OP（误操作会导致管理失能且难以解封）
   const opUserId = getAuthState(op.id)?.userId ?? null;
+  if (user.id === opUserId) {
+    op.sendClientMessage("#ff5555", "不能封禁自己");
+    return;
+  }
+  if (await isUserSuperAdmin(user.id)) {
+    op.sendClientMessage("#ff5555", `不能封禁管理员 ${username}`);
+    return;
+  }
+  const endAt = minutes > 0 ? new Date(Date.now() + minutes * 60_000) : null;
   // 已有未失效封禁 → 更新；否则新增
   const existing = await prisma.sysUserBan.findFirst({
     where: { userId: user.id, revokedAt: null, OR: [{ endAt: null }, { endAt: { gt: new Date() } }] },

@@ -357,11 +357,19 @@ export async function changeOwnPassword(player: Player): Promise<void> {
  * 返回 { userId, sessionId }，失败返回 null
  */
 async function doRegister(player: Player, name: string): Promise<{ userId: string; sessionId: string } | null> {
+  // 注册前校验 IP 封禁（新用户无 userId，走 IP 维度）——防止被 IP 封禁者注册新号绕过
+  const ip = player.getIp().ip;
+  const denied = await checkLoginAllowed("", ip);
+  if (denied) {
+    player.sendClientMessage(COLOR_ERROR, `[系统] ${denied.reason}`);
+    player.kick();
+    return null;
+  }
   const pwd = await askNewPassword(player, "注册", "设置密码");
   if (!pwd) {
     return null;
   }
-  const ip = player.getIp().ip || null;
+  const sessionIp = player.getIp().ip || null;
   // 创建用户 + 默认设置 + 游戏会话（事务：任一步失败整体回滚，不留"无会话的半成品用户"）
   try {
     const { userId, sessionId } = await prisma.$transaction(async (tx) => {
@@ -373,7 +381,7 @@ async function doRegister(player: Player, name: string): Promise<{ userId: strin
         },
       });
       const session = await tx.sysUserGameSession.create({
-        data: { userId: user.id, ip },
+        data: { userId: user.id, ip: sessionIp },
       });
       return { userId: user.id, sessionId: session.id };
     });

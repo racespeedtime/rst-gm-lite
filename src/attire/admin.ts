@@ -203,9 +203,14 @@ async function deleteAttire(player: Player): Promise<void> {
     }),
   );
   if (!confirm || confirm.response !== 1) return;
-  await prisma.attire.update({
-    where: { id: attire.id },
-    data: { deletedAt: new Date() },
+  // 事务：软删装扮 + 级联删除引用它的预设条目（与提示文案一致，防残留条目继续挂载已删装扮）
+  await prisma.$transaction(async (tx) => {
+    await tx.playerPresetItem.deleteMany({ where: { attireId: attire.id } });
+    await tx.vehiclePresetItem.deleteMany({ where: { attireId: attire.id } });
+    await tx.attire.update({
+      where: { id: attire.id },
+      data: { deletedAt: new Date() },
+    });
   });
   player.sendClientMessage(COLOR_SUCCESS, `装扮「${attire.name}」已删除`);
 }

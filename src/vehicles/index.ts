@@ -195,7 +195,7 @@ export function initVehicleCommands(): void {
     return next();
   });
 
-  PlayerEvent.onCommandText(["c lock", "veh lock"], ({ player, next }) => {
+  PlayerEvent.onCommandText(["c lock", "veh lock"], async ({ player, next }) => {
     const veh = playerVehs.get(player.id);
     if (!veh) {
       player.sendClientMessage(COLOR_ERROR, "你还没有车");
@@ -204,6 +204,14 @@ export function initVehicleCommands(): void {
     const { doors } = veh.getParamsEx();
     const isLocked = doors < 1;
     veh.toggleDoors(isLocked);
+    // 锁车状态落库（与面板菜单一致，重刷车保持锁定）
+    const auth = getAuthState(player.id);
+    if (auth) {
+      await prisma.userVehicle.updateMany({
+        where: { userId: auth.userId, modelId: veh.getModel() },
+        data: { isLocked },
+      });
+    }
     player.sendClientMessage(COLOR_WHITE, isLocked ? "爱车已上锁" : "爱车已解锁");
     return next();
   });
