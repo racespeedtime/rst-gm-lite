@@ -6,7 +6,7 @@ import { startSessionHeartbeat, cleanupStaleSessionsOnBoot } from "@/auth/heartb
 import { playLoginCamera, stopLoginCamera } from "@/core/loginCamera";
 import { initOpCommands } from "@/admin/op";
 import { lockPlayer, unlockPlayer } from "@/core/interaction";
-import { initPanel } from "@/core/panel";
+import { initPanel, cleanupPanel } from "@/core/panel";
 import { initRateLimit, cleanupRateLimit } from "@/core/ratelimit";
 import { sessionManager } from "@/sessions/manager";
 import { getSetting, invalidateSettingCache } from "@/personalize/settings";
@@ -169,6 +169,8 @@ PlayerEvent.onDisconnect(({ player, next }) => {
   cleanupVehicleAuto(player.id);
   // 玩家标识：清理 NameTag/聊天名缓存
   cleanupPlayerStyle(player.id);
+  // 万能面板：清理层级记忆（断线后重新登录从主面板开始）
+  cleanupPanel(player.id);
   // 设置缓存：按 userId 失效（防长期运行内存累积）
   if (leavingUserId) {
     invalidateSettingCache(leavingUserId);

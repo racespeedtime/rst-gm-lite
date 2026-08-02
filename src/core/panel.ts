@@ -113,41 +113,72 @@ function getVisibleGroups(player: Player): PanelGroup[] {
 }
 
 /**
+ * 面板层级记忆：记录玩家上次停留在哪个分组（null = 主面板）。
+ * 打开面板时恢复到该分组菜单；若该分组当前不可见（如比赛中/权限变化），
+ * 则逐级回退到可用的上一层（即主面板），并清除失效记忆。
+ */
+const lastGroupByPlayer = new Map<number, string | null>();
+
+/** 玩家断线清理面板记忆 */
+export function cleanupPanel(playerId: number): void {
+  lastGroupByPlayer.delete(playerId);
+}
+
+/**
  * 打开万能面板（Y 键呼出）。
  * 两级导航：主面板（分组列表）→ 分组菜单（功能入口）→ 子菜单。
  * 任一层的"取消/关闭"逐级返回上一层，不会直接退出。
+ * 打开时若上次停留的分组仍可用则直接进入该分组菜单（记忆恢复）。
  */
 export async function openPanel(player: Player): Promise<void> {
   lockPlayer(player.id);
   try {
     const groups = getVisibleGroups(player);
     if (groups.length === 0) return;
-    const info = groups.map((group, i) => `${i + 1}. ${group.label}`).join("\n");
-    const res = await showDialog(
-      player,
-      new Dialog({
-        style: DialogStylesEnum.LIST,
-        caption: "万能面板",
-        info,
-        button1: "确定",
-        button2: "关闭",
-      }),
-    );
-    if (!res) return; // 断线直接退出
-    if (res.response !== 1) return; // 主面板点"关闭"→ 关闭面板
-    const group = groups[res.listItem];
-    if (group) {
-      await showGroupMenu(player, group, () => openPanel(player));
+    // 记忆恢复：上次所在分组若仍可见（含组内条目可用）则直接进入
+    const last = lastGroupByPlayer.get(player.id);
+    const target = last != null ? groups.find((g) => g.label === last) : undefined;
+    if (target) {
+      await showGroupMenu(player, target, () => showPanelList(player));
+    } else {
+      // 无记忆 / 记忆分组已不可用 → 回到主面板（失效记忆一并清除）
+      if (last != null) lastGroupByPlayer.delete(player.id);
+      await showPanelList(player);
     }
   } finally {
     unlockPlayer(player.id);
   }
 }
 
-/** 分组菜单：显示组内功能入口，子菜单取消回本组，本组"关闭"回主面板 */
+/** 主面板：分组列表。点"关闭"终止面板；选组进入分组菜单（停留主面板 → 记忆清空） */
+async function showPanelList(player: Player): Promise<void> {
+  const groups = getVisibleGroups(player);
+  if (groups.length === 0) return;
+  lastGroupByPlayer.set(player.id, null);
+  const info = groups.map((group, i) => `${i + 1}. ${group.label}`).join("\n");
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: "万能面板",
+      info,
+      button1: "确定",
+      button2: "关闭",
+    }),
+  );
+  if (!res) return; // 断线直接退出
+  if (res.response !== 1) return; // 主面板点"关闭"→ 关闭面板
+  const group = groups[res.listItem];
+  if (group) {
+    await showGroupMenu(player, group, () => showPanelList(player));
+  }
+}
+
+/** 分组菜单：显示组内功能入口，子菜单取消回本组，本组"关闭"回主面板（停留本组 → 记忆本组） */
 async function showGroupMenu(player: Player, group: PanelGroup, back: MenuBack): Promise<void> {
   const items = getVisibleItems(group, player);
   if (items.length === 0) return back();
+  lastGroupByPlayer.set(player.id, group.label);
   const info = items.map((item, i) => `${i + 1}. ${item.label}`).join("\n");
   const res = await showDialog(
     player,
