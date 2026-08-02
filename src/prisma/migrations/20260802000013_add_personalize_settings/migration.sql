@@ -1,0 +1,15 @@
+-- 个性化设置：sys_user_setting 增加车辆/世界/人物/战局/界面个性化字段
+ALTER TABLE "sys_user_setting"
+  ADD COLUMN "show_vehicle_attire" BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN "vehicle_color_cycle" BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN "sync_world_weather" BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN "time_flow" BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN "player_color" VARCHAR(9) NOT NULL DEFAULT '#ffffff',
+  ADD COLUMN "accept_teleport" BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN "show_player_attire" BOOLEAN NOT NULL DEFAULT TRUE,
+  ADD COLUMN "session_type" VARCHAR(10) NOT NULL DEFAULT 'PRIVATE',
+  ADD COLUMN "session_password" VARCHAR(32),
+  ADD COLUMN "enter_world_mode" VARCHAR(10) NOT NULL DEFAULT 'PUBLIC',
+  ADD COLUMN "hide_all_gui" BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN "show_speed_2d" BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN "show_speed_3d" BOOLEAN NOT NULL DEFAULT FALSE;
