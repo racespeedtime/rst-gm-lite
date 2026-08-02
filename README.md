@@ -15,6 +15,7 @@
 
 - [open.mp x64](https://github.com/openmultiplayer/open.mp/releases)
 - [streamer x64](https://github.com/dockfries/samp-streamer-plugin/releases/tag/v2.9.6)
+- [colandreas x64](https://github.com/dockfries/ColAndreas/releases/tag/v1.6.0)
 - [samp-node x64](https://github.com/dockfries/samp-node/releases/tag/2.6.1)
 - [Pawn.RakNet x64](https://github.com/dockfries/Pawn.RakNet/releases/tag/1.7.0-omp)
 

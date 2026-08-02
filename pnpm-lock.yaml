@@ -8,9 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@infernus/colandreas':
+        specifier: ^0.2.1
+        version: 0.2.1(@infernus/core@0.14.7)
       '@infernus/core':
         specifier: ^0.14.7
         version: 0.14.7
+      '@infernus/e-selection':
+        specifier: ^0.0.4
+        version: 0.0.4(@infernus/core@0.14.7)
       '@infernus/raknet':
         specifier: ^0.14.1
         version: 0.14.1(@infernus/core@0.14.7)
@@ -20,6 +26,9 @@ importers:
       '@prisma/client':
         specifier: ^7.9.1
         version: 7.9.1(prisma@7.9.1(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(typescript@6.0.3))(typescript@6.0.3)
+      bcryptjs:
+        specifier: ^3.0.3
+        version: 3.0.3
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -111,8 +120,18 @@ packages:
   '@epic-web/invariant@1.0.0':
     resolution: {integrity: sha512-lrTPqgvfFQtR/eY/qkIzp98OGdNJu0m5ji3q/nJI8v3SXkRKEnWiOxMmbvcSoAIzv/cGiuvRy57k4suKQSAdwA==}
 
+  '@infernus/colandreas@0.2.1':
+    resolution: {integrity: sha512-t3HSb4Jd7ySMOM02EF26An7C32nyc8CfOpS2+JFmdmroZFQK9TanHGLl0D227ZWIBRei9jYK7YltYWk+IiA/Lw==}
+    peerDependencies:
+      '@infernus/core': ^0.14.6
+
   '@infernus/core@0.14.7':
     resolution: {integrity: sha512-B/3xKGxsecMH3QZzxNoXtRxn3BDo3ld+6Ka4TSUo/j4I7CpPrE7CbSB7N2GmO+BJeNK4VgugRqjn7hnbguYHGA==}
+
+  '@infernus/e-selection@0.0.4':
+    resolution: {integrity: sha512-Ek5GDaj8isDHy3zFmnaezPkaC+1ZJC8eNypFekQv8IByMRsHPnCmQ3PLkqJXhuxKs0UFn1Df7bOVdEsriaTwjw==}
+    peerDependencies:
+      '@infernus/core': ^0.14.6
 
   '@infernus/raknet@0.14.1':
     resolution: {integrity: sha512-oHVAVsLTdYI4vuxBlZoaDNSvjVpHG0HqEPYXOv+dXEwJ43kjCpbX7+1Bu51+7j9cV7+JFYbDOSmM/nT9BssAvQ==}
@@ -764,6 +783,10 @@ packages:
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
     engines: {node: 18 || 20 || >=22}
+
+  bcryptjs@3.0.3:
+    resolution: {integrity: sha512-GlF5wPWnSa/X5LKM1o0wz0suXIINz1iHRLvTS+sLyi7XPbe5ycmYI3DlZqVGZZtDgl4DmasFg7gOB3JYbphV5g==}
+    hasBin: true
 
   better-result@2.10.0:
     resolution: {integrity: sha512-oQhh0y1qo2/ZKdAAEvHZAqKKiHOFU5k/bW96fE2ScgQOVkJRiHwB+nOS1SgFsYqRlxMDWvefXi9Q3px7QvgNDw==}
@@ -1694,9 +1717,17 @@ snapshots:
 
   '@epic-web/invariant@1.0.0': {}
 
+  '@infernus/colandreas@0.2.1(@infernus/core@0.14.7)':
+    dependencies:
+      '@infernus/core': 0.14.7
+
   '@infernus/core@0.14.7':
     dependencies:
       iconv-lite: 0.7.3
+
+  '@infernus/e-selection@0.0.4(@infernus/core@0.14.7)':
+    dependencies:
+      '@infernus/core': 0.14.7
 
   '@infernus/raknet@0.14.1(@infernus/core@0.14.7)':
     dependencies:
@@ -2220,6 +2251,8 @@ snapshots:
   aws-ssl-profiles@1.1.2: {}
 
   balanced-match@4.0.4: {}
+
+  bcryptjs@3.0.3: {}
 
   better-result@2.10.0: {}
 

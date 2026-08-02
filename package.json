@@ -30,10 +30,13 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@infernus/colandreas": "^0.2.1",
     "@infernus/core": "^0.14.7",
+    "@infernus/e-selection": "^0.0.4",
     "@infernus/raknet": "^0.14.1",
     "@prisma/adapter-pg": "^7.9.1",
     "@prisma/client": "^7.9.1",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^17.4.2",
     "winston": "^3.19.0"
   },

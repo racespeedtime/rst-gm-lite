@@ -48,3 +48,7 @@ setEventErrorHandler((err) => {
 process.on("uncaughtException", (err) => {
   logger.error(err);
 });
+
+process.on("unhandledRejection", (reason) => {
+  logger.error(reason instanceof Error ? reason : new Error(String(reason)));
+});
