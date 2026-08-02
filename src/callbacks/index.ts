@@ -207,17 +207,28 @@ startVehicleSaveTimer();
 // 传送系统（/s /l /tpa 等 + 未知命令兜底 / // 传送点）
 initTeleport();
 initTpTimeoutLoop();
-PlayerEvent.onCommandError(({ player, command, cmdText, error, next }) => {
+PlayerEvent.onCommandError(async ({ player, command, cmdText, error, getSuggestion, next }) => {
   // 命令不存在 → 尝试当作传送点（/名称 或 //名称）
   // 注意：command 已被解析器剥离斜杠，必须用 cmdText（保留原始 "/ls" 或 "//ls"）判断前缀
   if (error.type === "NOT_EXIST") {
+    const used = cmdText ?? command;
     // 比赛中未知命令也统一按比赛隔离拒绝（onCommandReceived 只拦截已注册命令，
     // 未知命令会绕过隔离直接到这里；fallbackTeleport 只报"比赛中不能传送"，误导）
     if (isInRace(player.id)) {
       player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生");
       return true;
     }
-    void fallbackTeleport(player, cmdText ?? command);
+    // 兜底传送：/名称 或 //名称 匹配系统/用户传送点；匹配到则已处理
+    if (await fallbackTeleport(player, used)) {
+      return true;
+    }
+    // 传送点也不存在 → 命令确实不存在：提示 + 最接近的命令建议（避免静默吞掉）
+    const { suggestion, distance } = getSuggestion();
+    if (suggestion && Number.isFinite(distance) && distance <= 4) {
+      player.sendClientMessage(COLOR_ERROR, `命令不存在: ${used}，你是不是想输入 /${suggestion}？`);
+    } else {
+      player.sendClientMessage(COLOR_ERROR, `命令不存在: ${used}`);
+    }
     return true;
   }
   return next();
