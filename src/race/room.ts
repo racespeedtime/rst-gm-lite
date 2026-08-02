@@ -97,8 +97,9 @@ export function getRaceRoom(roomId: number): RaceRoom | undefined {
 }
 
 /**
- * 比赛中允许的命令白名单（对齐原版 GP:545-622）：
+ * 比赛中允许的主命令白名单（对齐原版 GP:545-622）：
  * /r(race) 比赛管理 · /pm 私聊 · /kill 重生 · /tv(ob/spec) 观战
+ * 匹配的是主命令（strictMainCmd），如 "/r l" 的主命令是 "r"。
  * 其余命令一律拒绝。
  */
 const RACE_SAFE_COMMANDS = new Set(["r", "race", "pm", "kill", "tv", "ob", "spec"]);
@@ -815,9 +816,12 @@ export function initRaceSystem(): void {
   setIntervalSafe(() => tickRooms(), 200);
 
   // 比赛中的命令隔离：非白名单命令一律拒绝
-  PlayerEvent.onCommandReceived(({ player, command, next }) => {
+  // 注意：onCommandReceived 的 command 是完整命令串（如 "r l"），必须用 strictMainCmd
+  // （主命令 "r"）匹配白名单，否则 /r l /r j /r s 全被当成未授权命令拦截
+  PlayerEvent.onCommandReceived(({ player, command, strictMainCmd, next }) => {
     if (!isInRace(player.id)) return next();
-    if (isRaceCommandAllowed(command)) return next();
+    const main = strictMainCmd ?? command;
+    if (isRaceCommandAllowed(main)) return next();
     player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生");
     return false;
   }, true); // unshift 优先执行（在限频之前，避免双提示）
@@ -829,17 +833,20 @@ export function initRaceSystem(): void {
       return next();
     }
     if (!isInRace(player.id)) {
+      // 非比赛：自杀（对齐原版 /kill）
       player.setHealth(0);
       return next();
     }
-    // 比赛中：直接回到上一 CP（/kill 在比赛中 = 重置回上一个检查点）
     const pr = playerRaces.get(player.id);
     const room = pr ? rooms.get(pr.roomId) : undefined;
     if (room && room.state === "RACING") {
+      // 比赛中：直接回到上一 CP（/kill 在比赛中 = 重置回上一个检查点）
       respawnToLastCp(player, pr!, room);
-    } else {
-      player.setHealth(0);
+      return next();
     }
+    // 在比赛房间但未开跑（WAITING/COUNTDOWN）：没有比赛进度，正常重生而非自杀
+    player.sendClientMessage(COLOR_RACE, "[赛车] 比赛尚未开始，已正常重生");
+    player.spawn();
     return next();
   });
 
