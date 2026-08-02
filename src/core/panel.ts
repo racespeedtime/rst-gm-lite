@@ -1,4 +1,4 @@
-import { Dialog, DialogStylesEnum, KeysEnum, Player, PlayerEvent } from "@infernus/core";
+import { Dialog, DialogStylesEnum, KeysEnum, isPressed, Player, PlayerEvent } from "@infernus/core";
 import { getAuthState, changeOwnPassword } from "@/auth/auth";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { isSuperAdmin, openOpPanel } from "@/admin/op";
@@ -202,8 +202,7 @@ async function showGroupMenu(player: Player, group: PanelGroup, back: MenuBack):
 /** 注册万能面板快捷键（Y 键，按下瞬间触发） */
 export function initPanel(): void {
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
-    const pressed =
-      (newKeys & KeysEnum.YES) !== 0 && (oldKeys & KeysEnum.YES) === 0;
+    const pressed = isPressed(newKeys, oldKeys, KeysEnum.YES); // 按下瞬间（旧没按、新按下）
     if (
       pressed &&
       getAuthState(player.id) && // 已认证（排除注册/登录流程）

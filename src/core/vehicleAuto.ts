@@ -1,4 +1,4 @@
-import { BulletHitTypesEnum, GameText, KeysEnum, Player, PlayerEvent, PlayerStateEnum, Vehicle } from "@infernus/core";
+import { BulletHitTypesEnum, GameText, KeysEnum, isPressed, Player, PlayerEvent, PlayerStateEnum, Vehicle } from "@infernus/core";
 import { getSetting } from "@/personalize/settings";
 import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe } from "@/core/timers";
@@ -169,7 +169,7 @@ export function initVehicleAuto(): void {
   // hold 氮气：按加速键（SPRINT/W）补氮气（有 15 秒冷却）
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
-    const pressed = (newKeys & KeysEnum.SPRINT) !== 0 && (oldKeys & KeysEnum.SPRINT) === 0;
+    const pressed = isPressed(newKeys, oldKeys, KeysEnum.SPRINT); // 按下瞬间
     if (!pressed || !player.isInAnyVehicle()) return next();
     void (async () => {
       const setting = await getSetting(player);
