@@ -24,6 +24,7 @@ import { initRaceCommands } from "@/race/manage";
 import { initObserve, cleanupObserve } from "@/core/observe";
 import { initPlayerInfo } from "@/core/profile";
 import { initInvincible, applyInvincibleState, cleanupInvincible } from "@/core/invincible";
+import { initArmor } from "@/core/armor";
 import { initVehicleAuto, cleanupVehicleAuto, syncVehicleAutoState, syncNoCollisionState } from "@/core/vehicleAuto";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
 import { initColandreas } from "@/core/colandreas";
@@ -258,6 +259,9 @@ initPlayerInfo();
 
   // 无敌模式：伤害回血 + raknet 子弹包拦截
   initInvincible();
+
+  // 默认护甲：每次出生/重生补满护甲（不依赖无敌，所有人默认有甲）
+  initArmor();
 
   // 车辆自动系统：翻车自动翻正/自动修复/定时换色/氮气补充
   initVehicleAuto();
