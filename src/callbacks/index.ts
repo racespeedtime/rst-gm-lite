@@ -16,7 +16,13 @@ import { runLobby } from "@/personalize/lobby";
 import { cleanupGui, initGui } from "@/interface/gui";
 import { initVehicleCommands, onPlayerDisconnectVehicle, startVehicleSaveTimer } from "@/vehicles";
 import { cleanupTeleport, fallbackTeleport, initTeleport, initTpTimeoutLoop } from "@/teleport";
-import { initHouseCommands, loadAllHouseObjects, unloadAllHouseObjects, setHouseObjectsVisibleForPlayer } from "@/house";
+import {
+  initHouseCommands,
+  loadAllHouseObjects,
+  unloadAllHouseObjects,
+  setHouseObjectsVisibleForPlayer,
+  applyHouseRemovedBuildings,
+} from "@/house";
 import { applyPlayerPreset, cleanupAttire, cleanupOrphanPresets } from "@/attire";
 import { initRaceSystem, cleanupRacePlayer, tryReconnectRace, isInRace } from "@/race/room";
 import { initRaceEditor, exitEdit } from "@/race/editor";
@@ -25,7 +31,12 @@ import { initObserve, cleanupObserve } from "@/core/observe";
 import { initPlayerInfo } from "@/core/profile";
 import { initInvincible, applyInvincibleState, cleanupInvincible } from "@/core/invincible";
 import { initArmor } from "@/core/armor";
-import { initVehicleAuto, cleanupVehicleAuto, syncVehicleAutoState, syncNoCollisionState } from "@/core/vehicleAuto";
+import {
+  initVehicleAuto,
+  cleanupVehicleAuto,
+  syncVehicleAutoState,
+  syncNoCollisionState,
+} from "@/core/vehicleAuto";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
 import { initColandreas } from "@/core/colandreas";
 import {
@@ -112,6 +123,8 @@ async function handlePlayerConnect(player: Player) {
     await applyWorldEnv(player);
     // 应用世界物件显隐（世界个性化→显示物件开关）
     setHouseObjectsVisibleForPlayer(player, loginSetting?.showObject ?? true);
+    // 应用房屋建筑移除（removeobj，per-player 需要在世界内执行）
+    applyHouseRemovedBuildings(player);
     if (!player.isConnected()) {
       return;
     }
@@ -154,7 +167,9 @@ PlayerEvent.onDisconnect(({ player, next }) => {
   // 注意顺序：战局处理需要认证状态（房主判断），须在清理 auth 之前执行
   sessionManager.handlePlayerDisconnect(player);
   // 断开前最后保存一次在线位置（失败由定时保存兜底）
-  void savePlayerPosition(player).catch((e) => logger.error(`[spawn] 断线保存位置失败 ${player.getName().name}`, e));
+  void savePlayerPosition(player).catch((e) =>
+    logger.error(`[spawn] 断线保存位置失败 ${player.getName().name}`, e),
+  );
   // 爱车：保存车辆位置 + 销毁车辆
   onPlayerDisconnectVehicle(player);
   // 传送：清理 tpa 状态
@@ -227,7 +242,10 @@ PlayerEvent.onCommandError(async ({ player, command, cmdText, error, getSuggesti
     // 比赛中未知命令也统一按比赛隔离拒绝（onCommandReceived 只拦截已注册命令，
     // 未知命令会绕过隔离直接到这里；fallbackTeleport 只报"比赛中不能传送"，误导）
     if (isInRace(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生");
+      player.sendClientMessage(
+        COLOR_ERROR,
+        "[比赛] 比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生",
+      );
       return true;
     }
     // 兜底传送：/名称 或 //名称 匹配系统/用户传送点；匹配到则已处理
@@ -268,14 +286,14 @@ initObserve();
 // 点击玩家 → 查看其信息汇总
 initPlayerInfo();
 
-  // 无敌模式：伤害回血 + raknet 子弹包拦截
-  initInvincible();
+// 无敌模式：伤害回血 + raknet 子弹包拦截
+initInvincible();
 
-  // 默认护甲：每次出生/重生补满护甲（不依赖无敌，所有人默认有甲）
-  initArmor();
+// 默认护甲：每次出生/重生补满护甲（不依赖无敌，所有人默认有甲）
+initArmor();
 
-  // 车辆自动系统：翻车自动翻正/自动修复/定时换色/氮气补充
-  initVehicleAuto();
+// 车辆自动系统：翻车自动翻正/自动修复/定时换色/氮气补充
+initVehicleAuto();
 
 // 游戏会话心跳：定时更新 last_heartbeat_at + 更正异常掉线会话
 startSessionHeartbeat();
