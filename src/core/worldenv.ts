@@ -249,7 +249,8 @@ export async function applyWorldEnv(player: Player): Promise<void> {
     player.setTime(setting.timeHour, setting.timeMinute);
   }
   if (setting.syncWorldWeather) {
-    player.setWeather(WORLD_WEATHER);
+    // 跟随服务器当前天气（currentWeather，会随分时段/轮换变化，而非固定常量）
+    player.setWeather(getWorldWeather());
   } else {
     player.setWeather(setting.weather);
   }

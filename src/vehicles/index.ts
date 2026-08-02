@@ -2,7 +2,8 @@ import { Dialog, DialogStylesEnum, Player, PlayerEvent, Vehicle } from "@infernu
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import { cleanupAttire } from "@/attire";
+import { cleanupAttire, applyVehiclePreset } from "@/attire";
+import { isInRace } from "@/race/room";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { VEHICLE_CATEGORIES, vehicleName } from "./catalog";
@@ -63,23 +64,7 @@ export async function getOrCreateUserVehicle(
 }
 
 /** 应用车辆外观（默认预设的 颜色/paintjob/改装件） */
-async function applyVehicleAppearance(veh: Vehicle, uv: { defaultPresetId: string | null }): Promise<void> {
-  if (!uv.defaultPresetId) return;
-  const preset = await prisma.vehiclePreset.findUnique({
-    where: { id: uv.defaultPresetId },
-  });
-  if (!preset) return;
-  veh.changeColors(Number(preset.color1), Number(preset.color2));
-  if (preset.paintjob != null) veh.changePaintjob(Number(preset.paintjob));
-  if (preset.modComponents) {
-    for (const c of preset.modComponents.split(" ")) {
-      const id = Number(c);
-      if (Number.isInteger(id) && id > 0) veh.addComponent(id);
-    }
-  }
-}
-
-/** 刷车（懒创建爱车 + 一人一车 + 外观 + 氮气） */
+/** 刷车（懒创建爱车 + 一人一车 + 完整预设外观 + 氮气） */
 export async function spawnVehicle(player: Player, modelId: number): Promise<boolean> {
   if (modelId < 400 || modelId > 611) {
     player.sendClientMessage(COLOR_ERROR, "车辆ID需在 400-611 之间");
@@ -107,7 +92,8 @@ export async function spawnVehicle(player: Player, modelId: number): Promise<boo
     veh.setVirtualWorld(player.getVirtualWorld());
     veh.linkToInterior(player.getInterior());
     veh.addComponent(1010); // 氮气
-    await applyVehicleAppearance(veh, uv);
+    // 应用完整预设外观（颜色/paintjob/改装件 + 挂件），默认预设挂件也自动生效
+    await applyVehiclePreset(veh, uv.defaultPresetId, player.id);
     veh.putPlayerIn(player, 0);
     player.sendClientMessage(COLOR_SUCCESS, `刷车成功！爱车模型 [${modelId}]，/cc 换色，/c wode 召唤`);
     return true;
@@ -123,6 +109,8 @@ export async function savePlayerVehiclePosition(player: Player): Promise<void> {
   const auth = getAuthState(player.id);
   const veh = playerVehs.get(player.id);
   if (!auth || !veh || !veh.isValid()) return;
+  // 比赛中：爱车被切到比赛独立世界，保存会污染位置数据（重启后坐标错位），跳过
+  if (isInRace(player.id)) return;
   const modelId = veh.getModel();
   const pos = veh.getPos();
   const angle = veh.getZAngle().angle;
@@ -217,6 +205,24 @@ export function initVehicleCommands(): void {
     const isLocked = doors < 1;
     veh.toggleDoors(isLocked);
     player.sendClientMessage(COLOR_WHITE, isLocked ? "爱车已上锁" : "爱车已解锁");
+    return next();
+  });
+
+  // /cc 色1 色2 换色（对齐原版 /cc，提示文案已多处引用）
+  PlayerEvent.onCommandText(["cc", "c color", "veh color"], ({ player, subcommand, next }) => {
+    const veh = playerVehs.get(player.id);
+    if (!veh) {
+      player.sendClientMessage(COLOR_ERROR, "你还没有刷过车，先 /c 车辆ID 刷车");
+      return next();
+    }
+    const c1 = +subcommand[0];
+    const c2 = +subcommand[1];
+    if (!Number.isInteger(c1) || c1 < 0 || c1 > 255 || !Number.isInteger(c2) || c2 < 0 || c2 > 255) {
+      player.sendClientMessage(COLOR_ERROR, "用法: /cc 颜色代码1 颜色代码2（0-255）");
+      return next();
+    }
+    veh.changeColors(c1, c2);
+    player.sendClientMessage(COLOR_SUCCESS, `颜色已更换为 ${c1} / ${c2}`);
     return next();
   });
 

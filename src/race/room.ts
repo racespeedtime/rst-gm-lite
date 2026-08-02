@@ -640,6 +640,8 @@ function endRoom(room: RaceRoom): void {
 
   for (const m of room.members.values()) {
     RaceCheckpoint.disable(m);
+    // 脚本车辆（cveh）在比赛结束时统一清理，防残留比赛世界成为幽灵车
+    cleanupScriptVehicle(m.id);
     const mp = playerRaces.get(m.id);
     if (mp && !mp.finished) {
       m.sendClientMessage(COLOR_WHITE, "[赛车] 比赛已结束，你未完成比赛");

@@ -91,16 +91,17 @@ export function cleanupObserve(playerId: number): void {
  * 目标失去跟踪（掉线/换车/重生等）时重新跟踪或提示。
  */
 function retracePlayer(observer: Player, state: ObserveState): void {
-  const target = Player.getInstance(state.targetId);
   if (state.kind === "player") {
+    const target = Player.getInstance(state.targetId);
     if (target && target.isConnected() && ![PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState())) {
       startObservePlayer(observer, target);
       return;
     }
     suggestStop(observer);
   } else {
-    const veh = target?.getVehicle();
-    if (target && veh && veh.isValid()) {
+    // kind === "vehicle"：targetId 是车辆 id（不能用 Player.getInstance 取）
+    const veh = Vehicle.getInstance(state.targetId);
+    if (veh && veh.isValid()) {
       startObserveVehicle(observer, veh);
       return;
     }

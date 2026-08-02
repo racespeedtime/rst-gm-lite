@@ -77,10 +77,12 @@ async function acceptsTeleport(player: Player): Promise<boolean> {
  * / 与 // 传送点兜底（挂在 onCommandError code 4）：
  * - /名称 → 系统传送点（isSystem=true），全服/战局公告
  * - //名称 → 用户传送点（isSystem=false），仅本人提示
+ * rawCommand 传 cmdText（保留原始斜杠，如 "/ls" 或 "//ls"），
+ * 因 command 参数已被命令解析器剥离前导斜杠（"//ls" 会变成 "ls"）。
  */
-export async function fallbackTeleport(player: Player, command: string): Promise<boolean> {
-  const isUserTele = command[1] === "/";
-  const teleName = command.slice(isUserTele ? 2 : 1);
+export async function fallbackTeleport(player: Player, rawCommand: string): Promise<boolean> {
+  const isUserTele = rawCommand.startsWith("//");
+  const teleName = rawCommand.replace(/^\/+/, "");
   if (!teleName) return false;
   // 比赛中禁止传送
   if (isInRace(player.id)) {
@@ -102,7 +104,7 @@ export async function fallbackTeleport(player: Player, command: string): Promise
     }
     return true;
   } catch (e) {
-    logger.error(`[tp] fallbackTeleport 失败 ${command}`, e);
+    logger.error(`[tp] fallbackTeleport 失败 ${rawCommand}`, e);
     return false;
   }
 }

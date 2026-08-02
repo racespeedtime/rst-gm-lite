@@ -16,6 +16,8 @@ const REFRESH_INTERVAL_MS = 200;
 interface PlayerGui {
   speedoTd: TextDraw[];
   speedo3d: DynamicObject | null;
+  /** 3d 速度表当前 attach 到的车辆 id（换车时据此重建） */
+  speedo3dVehId: number | null;
   netstat: NetstatState | null;
 }
 
@@ -38,6 +40,7 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   const gui = guis.get(player.id) ?? {
     speedoTd: [],
     speedo3d: null,
+    speedo3dVehId: null,
     netstat: null,
   };
   guis.set(player.id, gui);
@@ -47,6 +50,7 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     gui.speedoTd.forEach((t) => t.hide(player));
     destroySpeed3d(gui.speedo3d);
     gui.speedo3d = null;
+    gui.speedo3dVehId = null;
     gui.netstat?.tds.forEach((t) => t.hide(player));
     return;
   }
@@ -62,21 +66,17 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     gui.speedoTd.forEach((t) => t.show(player));
   }
 
-  // 3d 速度表（总开关 + showSpeed3d + 需在车内 attach 车辆）
+  // 3d 速度表（总开关 + showSpeed3d + 需在车内 attach 车辆；换车时重建）
   const want3d = setting.showSpeed && setting.showSpeed3d;
   const vehicle = want3d ? getPlayerVehicle(player) : null;
-  if (want3d && vehicle && !gui.speedo3d) {
+  if (want3d && vehicle && (!gui.speedo3d || gui.speedo3dVehId !== vehicle.id)) {
+    destroySpeed3d(gui.speedo3d);
     gui.speedo3d = createSpeed3d(player, vehicle);
+    gui.speedo3dVehId = vehicle.id;
   } else if ((!want3d || !vehicle) && gui.speedo3d) {
     destroySpeed3d(gui.speedo3d);
     gui.speedo3d = null;
-  } else if (want3d && vehicle && gui.speedo3d) {
-    // 已存在且仍需要 → 仅确保显示（车辆变化时每 tick 重建）
-    const cur = getPlayerVehicle(player);
-    if (cur && cur.id !== vehicle.id) {
-      destroySpeed3d(gui.speedo3d);
-      gui.speedo3d = createSpeed3d(player, cur);
-    }
+    gui.speedo3dVehId = null;
   }
 
   // 网络信息 GUI

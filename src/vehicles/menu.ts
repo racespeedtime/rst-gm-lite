@@ -113,6 +113,14 @@ async function manageCurrentVehicle(player: Player): Promise<void> {
     const { doors } = veh.getParamsEx();
     const isLocked = doors < 1;
     veh.toggleDoors(isLocked);
+    // 锁车状态落库（与 user_vehicle.is_locked 字段对齐，重刷车保持锁定）
+    const auth = getAuthState(player.id);
+    if (auth) {
+      await prisma.userVehicle.updateMany({
+        where: { userId: auth.userId, modelId: veh.getModel() },
+        data: { isLocked },
+      });
+    }
     player.sendClientMessage(COLOR_SUCCESS, isLocked ? "爱车已上锁" : "爱车已解锁");
   } else if (res.listItem === 1) {
     const r = await showDialog(
@@ -130,7 +138,16 @@ async function manageCurrentVehicle(player: Player): Promise<void> {
       player.sendClientMessage(COLOR_ERROR, "车牌文字最多 10 个字符");
       return;
     }
-    veh.setNumberPlate(r.inputText.trim());
+    const plate = r.inputText.trim();
+    veh.setNumberPlate(plate);
+    // 车牌落库（与 /c chepai 命令一致，重刷车不丢失）
+    const auth = getAuthState(player.id);
+    if (auth) {
+      await prisma.userVehicle.updateMany({
+        where: { userId: auth.userId, modelId: veh.getModel() },
+        data: { plateNumber: plate },
+      });
+    }
     player.sendClientMessage(COLOR_SUCCESS, "车牌已更换");
   } else if (res.listItem === 2) {
     const r = await showDialog(

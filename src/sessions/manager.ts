@@ -67,9 +67,14 @@ export class SessionManager {
     return this.spawnPoints;
   }
 
-  /** 传送到随机出生点并切换世界（Z 用 colandreas 修正防卡建筑） */
+  /** 传送到随机出生点并切换世界（Z 用 colandreas 修正防卡建筑；车辆同步切世界，防人车分离） */
   private async teleportTo(player: Player, worldId: number): Promise<void> {
+    const veh = player.isInAnyVehicle() ? player.getVehicle() : undefined;
     player.setVirtualWorld(worldId);
+    if (veh) {
+      veh.setVirtualWorld(worldId);
+      veh.linkToInterior(player.getInterior());
+    }
     const points = await this.loadSpawnPoints();
     if (points.length > 0) {
       const p = points[Math.floor(Math.random() * points.length)];

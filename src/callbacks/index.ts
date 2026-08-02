@@ -199,10 +199,11 @@ startVehicleSaveTimer();
 // 传送系统（/s /l /tpa 等 + 未知命令兜底 / // 传送点）
 initTeleport();
 initTpTimeoutLoop();
-PlayerEvent.onCommandError(({ player, command, error, next }) => {
+PlayerEvent.onCommandError(({ player, command, cmdText, error, next }) => {
   // 命令不存在 → 尝试当作传送点（/名称 或 //名称）
+  // 注意：command 已被解析器剥离斜杠，必须用 cmdText（保留原始 "/ls" 或 "//ls"）判断前缀
   if (error.type === "NOT_EXIST") {
-    void fallbackTeleport(player, command);
+    void fallbackTeleport(player, cmdText ?? command);
     return true;
   }
   return next();
