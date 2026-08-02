@@ -1,6 +1,7 @@
 import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { sessionManager } from "./manager";
 import { getSetting } from "@/personalize/settings";
+import { openSessionSettingsMenu } from "@/personalize/sessionSettings";
 import { showDialog } from "@/utils/dialog";
 import type { MenuBack } from "@/core/panel";
 
@@ -15,7 +16,7 @@ function findOnlinePlayer(name: string): Player | undefined {
 
 /**
  * 战局菜单（万能面板入口之一）
- * 1. 加入战局  2. 创建私人战局  3. 回到公共大世界  4. 返回自身战局  5. 我的战局管理
+ * 1. 加入战局  2. 创建私人战局  3. 回到公共大世界  4. 返回自身战局  5. 我的战局管理  6. 战局设置
  */
 export async function openSessionMenu(player: Player, back?: MenuBack): Promise<void> {
   const items: { label: string; run: () => Promise<void> }[] = [];
@@ -49,6 +50,8 @@ export async function openSessionMenu(player: Player, back?: MenuBack): Promise<
   if (current.id !== 0 && sessionManager.isOwner(player, current)) {
     items.push({ label: "我的战局管理", run: () => openOwnerMenu(player, () => openSessionMenu(player, back)) });
   }
+  // 战局设置（原一级菜单并入）：自身战局类型/密码/启动进入方式
+  items.push({ label: "战局设置", run: () => openSessionSettingsMenu(player, () => openSessionMenu(player, back)) });
 
   const info = items.map((item, i) => `${i + 1}. ${item.label}`).join("\n");
   const res = await showDialog(

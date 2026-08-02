@@ -7,7 +7,6 @@ import { changeChatRangeFlow } from "@/chat";
 import { openVehicleMenu } from "@/personalize/vehicle";
 import { openWorldMenu } from "@/personalize/world";
 import { openCharacterMenu } from "@/personalize/character";
-import { openSessionSettingsMenu } from "@/personalize/sessionSettings";
 import { openQuickActionsMenu } from "@/personalize/quickActions";
 import { openInterfaceMenu } from "@/personalize/interface";
 import { openMyVehicleMenu } from "@/vehicles/menu";
@@ -33,47 +32,97 @@ interface PanelItem {
 /** 菜单返回回调类型（所有菜单函数统一签名：取消时调用 back 返回上一层） */
 export type MenuBack = () => void | Promise<void>;
 
-/** 万能面板分类条目（后续功能入口统一在这里扩展） */
-const panelItems: PanelItem[] = [
-  { label: "战局", run: openSessionMenu },
-  { label: "战局设置", run: openSessionSettingsMenu },
-  { label: "赛车", run: openRaceMenu },
-  { label: "爱车", run: openMyVehicleMenu },
-  { label: "装扮", run: openAttireMenu },
-  { label: "传送", run: openTeleportMenu },
-  { label: "车辆个性化", run: openVehicleMenu },
-  { label: "人物个性化", run: openCharacterMenu },
-  { label: "世界个性化", run: openWorldMenu },
-  { label: "界面个性化", run: openInterfaceMenu },
-  // 比赛中仍可用的安全条目
-  { label: "快捷操作", raceSafe: true, run: openQuickActionsMenu },
-  { label: "聊天范围", raceSafe: true, run: changeChatRangeFlow },
-  { label: "修改密码", raceSafe: true, run: changeOwnPassword },
-  { label: "我的信息", raceSafe: true, run: showMyProfile },
-  { label: "我的登录记录", raceSafe: true, run: showMySessionLogs },
-  { label: "管理员面板", visible: isSuperAdmin, raceSafe: true, run: openOpPanel },
-  { label: "装扮管理", visible: isSuperAdmin, run: openAttireAdmin },
+/** 面板分组：一级菜单 = 玩法域，二级菜单 = 具体功能入口 */
+interface PanelGroup {
+  label: string;
+  /** 组级可见条件（如 OP 专属） */
+  visible?: (player: Player) => boolean;
+  items: PanelItem[];
+}
+
+/**
+ * 万能面板分组结构。
+ * 一级菜单（玩法域）：战局 / 赛车 / 爱车 / 个性化 / 我的 / 传送 / 管理(OP)
+ * - 战局设置已并入「战局」菜单（原一级菜单收纳为二级入口）
+ * - 5 个个性化设置（人物/车辆/世界/界面/装扮）收纳进「个性化」
+ * - 个人相关（信息/登录记录/改密/快捷操作/聊天范围）归入「我的」，比赛期间仍可用
+ */
+const panelGroups: PanelGroup[] = [
+  {
+    label: "战局",
+    items: [{ label: "战局", run: openSessionMenu }],
+  },
+  {
+    label: "赛车",
+    items: [{ label: "赛车", run: openRaceMenu }],
+  },
+  {
+    label: "爱车",
+    items: [{ label: "爱车", run: openMyVehicleMenu }],
+  },
+  {
+    label: "个性化",
+    items: [
+      { label: "人物", run: openCharacterMenu },
+      { label: "车辆", run: openVehicleMenu },
+      { label: "世界", run: openWorldMenu },
+      { label: "界面", run: openInterfaceMenu },
+      { label: "装扮", run: openAttireMenu },
+    ],
+  },
+  {
+    label: "我的",
+    items: [
+      { label: "我的信息", raceSafe: true, run: showMyProfile },
+      { label: "我的登录记录", raceSafe: true, run: showMySessionLogs },
+      { label: "修改密码", raceSafe: true, run: changeOwnPassword },
+      { label: "快捷操作", raceSafe: true, run: openQuickActionsMenu },
+      { label: "聊天范围", raceSafe: true, run: changeChatRangeFlow },
+    ],
+  },
+  {
+    label: "传送",
+    items: [{ label: "传送", run: openTeleportMenu }],
+  },
+  {
+    label: "管理",
+    visible: isSuperAdmin,
+    items: [
+      { label: "管理员面板", raceSafe: true, run: openOpPanel },
+      { label: "装扮管理", run: openAttireAdmin },
+    ],
+  },
 ];
 
-function getVisibleItems(player: Player): PanelItem[] {
+/** 组内可见条目（组级条件 + 条目级条件 + 比赛限制） */
+function getVisibleItems(group: PanelGroup, player: Player): PanelItem[] {
   const inRace = isInRace(player.id);
-  return panelItems.filter((item) => {
+  return group.items.filter((item) => {
     if (item.visible && !item.visible(player)) return false;
     if (inRace && !item.raceSafe) return false;
     return true;
   });
 }
 
+/** 可见分组（组内至少有一个可见条目，避免出现空菜单） */
+function getVisibleGroups(player: Player): PanelGroup[] {
+  return panelGroups.filter((group) => {
+    if (group.visible && !group.visible(player)) return false;
+    return getVisibleItems(group, player).length > 0;
+  });
+}
+
 /**
  * 打开万能面板（Y 键呼出）。
- * 整个面板流程（含子菜单）期间锁定玩家，防止重复触发。
- * 子菜单取消时通过 back 回调回到主菜单（连贯导航，不会直接关闭）。
+ * 两级导航：主面板（分组列表）→ 分组菜单（功能入口）→ 子菜单。
+ * 任一层的"取消/关闭"逐级返回上一层，不会直接退出。
  */
 export async function openPanel(player: Player): Promise<void> {
   lockPlayer(player.id);
   try {
-    const items = getVisibleItems(player);
-    const info = items.map((item, i) => `${i + 1}. ${item.label}`).join("\n");
+    const groups = getVisibleGroups(player);
+    if (groups.length === 0) return;
+    const info = groups.map((group, i) => `${i + 1}. ${group.label}`).join("\n");
     const res = await showDialog(
       player,
       new Dialog({
@@ -85,14 +134,37 @@ export async function openPanel(player: Player): Promise<void> {
       }),
     );
     if (!res) return; // 断线直接退出
-    if (res.response !== 1) return; // 主菜单点"关闭"→ 关闭面板
-    const item = items[res.listItem];
-    if (item) {
-      // 子菜单取消时回到主菜单（继续本次面板流程）
-      await item.run(player, () => openPanel(player));
+    if (res.response !== 1) return; // 主面板点"关闭"→ 关闭面板
+    const group = groups[res.listItem];
+    if (group) {
+      await showGroupMenu(player, group, () => openPanel(player));
     }
   } finally {
     unlockPlayer(player.id);
+  }
+}
+
+/** 分组菜单：显示组内功能入口，子菜单取消回本组，本组"关闭"回主面板 */
+async function showGroupMenu(player: Player, group: PanelGroup, back: MenuBack): Promise<void> {
+  const items = getVisibleItems(group, player);
+  if (items.length === 0) return back();
+  const info = items.map((item, i) => `${i + 1}. ${item.label}`).join("\n");
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: group.label,
+      info,
+      button1: "确定",
+      button2: "关闭",
+    }),
+  );
+  if (!res) return;
+  if (res.response !== 1) return back(); // 取消 → 返回主面板
+  const item = items[res.listItem];
+  if (item) {
+    // 子菜单取消时回到本分组菜单（继续本次面板流程）
+    await item.run(player, () => showGroupMenu(player, group, back));
   }
 }
 
