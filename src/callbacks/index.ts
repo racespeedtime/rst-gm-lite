@@ -23,7 +23,6 @@ import {
   setHouseObjectsVisibleForPlayer,
   applyHouseRemovedBuildings,
 } from "@/house";
-import { clearObjectCollisions } from "@/core/collision";
 import { applyPlayerPreset, cleanupAttire, cleanupOrphanPresets } from "@/attire";
 import { initRaceSystem, cleanupRacePlayer, tryReconnectRace, isInRace } from "@/race/room";
 import { initRaceEditor, exitEdit } from "@/race/editor";
@@ -282,8 +281,8 @@ GameMode.onInit(({ next }) => {
 });
 GameMode.onExit(({ next }) => {
   unloadAllHouseObjects();
-  // 清理房屋 obj 注册进 colandreas 的碰撞（CA_Object）
-  clearObjectCollisions();
+  // 房屋 obj 的 colandreas 碰撞（CA_Object）由 CA_Object 内部注册的
+  // onExit destroyAll 自动清理，无需在此重复处理
   return next();
 });
 

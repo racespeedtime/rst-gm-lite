@@ -2,7 +2,7 @@ import { Dialog, DialogStylesEnum, Dynamic3DTextLabel, DynamicArea, DynamicObjec
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
-import { registerObjectCollision } from "@/core/collision";
+import { registerObjectCollision, clearObjectCollisions } from "@/core/collision";
 
 import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
 
@@ -91,8 +91,11 @@ interface HouseLoadStats {
  * 加载所有启用房屋的模型（多类型）。
  * 行顺序（按 houseId, index）：先建 obj 实体 → material/materialtext 绑定同屋 obj 材质
  * → removeobj 收集（登录时应用）→ 3dtext/CreateVehicle/area 直接创建。
+ * 支持重载：开头清掉上一轮注册的 colandreas 碰撞，防止同批物体重复注册。
  */
 export async function loadAllHouseObjects(): Promise<void> {
+  // 防重复注册：若本函数被再次调用（重载），先销毁上一轮的碰撞注册
+  clearObjectCollisions();
   const stats: HouseLoadStats = { obj: 0, material: 0, materialtext: 0, removeobj: 0, labels: 0, vehicles: 0, areas: 0, skipped: 0, errors: 0 };
   try {
     const models = await prisma.houseModel.findMany({

@@ -12,6 +12,11 @@ import { logger } from "@/logger";
  * - 出生/重生定位 getSafeGroundZ → 落在物体表面而非穿透
  * - 传送点落地修正 → 不卡进房屋
  *
+ * 生命周期：CA_Object 内部已注册 GameMode.onExit → destroyAll() 自动销毁，
+ * 无需外部清理（重复销毁是幂等安全的，但没必要）。本模块的 registered Set
+ * 仅用于「重载」场景——加载前先 clearObjectCollisions 清掉上一轮注册，
+ * 防止同批物体重复注册（碰撞 id 泄漏）。
+ *
  * 注意：CA_Object(newObject=false) 不重复创建 DynamicObject（调用方已有实例），
  * 仅注册碰撞并保留碰撞 id（dc=true）供销毁。上限 50000（colandreas 常量）。
  */
@@ -46,7 +51,10 @@ export function registerObjectCollision(
   return false;
 }
 
-/** 销毁全部已注册碰撞（GameMode 退出时调用） */
+/**
+ * 销毁已注册碰撞（重载前调用，清掉上一轮注册防重复）。
+ * GameMode 退出时 CA_Object 会自行 destroyAll，无需在此处理。
+ */
 export function clearObjectCollisions(): void {
   for (const ca of registered) {
     try {
