@@ -22,6 +22,10 @@ export interface RecordingSession {
   raceId: string | null;
   raceName: string | null;
   startAt: number;
+  /** 录制起始世界（跨世界录制自动停止用） */
+  startWorld: number;
+  /** 自动停止已触发标记（防采样回调重复触发 stop） */
+  autoStopTriggered: boolean;
   vehicleModelId: number;
   /** 车辆初始快照（写 Header 用，记录与回放同一引擎约定） */
   startX: number;
@@ -72,6 +76,33 @@ export function noteCpProgress(playerId: number, cpDone: number, totalCp: number
   if (!s) return;
   s.cpProgress = cpDone;
   s.totalCp = totalCp;
+}
+
+/** 录制时长硬上限（1 小时）：防玩家挂机无限录制拖垮内存/磁盘（帧数组常驻内存） */
+const MAX_RECORD_MS = 60 * 60 * 1000;
+
+/**
+ * 录制边界检查（每次采样前调用）：
+ * - 超时（挂机/长录）→ 自动停止落盘
+ * - 玩家离开录制起始世界（传送/换战局/死亡回世界）→ 自动停止（跨世界位置
+ *   跳变会让回放 ghost 瞬移，录出错误轨迹）
+ * 返回 true = 应停止（已触发，调用方不再采样）。
+ */
+function checkRecordingBoundary(session: RecordingSession, player: Player): boolean {
+  if (session.autoStopTriggered) return true;
+  const reason =
+    Date.now() - session.startAt > MAX_RECORD_MS
+      ? "录制已达时长上限"
+      : player.getVirtualWorld() !== session.startWorld
+        ? "已离开录制世界"
+        : null;
+  if (reason) {
+    session.autoStopTriggered = true;
+    player.sendClientMessage("#ffa500", `[回放] ${reason}，自动停止并保存`);
+    void stopRecording(session.playerId, { quiet: true });
+    return true;
+  }
+  return false;
 }
 
 /** 采样一次（RakNet 驱动） */
@@ -170,6 +201,8 @@ export async function startRecording(
     raceId: opts.raceId ?? null,
     raceName: opts.raceName ?? null,
     startAt: Date.now(),
+    startWorld: player.getVirtualWorld(),
+    autoStopTriggered: false,
     vehicleModelId: veh.getModel(),
     startX: pos.x,
     startY: pos.y,
@@ -318,6 +351,7 @@ function fallbackSample(): void {
     if (Date.now() - session.lastSampleAt < 2000) continue; // 有 RakNet 采样则跳过
     const player = Player.getInstance(session.playerId);
     if (!player || !player.isConnected()) continue;
+    if (checkRecordingBoundary(session, player)) continue; // 已自动停止
     const f = captureVehicleFrame(player, session);
     if (f) sample(session, f);
   }
@@ -329,34 +363,38 @@ export function initRecorder(): void {
     IPacket(PacketIdList.DriverSync, ({ playerId, bs, next }) => {
       const session = sessions.get(playerId);
       if (session) {
-        const sync = new InCarSync(bs).readSync();
-        if (sync) {
-          // Vector3/Vector4 均为 [x,y,z] / [x,y,z,w] 元组
-          const p = sync.position;
-          const v = sync.velocity;
-          const q = sync.quaternion;
-          // 离散状态（车型/时间/天气/血量）节流采样：sync 帧间用缓存，
-          // 避免每帧读 6-7 个 native（CP 进度由 noteCpProgress 事件驱动）
-          const player = Player.getInstance(playerId);
-          if (player) refreshDiscreteCache(session, player);
-          sample(session, {
-            x: p[0],
-            y: p[1],
-            z: p[2],
-            qx: q[0],
-            qy: q[1],
-            qz: q[2],
-            qw: q[3],
-            vx: v[0],
-            vy: v[1],
-            vz: v[2],
-            vehicleModel: cacheModel,
-            cpProgress: session.cpProgress,
-            hour: cacheHour,
-            minute: cacheMinute,
-            weather: cacheWeather,
-            vehicleHealth: cacheHealth,
-          });
+        const player = Player.getInstance(playerId);
+        if (player && checkRecordingBoundary(session, player)) {
+          // 已触发自动停止：不采样（会话可能已被 stopRecording 移除）
+        } else {
+          const sync = new InCarSync(bs).readSync();
+          if (sync) {
+            // Vector3/Vector4 均为 [x,y,z] / [x,y,z,w] 元组
+            const p = sync.position;
+            const v = sync.velocity;
+            const q = sync.quaternion;
+            // 离散状态（车型/时间/天气/血量）节流采样：sync 帧间用缓存，
+            // 避免每帧读 6-7 个 native（CP 进度由 noteCpProgress 事件驱动）
+            if (player) refreshDiscreteCache(session, player);
+            sample(session, {
+              x: p[0],
+              y: p[1],
+              z: p[2],
+              qx: q[0],
+              qy: q[1],
+              qz: q[2],
+              qw: q[3],
+              vx: v[0],
+              vy: v[1],
+              vz: v[2],
+              vehicleModel: cacheModel,
+              cpProgress: session.cpProgress,
+              hour: cacheHour,
+              minute: cacheMinute,
+              weather: cacheWeather,
+              vehicleHealth: cacheHealth,
+            });
+          }
         }
       }
       bs.resetReadPointer(); // 放行（回放录制只采样不改包）
