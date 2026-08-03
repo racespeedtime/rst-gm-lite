@@ -65,12 +65,6 @@ interface Ghost {
   lastHealth: number;
   /** 上次注入的按键状态（变化检测，防每帧 setKeys） */
   lastKeys: number;
-  /** 上次渲染的位置（帧间位移差算速度用） */
-  lastX: number;
-  lastY: number;
-  lastZ: number;
-  /** 上次渲染的播放时间（ms） */
-  lastRenderAt: number;
 }
 
 export interface ReplaySession {
@@ -369,25 +363,12 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     ensureGhostVehicle(session, ghost, s.vehicleModel);
     ghost.npc.setVehiclePos(s.x, s.y, s.z, true);
     ghost.npc.setVehicleRot(s.rx, s.ry, s.rz, true);
-    // 速度用帧间位移差 ÷ 播放推进时间计算——与轨迹严格一致。
-    // 不能直接用录制的 velocity：RakNet DriverSync 的 velocity 字段是网络包的
-    // 位移增量（Vector 压缩，SA-MP moveSpeed），不是 m/s；而兜底采样是
-    // getVelocity()（m/s）——两个来源单位不一致，原样 setVelocity 会让回放
-    // 速度 0/100+ 跳变。帧差计算让 setVelocity 恒等于位置变化率。
-    const dtSec = (ghost.playTime - ghost.lastRenderAt) / 1000;
-    if (dtSec > 0) {
-      const vx = (s.x - ghost.lastX) / dtSec;
-      const vy = (s.y - ghost.lastY) / dtSec;
-      const vz = (s.z - ghost.lastZ) / dtSec;
-      // 非 NaN/Infinity（位置异常/首帧同点）才设
-      if (Number.isFinite(vx) && Number.isFinite(vy) && Number.isFinite(vz)) {
-        ghost.npc.setVelocity(vx, vy, vz);
-      }
-    }
-    ghost.lastX = s.x;
-    ghost.lastY = s.y;
-    ghost.lastZ = s.z;
-    ghost.lastRenderAt = ghost.playTime;
+    // 速度：录制存多少这里赋多少（录制 velocity 与回放 setVelocity 同引擎约定）。
+    // 兜底采样 getVelocity() 就是 m/s；回放 setVelocity 原样写回，速度显示正确。
+    ghost.npc.setVelocity(s.vx, s.vy, s.vz);
+    // 车辆实体朝向同步（rz=yaw 车头朝向）：setVehicleRot 设的是 NPC 视角旋转，
+    // 车辆实体本身 zAngle 也要跟上，否则客户端车体朝向与 NPC 驱动不一致
+    ghost.vehicle.setZAngle(s.rz);
     // 按键状态（DriverSync keys 帧）：SPRINT=氮气等按键在对应时刻注入 NPC，
     // 让回放车在录制按加速键的时刻喷氮气。变化检测防每帧 setKeys。
     if (s.keys !== ghost.lastKeys) {
@@ -598,10 +579,6 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         model: data.header.vehicleModelId,
         lastHealth: -1,
         lastKeys: -1,
-        lastX: data.header.startX,
-        lastY: data.header.startY,
-        lastZ: data.header.startZ,
-        lastRenderAt: i * staggerMs,
       });
     }
   } catch (e) {

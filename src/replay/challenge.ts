@@ -34,11 +34,6 @@ interface ChallengeGhost {
   label: Dynamic3DTextLabel;
   /** 影子播放时间（毫秒，从 0 起跑，播完 clamp 在终点） */
   playTime: number;
-  /** 上次渲染的位置/时间（帧间位移差算速度用） */
-  lastX: number;
-  lastY: number;
-  lastZ: number;
-  lastRenderAt: number;
 }
 
 export interface ChallengeSession {
@@ -112,21 +107,10 @@ function renderGhost(ch: ChallengeSession): void {
   try {
     ch.ghost.npc.setVehiclePos(s.x, s.y, s.z, true);
     ch.ghost.npc.setVehicleRot(s.rx, s.ry, s.rz, true);
-    // 速度用帧间位移差 ÷ 播放推进时间计算（同回放：网络包 velocity 是位移
-    // 增量非 m/s，直接用会让影子速度错位）
-    const dtSec = (ch.ghost.playTime - ch.ghost.lastRenderAt) / 1000;
-    if (dtSec > 0) {
-      const vx = (s.x - ch.ghost.lastX) / dtSec;
-      const vy = (s.y - ch.ghost.lastY) / dtSec;
-      const vz = (s.z - ch.ghost.lastZ) / dtSec;
-      if (Number.isFinite(vx) && Number.isFinite(vy) && Number.isFinite(vz)) {
-        ch.ghost.npc.setVelocity(vx, vy, vz);
-      }
-    }
-    ch.ghost.lastX = s.x;
-    ch.ghost.lastY = s.y;
-    ch.ghost.lastZ = s.z;
-    ch.ghost.lastRenderAt = ch.ghost.playTime;
+    // 速度：录制存多少这里赋多少（与回放一致）
+    ch.ghost.npc.setVelocity(s.vx, s.vy, s.vz);
+    // 车辆实体朝向同步（rz=yaw）
+    ch.ghost.vehicle.setZAngle(s.rz);
   } catch {
     /* 实体失效由清理兜底 */
   }
@@ -351,7 +335,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
       charset: DEFAULT_CHARSET,
     });
     label.create();
-    ghost = { npc, vehicle, label, playTime: 0, lastX: data.header.startX, lastY: data.header.startY, lastZ: data.header.startZ, lastRenderAt: 0 };
+    ghost = { npc, vehicle, label, playTime: 0 };
   } catch (e) {
     logger.error(`[replay] 创建挑战影子失败`, e);
     player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足或创建失败");
