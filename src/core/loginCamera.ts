@@ -36,9 +36,8 @@ export function playLoginCamera(player: Player): void {
   player.interpolateCameraPos(from.x, from.y, from.z, to.x, to.y, to.z, 60_000, 1); // CAMERA_MOVE
 }
 
-/** 登录成功：停止登录音乐 + 回到第三人称视角 */
+/** 登录成功：停止登录音乐 */
 export function stopLoginCamera(player: Player): void {
   const pos = player.getPos();
   player.playSound(LOGIN_OK_SOUND, pos.x, pos.y, pos.z);
-  player.setCameraBehind();
 }
