@@ -10,6 +10,9 @@ import { logger } from "@/logger";
  * - 时长：分钟；0 = 永久
  */
 
+/** 同一 IP 允许同时在线的最多账号数（防同 IP 多开小号刷资源/规避封禁；网吧等共享 IP 可调大） */
+export const MAX_ACCOUNTS_PER_IP = 2;
+
 /** 查询用户未失效的封禁（返回原因；无封禁返回 null） */
 export async function getActiveBan(
   userId: string,
@@ -48,11 +51,35 @@ function banReasonText(reason: string, endAt: Date | null): string {
   return `（原因：${reason}）${until}`;
 }
 
-/** 登录前校验：账号封禁/IP 封禁/禁用 → 返回拒绝原因；允许返回 null。userId 为空（注册流程）时跳过账号维度只查 IP */
+/**
+ * 同 IP 多账号限制：该 IP 当前在线的不同账号数（sys_user_game_session 在线会话按
+ * IP 聚合去重 userId；同账号多会话不算）。超过上限返回拒绝原因，否则 null。
+ * 注意：登录流程在密码验证前调用（此时新连接尚未创建会话，统计不含自己）；
+ * 注册流程同样生效。
+ */
+async function checkIpAccountLimit(ip?: string): Promise<{ reason: string; online: number } | null> {
+  if (!ip || ip === "") return null;
+  const online = await prisma.sysUserGameSession.groupBy({
+    by: ["userId"],
+    where: { ip, logoutAt: null, status: "ONLINE" },
+    _count: { _all: true },
+  });
+  // groupBy 按 userId 分组 → 行数即该 IP 在线的不同账号数（同账号多会话聚合为 1）
+  const accountCount = online.length;
+  if (accountCount >= MAX_ACCOUNTS_PER_IP) {
+    return {
+      reason: `同一 IP 同时在线账号数已达上限（${MAX_ACCOUNTS_PER_IP}），请使用已登录账号`,
+      online: accountCount,
+    };
+  }
+  return null;
+}
+
+/** 登录前校验：账号封禁/IP 封禁/禁用/同 IP 多账号 → 返回拒绝原因；允许返回 null。userId 为空（注册流程）时跳过账号维度只查 IP */
 export async function checkLoginAllowed(
   userId: string,
   ip?: string,
-): Promise<{ reason: string; type: "banned" | "disabled" } | null> {
+): Promise<{ reason: string; type: "banned" | "disabled" | "ipLimit" } | null> {
   if (userId) {
     const user = await prisma.sysUser.findUnique({ where: { id: userId } });
     if (!user) return { reason: "账号不存在", type: "disabled" };
@@ -69,6 +96,11 @@ export async function checkLoginAllowed(
         reason: `当前 IP 已被封禁${banReasonText(ipBan.reason, ipBan.endAt)}`,
         type: "banned",
       };
+    }
+    // 同 IP 多账号限制（IP 维度，登录/注册统一生效）
+    const limit = await checkIpAccountLimit(ip);
+    if (limit) {
+      return { reason: limit.reason, type: "ipLimit" };
     }
   }
   return null;
