@@ -329,11 +329,22 @@ function joinRoom(player: Player, room: RaceRoom): void {
     finished: false,
     prevWorld: player.getVirtualWorld(),
   });
-  // 加入即发默认比赛车（无车时，放到第一个 CP 起点；有车则保留自己的车），
-  // 避免等待/热身期间空手（首个 CP 有 cveh 换车用其车型，否则 411）
+  // 加入即定位到第一个 CP 起点（对齐原版创建比赛 → 起点 + 显示 CP）：
+  // - 有车：把车挪到第一 CP（保留自己的车）
+  // - 无车：刷默认比赛车（首个 CP 有 cveh 换车用其车型，否则 411）并放入车内
+  // 并显示第一个 CP 箭头（指向第二个），等待/热身阶段就站在起点看到目标
   const first = room.cps[0];
-  if (first && !player.isInAnyVehicle()) {
-    spawnRaceVehicleAt(player, getDefaultRaceModel(room.cps), first.x, first.y, first.z, first.angle);
+  if (first) {
+    if (player.isInAnyVehicle()) {
+      const veh = player.getVehicle()!;
+      veh.setPos(first.x, first.y, first.z);
+      veh.setZAngle(first.angle);
+    } else {
+      spawnRaceVehicleAt(player, getDefaultRaceModel(room.cps), first.x, first.y, first.z, first.angle);
+    }
+    // 显示第一个 CP（红色箭头指向第二个；open.mp 切换世界不改变坐标，
+    // 开赛切到比赛世界后仍站在同一位置，beginRace 的 setPos 幂等保留）
+    showNextCheckpoint(player, room.cps, -1);
   }
   // 提示：房主（创建者）不需要"等待房主开始"
   if (room.ownerId === player.id) {
