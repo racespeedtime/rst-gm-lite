@@ -20,6 +20,7 @@ import {
   getRaceRoom,
   startRace,
   leaveRace,
+  respawnToLastCp,
 } from "@/race/room";
 import { isEditing, exitEdit } from "@/race/editor";
 import { showMySessionLogs } from "@/auth/sessionLog";
@@ -86,6 +87,21 @@ const panelGroups: PanelGroup[] = [
           return !!room && room.state === "WAITING" && room.ownerId === player.id;
         },
         run: startRace,
+      },
+      {
+        label: "重生",
+        raceSafe: true,
+        // 比赛房间组仅在比赛中显示；RACING 重生回上一 CP（对齐原版 /kill），
+        // 未开跑（等待/倒计时）正常重生
+        run: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          if (pr && room && room.state === "RACING") {
+            respawnToLastCp(player, pr, room);
+          } else {
+            player.spawn();
+          }
+        },
       },
       {
         label: "离开房间",
