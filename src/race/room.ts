@@ -11,6 +11,7 @@ import {
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
+import { getOwnedVehicle } from "@/vehicles";
 import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scripts";
 import { isEditing } from "./editor";
 import {
@@ -346,13 +347,20 @@ function joinRoom(player: Player, room: RaceRoom): void {
     finished: false,
     prevWorld: player.getVirtualWorld(),
   });
-  // 加入即定位到第一个 CP 起点（对齐原版创建比赛 → 起点 + 显示 CP）：
-  // - 有车：把车挪到第一 CP（保留自己的车）
-  // - 无车：刷默认比赛车（首个 CP 有 cveh 换车用其车型，否则 411）并放入车内
-  // 并显示第一个 CP 箭头（指向第二个），等待/热身阶段就站在起点看到目标
+  // 加入即定位到第一个 CP 起点（对齐原版 Race_Game_Join：玩家有自己的车就用
+  // 自己的车放起点）并显示第一个 CP 箭头（指向第二个），等待/热身阶段就站在
+  // 起点看到目标。优先级：
+  // 1. 有爱车（playerVehs 实体，本次会话刷过的车）→ 用爱车（即使人不在车里）
+  // 2. 没爱车但人在某辆车里 → 挪当前车
+  // 3. 都没 → 刷默认比赛车兜底（首个 CP 有 cveh 用其车型，否则 411）
   const first = room.cps[0];
   if (first) {
-    if (player.isInAnyVehicle()) {
+    const owned = getOwnedVehicle(player.id);
+    if (owned && owned.isValid()) {
+      owned.setPos(first.x, first.y, first.z);
+      owned.setZAngle(first.angle);
+      owned.putPlayerIn(player, 0);
+    } else if (player.isInAnyVehicle()) {
       const veh = player.getVehicle()!;
       veh.setPos(first.x, first.y, first.z);
       veh.setZAngle(first.angle);
@@ -455,16 +463,25 @@ function beginRace(room: RaceRoom): void {
       // 发车（对齐原版 Race_Game_Start_s）：不把玩家传送到第一个 CP——加入房间时
       // 已在起点定位（joinRoom），倒计时/等待期间可在起点自由活动，发车瞬间不应被拉回起点。
       if (!m.isInAnyVehicle()) {
-        // 无车兜底（等待期间车辆被销毁等极端情况）：原地刷默认比赛车，不移动玩家
-        const pos = m.getPos();
-        spawnRaceVehicleAt(
-          m,
-          getDefaultRaceModel(room.cps),
-          pos.x,
-          pos.y,
-          pos.z,
-          m.getFacingAngle().angle,
-        );
+        // 无车兜底（等待期间车辆被销毁等极端情况）：优先用爱车，否则原地刷默认比赛车，
+        // 不移动玩家
+        const owned = getOwnedVehicle(m.id);
+        if (owned && owned.isValid()) {
+          const pos = m.getPos();
+          owned.setPos(pos.x, pos.y, pos.z);
+          owned.setZAngle(m.getFacingAngle().angle);
+          owned.putPlayerIn(m, 0);
+        } else {
+          const pos = m.getPos();
+          spawnRaceVehicleAt(
+            m,
+            getDefaultRaceModel(room.cps),
+            pos.x,
+            pos.y,
+            pos.z,
+            m.getFacingAngle().angle,
+          );
+        }
       }
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);
