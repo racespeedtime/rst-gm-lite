@@ -11,22 +11,36 @@ import {
 import { openSpawnSettingsFlow } from "@/core/spawn";
 import { setHouseObjectsVisibleForPlayer } from "@/house";
 import { applyWorldEnv } from "@/core/worldenv";
+import { applyPlayerStyle } from "@/core/playerStyle";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import { parseIntInRange } from "@/utils/parse";
 import { showDialog } from "@/utils/dialog";
 import type { MenuBack } from "@/core/panel";
 
-/** 玩家游戏内颜色色板 */
-const COLOR_PALETTE = [
-  { label: "白色", value: "#ffffff" },
-  { label: "红色", value: "#ff5555" },
-  { label: "绿色", value: "#55ff55" },
-  { label: "蓝色", value: "#5555ff" },
-  { label: "黄色", value: "#ffff55" },
-  { label: "青色", value: "#55ffff" },
-  { label: "紫色", value: "#ff55ff" },
-  { label: "橙色", value: "#ffaa00" },
-  { label: "粉色", value: "#ffaacc" },
-  { label: "灰色", value: "#aaaaaa" },
+/** 玩家游戏内颜色色板：60 色（Hue 渐变）+ 自定义入口 */
+function hslToHex(h: number, s: number, l: number): string {
+  const f = (n: number): string => {
+    const k = (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const rgb = Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)))));
+    return rgb.toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+/** 60 色：色相 0-354（步进 6°），饱和 100%、亮度 45%（鲜艳且文字可读） */
+const GENERATED_COLORS: string[] = Array.from({ length: 60 }, (_, i) => hslToHex((i * 6) % 360, 1, 0.45));
+
+/** 颜色选择条目：value = hex，label = 显示文本（渲染时用实际颜色） */
+interface ColorEntry {
+  value: string;
+  label: string;
+}
+
+/** 色板条目：60 生成色 + 自定义入口（分页选择，实际颜色渲染） */
+const COLOR_ENTRIES: ColorEntry[] = [
+  ...GENERATED_COLORS.map((v) => ({ value: v, label: v })),
+  { value: "", label: "自定义…" },
 ];
 
 const pad2 = (n: number): string => String(n).padStart(2, "0");
@@ -112,16 +126,26 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
     return;
   }
   if (index === 5) {
-    const current = setting.playerColor || "#ffffff";
-    const options = COLOR_PALETTE.map((c) =>
-      c.value.toLowerCase() === current.toLowerCase() ? `${c.label}（当前）` : c.label,
-    );
-    options.push(`自定义（当前：${current}）`);
-    const colorIndex = await pickOption(player, "游戏内颜色", options);
-    if (colorIndex < 0) return;
+    const current = (setting.playerColor || "#ffffff").toLowerCase();
+    // 分页选择（每页 12 色 × 5 页 + 自定义），条目用实际颜色渲染（{RRGGBB} 前缀）
+    const r = await showPagedDialog(player, {
+      caption: "游戏内颜色",
+      data: COLOR_ENTRIES,
+      pageSize: 12,
+      format: (entry) => {
+        const isCurrent = entry.value && entry.value.toLowerCase() === current;
+        const mark = isCurrent ? "（当前）" : "";
+        // 实际颜色渲染：{色值}色值（颜色码即显示颜色），自定义项白色显示
+        const color = entry.value || "#ffffff";
+        return `{${color.replace("#", "")}}${entry.value || "自定义"}${mark}`;
+      },
+      button1: "选择",
+      button2: "取消",
+    });
+    if (!r) return;
     let next: string;
-    if (colorIndex < COLOR_PALETTE.length) {
-      next = COLOR_PALETTE[colorIndex].value;
+    if (r.item.value) {
+      next = r.item.value;
     } else {
       // 自定义颜色：输入（校验格式）
       const res = await showDialog(
@@ -147,6 +171,8 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
     }
     await updateSetting(player, { playerColor: next });
     player.setColor(next);
+    // 聊天名颜色跟随玩家颜色（刷新聊天名缓存）
+    await applyPlayerStyle(player);
     notifySaved(player, `游戏内颜色已设为：${next}`);
     return;
   }
