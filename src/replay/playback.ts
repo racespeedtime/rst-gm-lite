@@ -84,8 +84,6 @@ interface Ghost {
   staggerMs: number;
   /** 当前车辆模型（帧车型变化时重建） */
   model: number;
-  /** 上次应用的车辆血量（变化检测，防每帧 setHealth） */
-  lastHealth: number;
   /** 上次注入的按键状态（变化检测，防每帧 setKeys） */
   lastKeys: number;
   /** NPC playerId（emulate 的发送者；缓存避免每帧 getPlayer） */
@@ -422,11 +420,8 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     const now = Date.now();
     if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS) return;
     ghost.lastEmulateAt = now;
-    // 血量变化检测（防每帧 setHealth；sync 的 vehicleHealth 也会广播）
-    if (Math.abs(s.vehicleHealth - ghost.lastHealth) > 0.5) {
-      ghost.lastHealth = s.vehicleHealth;
-      ghost.vehicle.setHealth(s.vehicleHealth);
-    }
+    // 血量：emulate 的 DriverSync 包已带 vehicleHealth，服务器按真实司机
+    // 处理时会应用到车辆实体并广播，无需显式 setHealth（重复操作）
     // 构造 DriverSync 包并模拟 NPC 传入（incoming 上下文 → 包内不含 playerId，
     // emulateIncomingPacket 的 playerId 参数即发送者）
     const bs = new IncomingBitStream();
@@ -660,7 +655,6 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         playTime: i * staggerMs,
         staggerMs,
         model: data.header.vehicleModelId,
-        lastHealth: -1,
         lastKeys: -1,
         npcPlayerId: npcPlayer.id,
         lastEmulateAt: 0,
