@@ -12,7 +12,7 @@
  Target Server Version : 180004 (180004)
  File Encoding         : 65001
 
- Date: 03/08/2026 17:42:30
+ Date: 03/08/2026 22:14:37
 */
 
 
@@ -52,6 +52,7 @@ INSERT INTO "public"."_prisma_migrations" VALUES ('d8e00d01-4354-4a13-82d9-81fec
 INSERT INTO "public"."_prisma_migrations" VALUES ('679424f2-d42a-43b3-bbd7-c3f841b14865', '50242a4378c7f5805e2c5f5fbd325654bd3089041c9372b940aa7ccab9ed1310', '2026-08-03 04:01:58.72911+00', '20260803020000_remove_vehicle_mod_components', NULL, NULL, '2026-08-03 04:01:58.724754+00', 1);
 INSERT INTO "public"."_prisma_migrations" VALUES ('2b0d5b61-9617-4b9f-b229-d03bc0a3b421', 'e4961c43309aa4cfecbc0c4040065ff76dc8c0425b640855278f5cc930b4c929', '2026-08-02 14:21:16.922309+00', '20260802000013_add_personalize_settings', NULL, NULL, '2026-08-02 14:21:16.912365+00', 1);
 INSERT INTO "public"."_prisma_migrations" VALUES ('080f13dd-f150-4b46-b8fa-692403a66766', '9e397f0e833dc72974ca517fdf9c908b4dd9de738467e23e7d2a409468841a98', '2026-08-02 19:18:29.018914+00', '20260803000000_widen_spawn_mode', NULL, NULL, '2026-08-02 19:18:29.01346+00', 1);
+INSERT INTO "public"."_prisma_migrations" VALUES ('745a3474-c3ff-4a7d-8689-64a2ebfd53bf', '34823a81688478b3027f3ec098a371770cbcda0d4b29752f0517696e391d2fb0', '2026-08-03 13:11:43.132502+00', '20260803130000_add_replay', NULL, NULL, '2026-08-03 13:11:43.110611+00', 1);
 
 -- ----------------------------
 -- Table structure for attire
@@ -45192,6 +45193,35 @@ INSERT INTO "public"."race_record" VALUES ('892dc68a-0418-4bd1-9de1-611197c944d3
 INSERT INTO "public"."race_record" VALUES ('14118e14-e938-4c41-915e-824ad7c9a3b6', 252460, '1f4b9263-de00-11ee-a427-0242ac110003', '0ba97d1e-b2d3-4329-9cef-c3b4d62a128e', '1970-01-01 00:00:00+00', '2024-03-09 15:36:17.639+00', NULL);
 INSERT INTO "public"."race_record" VALUES ('cb8041f7-8b19-4432-899d-e3f103c0f134', 51932796, '1f4b9263-de00-11ee-a427-0242ac110003', '4ddbbb48-00cb-49f7-99b0-c32308fc4b3f', '2020-08-02 04:58:04+00', '2026-06-03 06:28:35.079+00', '2026-06-03 06:28:35.078+00');
 INSERT INTO "public"."race_record" VALUES ('19d28a3d-8e4d-4e3d-9f6a-778a39ad3fd2', 89830, '1f4b9263-de00-11ee-a427-0242ac110003', 'f5b5602b-4464-4a7c-a5b6-45bbb21591a3', '2026-08-03 05:45:46.445+00', '2026-08-03 05:45:46.445+00', NULL);
+INSERT INTO "public"."race_record" VALUES ('e048565d-5ade-47e8-ab5d-8710b8404297', 104197, '1f4b9263-de00-11ee-a427-0242ac110003', '3185aab4-de00-11ee-a427-0242ac110003', '2026-08-03 12:11:59.655+00', '2026-08-03 12:11:59.655+00', NULL);
+INSERT INTO "public"."race_record" VALUES ('76e24b9c-2665-47ef-850f-5dac55c155f9', 93181, '1f4b9263-de00-11ee-a427-0242ac110003', '31953dc3-de00-11ee-a427-0242ac110003', '2026-08-03 12:48:06.225+00', '2026-08-03 12:48:06.225+00', NULL);
+
+-- ----------------------------
+-- Table structure for replay
+-- ----------------------------
+DROP TABLE IF EXISTS "public"."replay";
+CREATE TABLE "public"."replay" (
+  "id" uuid NOT NULL,
+  "type" varchar(16) COLLATE "pg_catalog"."default" NOT NULL,
+  "user_id" uuid NOT NULL,
+  "recorder_name" varchar(255) COLLATE "pg_catalog"."default" NOT NULL,
+  "race_id" uuid,
+  "race_name" varchar(255) COLLATE "pg_catalog"."default",
+  "vehicle_model_id" int4 NOT NULL,
+  "file_name" varchar(255) COLLATE "pg_catalog"."default" NOT NULL,
+  "duration_ms" int4 NOT NULL,
+  "frame_count" int4 NOT NULL,
+  "file_size" int4 NOT NULL,
+  "rank" int4,
+  "finished" bool,
+  "created_at" timestamptz(6) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "deleted_at" timestamptz(6)
+)
+;
+
+-- ----------------------------
+-- Records of replay
+-- ----------------------------
 
 -- ----------------------------
 -- Table structure for spawn_point
@@ -46885,8 +46915,13 @@ CREATE TABLE "public"."sys_user_game_session" (
 -- Records of sys_user_game_session
 -- ----------------------------
 INSERT INTO "public"."sys_user_game_session" VALUES ('069d1b91-c4a3-4ad0-8342-f67a3d52a499', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:21:09.596+00', '2026-08-03 08:21:15.078+00', '2026-08-03 08:21:15.078+00', 'OFFLINE', 5, '127.0.0.1', '2026-08-03 08:21:09.596+00', '2026-08-03 08:21:29.131+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('1d589317-8da1-420e-a7ee-ecc180877762', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:42:43.11+00', '2026-08-03 12:43:19.58+00', '2026-08-03 12:43:19.58+00', 'OFFLINE', 36, '127.0.0.1', '2026-08-03 12:42:43.11+00', '2026-08-03 12:43:54.334+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('e274cdb2-b9be-4e75-90f1-c8a5caad6b2e', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 10:32:12.957+00', '2026-08-03 10:33:33.47+00', '2026-08-03 10:33:33.47+00', 'OFFLINE', 80, '127.0.0.1', '2026-08-03 10:32:12.957+00', '2026-08-03 10:34:07.175+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('b0eaea91-91b3-4ea7-b481-36f69072503a', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:21:46.183+00', '2026-08-03 08:23:28.693+00', '2026-08-03 08:23:28.693+00', 'OFFLINE', 102, '127.0.0.1', '2026-08-03 08:21:46.183+00', '2026-08-03 08:23:56.752+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('16afd265-8bf2-403f-b0f6-cd4fcdc516f0', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:44:22.334+00', '2026-08-03 12:48:04.891+00', '2026-08-03 12:48:04.891+00', 'OFFLINE', 222, '127.0.0.1', '2026-08-03 12:44:22.334+00', '2026-08-03 12:48:37.112+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('9c7ddaac-f514-469e-b716-b943216e0656', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:24:12.785+00', '2026-08-03 08:29:01.607+00', '2026-08-03 08:29:01.607+00', 'OFFLINE', 288, '127.0.0.1', '2026-08-03 08:24:12.785+00', '2026-08-03 08:29:21.28+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('2d4f3e82-2030-4101-9fcf-5a31b7cc3e67', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:49:50.447+00', '2026-08-03 12:49:50.447+00', '2026-08-03 12:49:50.447+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 12:49:50.447+00', '2026-08-03 12:49:55.947+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('2ee56bf8-6e0f-4456-b9cd-ce433f57eb9d', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 10:34:39.328+00', '2026-08-03 10:43:28.909+00', '2026-08-03 10:43:28.909+00', 'OFFLINE', 529, '127.0.0.1', '2026-08-03 10:34:39.328+00', '2026-08-03 10:44:22.761+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('17c4f307-907a-4f50-9285-195b9034d18e', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:30:03.915+00', '2026-08-03 08:32:31.535+00', '2026-08-03 08:32:31.535+00', 'OFFLINE', 147, '127.0.0.1', '2026-08-03 08:30:03.915+00', '2026-08-03 08:33:00.971+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('8b6925a4-194a-4b7b-973e-377da8740068', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-02 18:24:37.738+00', '2026-08-02 18:41:03.555+00', '2026-08-02 18:40:27.999+00', 'OFFLINE', 985, '127.0.0.1', '2026-08-02 18:24:37.738+00', '2026-08-02 18:41:03.56+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('712879df-38db-4450-86a7-760a07f2d6ea', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:33:46.564+00', '2026-08-03 08:33:46.564+00', '2026-08-03 08:33:46.564+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 08:33:46.564+00', '2026-08-03 08:34:11.398+00');
@@ -46896,15 +46931,37 @@ INSERT INTO "public"."sys_user_game_session" VALUES ('76a4b42e-429c-4a9d-9204-ee
 INSERT INTO "public"."sys_user_game_session" VALUES ('72ff71bd-c8b5-4774-96a2-5cf2283e39a9', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 03:09:40.154+00', '2026-08-03 04:00:47.652+00', '2026-08-03 04:00:42.702+00', 'OFFLINE', 3067, '127.0.0.1', '2026-08-03 03:09:40.154+00', '2026-08-03 04:00:47.66+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('e5aee82c-e12e-4625-a00b-8b708d20e511', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 04:07:20.816+00', '2026-08-03 04:08:33.015+00', '2026-08-03 04:08:01.558+00', 'OFFLINE', 72, '127.0.0.1', '2026-08-03 04:07:20.816+00', '2026-08-03 04:08:33.022+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('ed264b29-be6c-4247-a5c3-65a10d702169', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:50:47.365+00', '2026-08-03 08:51:01.595+00', '2026-08-03 08:51:01.595+00', 'OFFLINE', 14, '127.0.0.1', '2026-08-03 08:50:47.365+00', '2026-08-03 08:51:08.785+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('54694e09-ddda-4947-9c62-ed009fd900f7', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 11:42:53.359+00', '2026-08-03 11:45:02.125+00', '2026-08-03 11:45:02.125+00', 'OFFLINE', 128, '127.0.0.1', '2026-08-03 11:42:53.359+00', '2026-08-03 11:45:29.109+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('fd881306-d2d4-4fc8-8825-bff43754ddb9', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 11:45:44.944+00', '2026-08-03 11:45:44.944+00', '2026-08-03 11:45:44.944+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 11:45:44.944+00', '2026-08-03 11:46:33.663+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('7e140338-fc26-4ae6-86d4-c23349cade60', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:51:55.738+00', '2026-08-03 08:54:48.674+00', '2026-08-03 08:54:48.674+00', 'OFFLINE', 172, '127.0.0.1', '2026-08-03 08:51:55.738+00', '2026-08-03 08:55:31.751+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('5cbc6e61-8280-4f97-bc1c-f5df2aad9d30', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 11:49:46.93+00', '2026-08-03 11:50:38.195+00', '2026-08-03 11:50:38.195+00', 'OFFLINE', 51, '127.0.0.1', '2026-08-03 11:49:46.93+00', '2026-08-03 11:51:13.362+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('ea750b51-be75-4915-ae5d-6ba823c1da10', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:57:46.169+00', '2026-08-03 08:58:00.303+00', '2026-08-03 08:58:00.303+00', 'OFFLINE', 14, '127.0.0.1', '2026-08-03 08:57:46.169+00', '2026-08-03 08:58:32.393+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('31774733-2bb1-4a5e-b6d1-39787cbf51d4', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 11:54:16.624+00', '2026-08-03 11:54:16.624+00', '2026-08-03 11:54:16.624+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 11:54:16.624+00', '2026-08-03 11:54:24.493+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('67f74eaa-c5d3-46a4-aea3-1cfa92216ea6', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 09:43:37.174+00', '2026-08-03 09:46:18.791+00', '2026-08-03 09:46:18.791+00', 'OFFLINE', 161, '127.0.0.1', '2026-08-03 09:43:37.174+00', '2026-08-03 09:47:15.585+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('9db423ce-ed02-49e4-a26c-11e5fd5495d1', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 09:47:37.608+00', '2026-08-03 09:47:37.608+00', '2026-08-03 09:47:37.608+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 09:47:37.608+00', '2026-08-03 09:47:42.052+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('0d63236d-6a44-4f3e-b731-a003496a329d', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 05:39:52.915+00', '2026-08-03 05:56:18.24+00', '2026-08-03 05:55:32.639+00', 'OFFLINE', 985, '127.0.0.1', '2026-08-03 05:39:52.915+00', '2026-08-03 05:56:18.248+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('d5eb705a-2847-460b-93ac-bc4f95307bb1', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 09:48:11.43+00', '2026-08-03 09:48:11.43+00', '2026-08-03 09:48:11.43+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 09:48:11.43+00', '2026-08-03 09:48:24.809+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('60a6983b-d4bf-438e-ace5-75c14234da9e', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 06:09:29.289+00', '2026-08-03 06:09:50.597+00', '2026-08-03 06:09:29.289+00', 'OFFLINE', 21, '127.0.0.1', '2026-08-03 06:09:29.289+00', '2026-08-03 06:09:50.604+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('7f16162d-a44a-4560-a2ed-1df60f9b8493', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 11:54:51.476+00', '2026-08-03 11:57:44.715+00', '2026-08-03 11:57:44.715+00', 'OFFLINE', 173, '127.0.0.1', '2026-08-03 11:54:51.476+00', '2026-08-03 11:58:41.691+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('2bc77cbc-00dd-4763-8a34-efdc887dbebe', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 06:10:07.967+00', '2026-08-03 06:10:38.802+00', '2026-08-03 06:10:12.476+00', 'OFFLINE', 30, '127.0.0.1', '2026-08-03 06:10:07.967+00', '2026-08-03 06:10:38.806+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('ef3f1c27-71d8-4ee3-b320-2c48080953d6', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 10:00:08.261+00', '2026-08-03 10:02:45.123+00', '2026-08-03 10:02:45.123+00', 'OFFLINE', 156, '127.0.0.1', '2026-08-03 10:00:08.261+00', '2026-08-03 10:03:45.978+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('10db6330-5a4c-4108-95bf-ea7018374bcf', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 06:10:49.386+00', '2026-08-03 06:13:12.496+00', '2026-08-03 06:13:12.496+00', 'OFFLINE', 143, '127.0.0.1', '2026-08-03 06:10:49.386+00', '2026-08-03 06:13:42.016+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('9b170955-7d1d-4813-9f27-3a1b4b7ae09e', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 10:04:51.176+00', '2026-08-03 10:05:43.696+00', '2026-08-03 10:05:43.696+00', 'OFFLINE', 52, '127.0.0.1', '2026-08-03 10:04:51.176+00', '2026-08-03 10:05:50.455+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('c8890ed5-ee86-4704-b00b-af7ed3306bbc', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:18:57.391+00', '2026-08-03 08:18:57.391+00', '2026-08-03 08:18:57.391+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 08:18:57.391+00', '2026-08-03 08:19:13.115+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('0bc0041b-06d6-4c4c-a18b-26ab2e7779b1', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:19:37.453+00', '2026-08-03 08:19:37.453+00', '2026-08-03 08:19:37.453+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 08:19:37.453+00', '2026-08-03 08:20:15.624+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('0d2e7017-1c19-429f-b558-1b5eb9c27999', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 10:06:06.012+00', '2026-08-03 10:06:06.012+00', '2026-08-03 10:06:06.012+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 10:06:06.012+00', '2026-08-03 10:06:15.931+00');
 INSERT INTO "public"."sys_user_game_session" VALUES ('6e0044e1-a0f3-461a-a456-53673f39ee3f', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 08:20:23.695+00', '2026-08-03 08:20:58.394+00', '2026-08-03 08:20:23.695+00', 'OFFLINE', 34, '127.0.0.1', '2026-08-03 08:20:23.695+00', '2026-08-03 08:20:58.407+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('92b5f39a-27aa-4494-a6d7-e8a6c719bc73', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:06:45.728+00', '2026-08-03 12:13:11.327+00', '2026-08-03 12:13:11.327+00', 'OFFLINE', 385, '127.0.0.1', '2026-08-03 12:06:45.728+00', '2026-08-03 12:14:13.281+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('d67bd2e9-2fa1-459b-a9cb-6a36108db052', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 10:06:33.792+00', '2026-08-03 10:08:15.443+00', '2026-08-03 10:08:15.443+00', 'OFFLINE', 101, '127.0.0.1', '2026-08-03 10:06:33.792+00', '2026-08-03 10:08:31.944+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('512046f3-3733-41c3-b7a8-66301f45d132', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:14:23.524+00', '2026-08-03 12:16:19.513+00', '2026-08-03 12:16:19.513+00', 'OFFLINE', 115, '127.0.0.1', '2026-08-03 12:14:23.524+00', '2026-08-03 12:16:38.496+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('56dce589-1dc7-4e7e-829b-a0e2813d0d4a', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:16:41.282+00', '2026-08-03 12:16:41.282+00', '2026-08-03 12:16:41.282+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 12:16:41.282+00', '2026-08-03 12:16:55.121+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('2e0d2a75-9447-4c67-8421-566da89de144', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:17:18.672+00', '2026-08-03 12:17:18.672+00', '2026-08-03 12:17:18.672+00', 'OFFLINE', 0, '127.0.0.1', '2026-08-03 12:17:18.672+00', '2026-08-03 12:17:27.64+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('455993ed-1b98-46b9-8069-e0077306d9ad', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:19:05.199+00', '2026-08-03 12:19:50.481+00', '2026-08-03 12:19:50.481+00', 'OFFLINE', 45, '127.0.0.1', '2026-08-03 12:19:05.199+00', '2026-08-03 12:20:50.643+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('5eae6c7b-e699-407b-ae6e-84a07796497d', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 10:13:07.344+00', '2026-08-03 10:21:55.01+00', '2026-08-03 10:21:55.01+00', 'OFFLINE', 527, '127.0.0.1', '2026-08-03 10:13:07.344+00', '2026-08-03 10:22:20.87+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('67da949b-e373-46c3-84a7-af2cc02fb64e', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 10:24:39.984+00', '2026-08-03 10:25:47.885+00', '2026-08-03 10:25:47.885+00', 'OFFLINE', 67, '127.0.0.1', '2026-08-03 10:24:39.984+00', '2026-08-03 10:25:56.027+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('da527e09-bca6-44cc-9257-aef754a1d813', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:25:33.464+00', '2026-08-03 12:32:05.782+00', '2026-08-03 12:32:05.782+00', 'OFFLINE', 392, '127.0.0.1', '2026-08-03 12:25:33.464+00', '2026-08-03 12:32:46.612+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('b91f0648-e497-4a7c-96c9-838f7215e947', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:33:23.549+00', '2026-08-03 12:36:46.164+00', '2026-08-03 12:36:46.164+00', 'OFFLINE', 202, '127.0.0.1', '2026-08-03 12:33:23.549+00', '2026-08-03 12:37:12.54+00');
+INSERT INTO "public"."sys_user_game_session" VALUES ('9c5fbaa8-f161-4b79-b41b-24939970eebe', '1f4b9263-de00-11ee-a427-0242ac110003', '2026-08-03 12:37:42.281+00', '2026-08-03 12:41:15.856+00', '2026-08-03 12:41:15.856+00', 'OFFLINE', 213, '127.0.0.1', '2026-08-03 12:37:42.281+00', '2026-08-03 12:42:14.214+00');
 
 -- ----------------------------
 -- Table structure for sys_user_role
@@ -48337,7 +48394,7 @@ INSERT INTO "public"."sys_user_setting" VALUES ('a563a1a3-e460-11ee-aabd-0242ac1
 INSERT INTO "public"."sys_user_setting" VALUES ('a563af91-e460-11ee-aabd-0242ac110003', 0, 9, 9, 1, NULL, '{FF0000}ELEGY', 't', 't', 't', 't', 't', 'f', 'f', '1f541b70-de00-11ee-a427-0242ac110003', '2024-03-17 21:17:03.767358+00', '2024-03-17 21:17:03.767358+00', 't', 't', 't', 'timer', 'a4f330ff-7b8b-4cf1-a83d-ae276edfbc6b', 'RANDOM', NULL, NULL, NULL, NULL, 't', 'f', 't', 't', '#ffffff', 't', 't', 'PRIVATE', NULL, 'PUBLIC', 'f', 'f', 'f');
 INSERT INTO "public"."sys_user_setting" VALUES ('a563bd78-e460-11ee-aabd-0242ac110003', 285, 0, 9, 14, NULL, NULL, 't', 't', 't', 't', 't', 'f', 'f', '1f5466ec-de00-11ee-a427-0242ac110003', '2024-03-17 21:17:03.767358+00', '2024-03-17 21:17:03.767358+00', 't', 't', 't', 'timer', '05586d2d-59cc-4c4c-9d6c-32186994b66a', 'RANDOM', NULL, NULL, NULL, NULL, 't', 'f', 't', 't', '#ffffff', 't', 't', 'PRIVATE', NULL, 'PUBLIC', 'f', 'f', 'f');
 INSERT INTO "public"."sys_user_setting" VALUES ('a563c7b7-e460-11ee-aabd-0242ac110003', 177, 1, 11, 1, NULL, NULL, 't', 't', 't', 't', 'f', 'f', 'f', '1f549ac9-de00-11ee-a427-0242ac110003', '2024-03-17 21:17:03.767358+00', '2024-03-17 21:17:03.767358+00', 't', 't', 't', 'timer', '3800388b-77cb-4be1-b87d-9f2b0f4cf2be', 'RANDOM', NULL, NULL, NULL, NULL, 't', 'f', 't', 't', '#ffffff', 't', 't', 'PRIVATE', NULL, 'PUBLIC', 'f', 'f', 'f');
-INSERT INTO "public"."sys_user_setting" VALUES ('a5629e84-e460-11ee-aabd-0242ac110003', 23, 0, 12, 2, '测试', NULL, 't', 't', 't', 't', 't', 't', 't', '1f4b9263-de00-11ee-a427-0242ac110003', '2024-03-17 21:17:03.767358+00', '2026-08-03 08:58:00.312+00', 't', 't', 't', 'timer', 'fb76e7d4-de0c-4a7f-9411-e064b8cd2163', 'RANDOM', -2825.343750, 598.536682, 5.301875, 204.838791, 't', 't', 't', 't', '#ff55ff', 't', 't', 'PRIVATE', NULL, 'PUBLIC', 'f', 't', 'f');
+INSERT INTO "public"."sys_user_setting" VALUES ('a5629e84-e460-11ee-aabd-0242ac110003', 23, 0, 12, 2, '测试', NULL, 't', 't', 't', 't', 't', 't', 't', '1f4b9263-de00-11ee-a427-0242ac110003', '2024-03-17 21:17:03.767358+00', '2026-08-03 12:46:04.881+00', 't', 't', 't', 'timer', 'fb76e7d4-de0c-4a7f-9411-e064b8cd2163', 'RANDOM', -1907.360962, -513.313904, 37.961498, 177.098282, 't', 't', 't', 't', '#ff55ff', 't', 't', 'PRIVATE', NULL, 'PUBLIC', 'f', 't', 'f');
 
 -- ----------------------------
 -- Table structure for teleport
@@ -49094,6 +49151,7 @@ CREATE TABLE "public"."user_vehicle" (
 -- ----------------------------
 -- Records of user_vehicle
 -- ----------------------------
+INSERT INTO "public"."user_vehicle" VALUES ('38a11f57-de00-11ee-a427-0242ac110003', '1f4b9263-de00-11ee-a427-0242ac110003', -1907.346069, -514.559082, 37.961494, 180.685272, 'f', 't', 'f', 'RaceSpeedTime', NULL, '2024-03-09 23:28:11.344583+00', '2026-08-03 12:46:04.972+00', NULL, '71c1780a-a053-4f1e-a63a-25a9ac55650d', 411);
 INSERT INTO "public"."user_vehicle" VALUES ('38a11e2f-de00-11ee-a427-0242ac110003', '1f3fc511-de00-11ee-a427-0242ac110003', -327.336303, 1515.046630, 75.076675, 359.811279, 'f', 't', 'f', '月饼送货店（自家用）', NULL, '2024-03-09 23:28:11.343865+00', '2024-03-09 15:40:19.141444+00', NULL, NULL, 600);
 INSERT INTO "public"."user_vehicle" VALUES ('38a1219a-de00-11ee-a427-0242ac110003', '1f421f82-de00-11ee-a427-0242ac110003', -339.824890, 1514.409546, 75.086449, 0.373776, 't', 't', 'f', 'Yukine', NULL, '2024-03-09 23:28:11.34525+00', '2024-03-09 15:40:19.141444+00', NULL, NULL, 411);
 INSERT INTO "public"."user_vehicle" VALUES ('38a12757-de00-11ee-a427-0242ac110003', '1f46c139-de00-11ee-a427-0242ac110003', 429.012359, -1836.450683, 5.388294, 0.065610, 'f', 't', 'f', 'mag', NULL, '2024-03-09 23:28:11.348397+00', '2024-03-09 15:40:19.141444+00', NULL, NULL, 411);
@@ -49113,7 +49171,6 @@ INSERT INTO "public"."user_vehicle" VALUES ('38a122a5-de00-11ee-a427-0242ac11000
 INSERT INTO "public"."user_vehicle" VALUES ('38a123d4-de00-11ee-a427-0242ac110003', '1f4fb2cc-de00-11ee-a427-0242ac110003', -342.816040, 1514.543945, 75.035469, 359.849335, 't', 't', 'f', '菠萝战宝', NULL, '2024-03-09 23:28:11.346623+00', '2024-03-09 15:40:19.141444+00', NULL, 'b0778ff8-fed6-4878-a1d7-51dacc7911f8', 411);
 INSERT INTO "public"."user_vehicle" VALUES ('38a12570-de00-11ee-a427-0242ac110003', '1f49064d-de00-11ee-a427-0242ac110003', -336.588776, 1515.002441, 75.019005, 0.150661, 'f', 't', 'f', '[R_ST]peretDK', NULL, '2024-03-09 23:28:11.347456+00', '2024-03-09 15:40:19.141444+00', NULL, '5349d89b-9d28-4ab9-98ec-6788783b8e58', 562);
 INSERT INTO "public"."user_vehicle" VALUES ('38a127f1-de00-11ee-a427-0242ac110003', '1f47bf04-de00-11ee-a427-0242ac110003', -330.298889, 1514.904418, 75.085655, 358.779388, 't', 't', 'f', '{0080FF}Please {FF80FF}Call Me {FF8040}Boss ->> {FF0000}[R_ST]KiVen', NULL, '2024-03-09 23:28:11.349123+00', '2024-03-09 15:40:19.141444+00', NULL, '95a951cb-0775-4d4c-a9ab-528fecaea985', 411);
-INSERT INTO "public"."user_vehicle" VALUES ('38a11f57-de00-11ee-a427-0242ac110003', '1f4b9263-de00-11ee-a427-0242ac110003', -2825.343750, 598.536682, 5.301875, 177.862442, 'f', 't', 'f', 'RaceSpeedTime', NULL, '2024-03-09 23:28:11.344583+00', '2026-08-03 08:58:00.414+00', NULL, '71c1780a-a053-4f1e-a63a-25a9ac55650d', 411);
 INSERT INTO "public"."user_vehicle" VALUES ('38a12a5a-de00-11ee-a427-0242ac110003', '1f46cfe5-de00-11ee-a427-0242ac110003', -1654.489624, -211.600189, 14.148437, 218.744995, 't', 't', 'f', 'Andy', NULL, '2024-03-09 23:28:11.349904+00', '2024-03-09 15:40:19.141444+00', NULL, '109a7989-4fc0-4287-b9af-21971e32c20d', 411);
 INSERT INTO "public"."user_vehicle" VALUES ('38a12d06-de00-11ee-a427-0242ac110003', '1f47439d-de00-11ee-a427-0242ac110003', -268.099395, 1544.979858, 75.034515, 314.393463, 'f', 't', 'f', 'LangShenXiaoGenBan', NULL, '2024-03-09 23:28:11.351747+00', '2024-03-09 15:40:19.141444+00', NULL, '1cb0217c-fdf7-415b-993e-651d0843c2b3', 411);
 INSERT INTO "public"."user_vehicle" VALUES ('38a12e19-de00-11ee-a427-0242ac110003', '1f475f6e-de00-11ee-a427-0242ac110003', -324.129943, 1514.897338, 75.086441, 359.679809, 't', 't', 'f', 'Shoumar：无论多大，我想继续热爱！', NULL, '2024-03-09 23:28:11.352637+00', '2024-03-09 15:40:19.141444+00', NULL, '31fb6af0-46a5-4d20-ac0a-d25361afd67e', 411);
@@ -49464,6 +49521,21 @@ CREATE INDEX "race_record_user_id_idx" ON "public"."race_record" USING btree (
 ALTER TABLE "public"."race_record" ADD CONSTRAINT "race_record_pkey" PRIMARY KEY ("id");
 
 -- ----------------------------
+-- Indexes structure for table replay
+-- ----------------------------
+CREATE INDEX "replay_deleted_at_idx" ON "public"."replay" USING btree (
+  "deleted_at" "pg_catalog"."timestamptz_ops" ASC NULLS LAST
+);
+CREATE INDEX "replay_user_id_idx" ON "public"."replay" USING btree (
+  "user_id" "pg_catalog"."uuid_ops" ASC NULLS LAST
+);
+
+-- ----------------------------
+-- Primary Key structure for table replay
+-- ----------------------------
+ALTER TABLE "public"."replay" ADD CONSTRAINT "replay_pkey" PRIMARY KEY ("id");
+
+-- ----------------------------
 -- Indexes structure for table spawn_point
 -- ----------------------------
 CREATE UNIQUE INDEX "spawn_point_index_key" ON "public"."spawn_point" USING btree (
@@ -49714,6 +49786,11 @@ ALTER TABLE "public"."race_group_race" ADD CONSTRAINT "race_group_race_race_id_f
 -- ----------------------------
 ALTER TABLE "public"."race_record" ADD CONSTRAINT "race_record_race_id_fkey" FOREIGN KEY ("race_id") REFERENCES "public"."race" ("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "public"."race_record" ADD CONSTRAINT "race_record_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."sys_user" ("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- ----------------------------
+-- Foreign Keys structure for table replay
+-- ----------------------------
+ALTER TABLE "public"."replay" ADD CONSTRAINT "replay_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "public"."sys_user" ("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- ----------------------------
 -- Foreign Keys structure for table sys_user_ban

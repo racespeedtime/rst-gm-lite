@@ -21,6 +21,7 @@ import {
   startRace,
   leaveRace,
   respawnToLastCp,
+  openChangeTrackMenu,
 } from "@/race/room";
 import { isEditing, exitEdit } from "@/race/editor";
 import { showMySessionLogs } from "@/auth/sessionLog";
@@ -88,6 +89,17 @@ const panelGroups: PanelGroup[] = [
           return !!room && room.state === "WAITING" && room.ownerId === player.id;
         },
         run: startRace,
+      },
+      {
+        label: "更换赛道",
+        raceSafe: true,
+        // 仅房主且等待阶段：随机换一张 / 从列表选择（开赛后锁定）
+        visible: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          return !!room && room.state === "WAITING" && room.ownerId === player.id;
+        },
+        run: openChangeTrackMenu,
       },
       {
         label: "重生",

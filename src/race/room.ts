@@ -25,6 +25,7 @@ import { sessionManager } from "@/sessions/manager";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { formatTime } from "@/utils/format";
 import { showPagedDialog } from "@/utils/pagedDialog";
+import { showDialog } from "@/utils/dialog";
 import { MIN_Z } from "@/utils/map";
 import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR, COLOR_WHITE } from "@/utils/colors";
 
@@ -275,32 +276,94 @@ function cleanupExpiredReconnects(room: RaceRoom): void {
   checkRoomState(room);
 }
 
-/** 创建比赛房间并加入 */
-export async function createRaceRoom(player: Player, raceId: string): Promise<RaceRoom | null> {
+/**
+ * 随机抽一张启用赛道（有 CP 的）。无可用返回 null。
+ * 用 count + skip 均匀随机（findFirst orderBy 稳定 + 随机偏移）。
+ */
+async function pickRandomRace(): Promise<
+  | {
+      id: string;
+      name: string;
+      laps: number | null;
+      isEnabled: boolean;
+      deletedAt: Date | null;
+      sysUser: { username: string } | null;
+    }
+  | null
+> {
+  const count = await prisma.race.count({
+    where: { isEnabled: true, deletedAt: null, cps: { some: {} } },
+  });
+  if (count === 0) return null;
+  const skip = Math.floor(Math.random() * count);
+  const race = await prisma.race.findFirst({
+    where: { isEnabled: true, deletedAt: null, cps: { some: {} } },
+    skip,
+    include: { sysUser: true },
+  });
+  return race;
+}
+
+/** 创建比赛房间并加入。raceId 为空 → 随机抽一张赛道（全部随机）。 */
+export async function createRaceRoom(player: Player, raceId: string | null): Promise<RaceRoom | null> {
   if (isInRace(player.id)) {
     player.sendClientMessage(COLOR_ERROR, "你已在比赛中");
     return null;
   }
-  const race = await prisma.race.findUnique({
-    where: { id: raceId },
-    include: { sysUser: true },
-  });
-  if (!race || !race.isEnabled || race.deletedAt) {
-    player.sendClientMessage(COLOR_ERROR, "赛道不存在或未启用");
-    return null;
+  // 随机模式：抽到 <2 CP 的无效赛道最多重试 3 次（指定模式只查一次，失败即报错）
+  const maxAttempts = raceId ? 1 : 3;
+  let race: {
+    id: string;
+    name: string;
+    laps: number | null;
+    isEnabled: boolean;
+    deletedAt: Date | null;
+    sysUser: { username: string } | null;
+  } | null = null;
+  let cps: {
+    index: number;
+    id: string;
+    x: unknown;
+    y: unknown;
+    z: unknown;
+    angle: unknown;
+    size: unknown;
+    raceCpScripts: { script: string }[];
+  }[] = [];
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    race = raceId
+      ? await prisma.race.findUnique({
+          where: { id: raceId },
+          include: { sysUser: true },
+        })
+      : await pickRandomRace();
+    if (!race || !race.isEnabled || race.deletedAt) {
+      if (raceId) {
+        player.sendClientMessage(COLOR_ERROR, "赛道不存在或未启用");
+        return null;
+      }
+      race = null;
+      continue; // 随机没抽到 → 重试
+    }
+    cps = await prisma.raceCp.findMany({
+      where: { raceId: race.id },
+      orderBy: { index: "asc" },
+      include: { raceCpScripts: { orderBy: { index: "asc" } } },
+    });
+    if (cps.length >= 2) break;
+    race = null; // 无效赛道（<2 CP）
+    if (raceId) {
+      player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
+      return null;
+    }
   }
-  const cps = await prisma.raceCp.findMany({
-    where: { raceId },
-    orderBy: { index: "asc" },
-    include: { raceCpScripts: { orderBy: { index: "asc" } } },
-  });
-  if (cps.length < 2) {
-    player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
+  if (!race) {
+    player.sendClientMessage(COLOR_ERROR, "暂无可用赛道");
     return null;
   }
   const room: RaceRoom = {
     id: nextRoomId++,
-    raceId,
+    raceId: race.id,
     raceName: race.name,
     authorName: race.sysUser?.username ?? "未知",
     laps: Math.max(1, race.laps ?? 1),
@@ -337,6 +400,71 @@ export async function createRaceRoom(player: Player, raceId: string): Promise<Ra
   return room;
 }
 
+/**
+ * 房主更换房间赛道（WAITING 阶段，开赛后锁定）。
+ * raceId 为空 → 随机换一张（全部随机）。
+ * 更新房间赛道数据 + 重定位所有成员（起点 + TD 刷新 + CP 箭头重建）。
+ */
+export async function changeRoomTrack(player: Player, raceId?: string): Promise<boolean> {
+  const pr = playerRaces.get(player.id);
+  const room = pr ? rooms.get(pr.roomId) : undefined;
+  if (!room) {
+    player.sendClientMessage(COLOR_ERROR, "你不在比赛房间中");
+    return false;
+  }
+  if (room.ownerId !== player.id) {
+    player.sendClientMessage(COLOR_ERROR, "只有房主能更换赛道");
+    return false;
+  }
+  if (room.state !== "WAITING") {
+    player.sendClientMessage(COLOR_ERROR, "比赛已开始，不能更换赛道");
+    return false;
+  }
+  const race = raceId
+    ? await prisma.race.findUnique({ where: { id: raceId }, include: { sysUser: true } })
+    : await pickRandomRace();
+  if (!race || !race.isEnabled || race.deletedAt) {
+    player.sendClientMessage(COLOR_ERROR, "赛道不存在或未启用");
+    return false;
+  }
+  const cps = await prisma.raceCp.findMany({
+    where: { raceId: race.id },
+    orderBy: { index: "asc" },
+    include: { raceCpScripts: { orderBy: { index: "asc" } } },
+  });
+  if (cps.length < 2) {
+    player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
+    return false;
+  }
+  // 更新房间赛道数据（开赛前的等待阶段，成员进度均为 0）
+  room.raceId = race.id;
+  room.raceName = race.name;
+  room.authorName = race.sysUser?.username ?? "未知";
+  room.laps = Math.max(1, race.laps ?? 1);
+  room.cps = cps.map((c) => ({
+    index: c.index,
+    id: c.id,
+    x: Number(c.x),
+    y: Number(c.y),
+    z: Number(c.z),
+    angle: Number(c.angle),
+    size: Number(c.size),
+    scripts: c.raceCpScripts.map((s) => s.script),
+  }));
+  room.bestTimes.clear(); // 新赛道 BEST 缓存失效（重查）
+  // 重定位所有成员：进度重置 + 起点 + TD 刷新 + CP 箭头重建
+  for (const m of room.members.values()) {
+    const mp = playerRaces.get(m.id);
+    if (!mp) continue;
+    mp.cpIndex = -1;
+    mp.lap = 0;
+    mp.startTime = 0;
+    await positionPlayerAtStart(m, room);
+  }
+  broadcastToRoom(room, `[赛车] 房主将赛道更换为「${race.name}」，成员已移至起点`);
+  return true;
+}
+
 async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   // 已参与其他房间则先离开（防止 playerRaces 被覆盖、旧房间残留成员）
   if (isInRace(player.id)) {
@@ -354,66 +482,7 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
     finished: false,
     prevWorld: player.getVirtualWorld(),
   });
-  // 加入即定位到第一个 CP 起点（对齐原版 Race_Game_Join：玩家有自己的车就用
-  // 自己的车放起点）并显示第一个 CP 箭头（指向第二个），等待/热身阶段就站在
-  // 起点看到目标。
-  // 目标车型 = 第一 CP 的 cveh 脚本车型（赛道标准车，如无则维持玩家当前爱车）：
-  // 进赛道即以该车为标准——玩家有该模型爱车则直接开进来，没有则自动创建成爱车
-  // （懒创建，对齐"没这个模型的爱车就为它创建一辆"）。第一 CP 触碰时不再临时换车。
-  const first = room.cps[0];
-  if (first) {
-    const defaultModel = getDefaultRaceModel(room.cps);
-    const owned = getOwnedVehicle(player.id);
-    if (owned && owned.isValid()) {
-      // 有爱车：模型 = 赛道标准车型 → 直接用；模型不同 → 重刷成标准车型爱车
-      // （销毁旧车 + 懒创建，玩家始终以标准车参赛）
-      if (owned.getModel() !== defaultModel) {
-        await spawnVehicle(player, defaultModel, true);
-        player.sendClientMessage(COLOR_RACE, `[赛车] 本赛道标准车型为 ${defaultModel}，已切换为对应爱车`);
-      }
-      const veh = getOwnedVehicle(player.id);
-      if (veh && veh.isValid()) {
-        veh.setPos(first.x, first.y, first.z);
-        veh.setZAngle(first.angle);
-        veh.putPlayerIn(player, 0);
-        player.setFacingAngle(first.angle); // putPlayerIn 后视角跟随车辆朝向的兜底
-      }
-    } else if (player.isInAnyVehicle()) {
-      // 没爱车但人在某辆车里：若是标准车型 → 挪当前车；否则也以标准车型刷爱车
-      const veh = player.getVehicle()!;
-      if (veh.getModel() === defaultModel) {
-        veh.setPos(first.x, first.y, first.z);
-        veh.setZAngle(first.angle);
-        player.setFacingAngle(first.angle); // 车内旋转车辆后玩家朝向同步（防视角没跟上）
-      } else {
-        await spawnVehicle(player, defaultModel, true);
-        player.sendClientMessage(COLOR_RACE, `[赛车] 本赛道标准车型为 ${defaultModel}，已刷为对应爱车`);
-        const v = getOwnedVehicle(player.id);
-        if (v && v.isValid()) {
-          v.setPos(first.x, first.y, first.z);
-          v.setZAngle(first.angle);
-          player.setFacingAngle(first.angle);
-        }
-      }
-    } else {
-      // 都没 → 用标准车型刷爱车（有该模型爱车则复用外观，没有则自动创建
-      // 成爱车——玩家始终用自己的爱车比赛），原地放入
-      await spawnVehicle(player, defaultModel, true);
-      const veh = getOwnedVehicle(player.id);
-      if (veh && veh.isValid()) {
-        veh.setPos(first.x, first.y, first.z);
-        veh.setZAngle(first.angle);
-        player.setFacingAngle(first.angle);
-      }
-    }
-    // 创建比赛信息 UI（加入房间即显示，对齐原版 Race_Game_Join → CreatePRaceTextDraw；
-    // 倒计时/开赛不再重建）
-    const tds = createRaceTd(player, room);
-    void updateBestTd(player, room, tds);
-    // 显示第一个 CP（红色箭头指向第二个；open.mp 切换世界不改变坐标，
-    // 开赛切到比赛世界后仍站在同一位置，beginRace 的 setPos 幂等保留）
-    showNextCheckpoint(player, room.cps, -1);
-  }
+  await positionPlayerAtStart(player, room);
   // 提示：房主（创建者）不需要"等待房主开始"；无车兜底说明已刷默认比赛车
   const noCarHint = !getOwnedVehicle(player.id) ? "（无车已自动刷默认比赛车，可用 /c 换爱车）" : "";
   if (room.ownerId === player.id) {
@@ -427,6 +496,77 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
       `你加入了比赛房间（赛道 ${room.raceName}），等待房主开始${noCarHint}`,
     );
   }
+}
+
+/**
+ * 定位玩家到赛道起点（第一 CP）+ 创建比赛信息 UI。
+ * 目标车型 = 第一 CP 的 cveh 脚本车型（赛道标准车，如无则维持玩家当前爱车）：
+ * 进赛道即以该车为标准——玩家有该模型爱车则直接开进来，没有则自动创建成爱车
+ * （懒创建，对齐"没这个模型的爱车就为它创建一辆"）。第一 CP 触碰时不再临时换车。
+ * joinRoom（加入）与 changeRoomTrack（换赛道）共用。
+ */
+async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<void> {
+  const first = room.cps[0];
+  if (!first) return;
+  // 换赛道时该成员已有旧赛道 TD → 先销毁重建（joinRoom 无旧 TD，天然跳过）
+  const oldTds = room.raceTextTds.get(player.id);
+  if (oldTds) {
+    for (const td of Object.values(oldTds)) {
+      if (td.isValid()) td.destroy();
+    }
+    room.raceTextTds.delete(player.id);
+  }
+  const defaultModel = getDefaultRaceModel(room.cps);
+  const owned = getOwnedVehicle(player.id);
+  if (owned && owned.isValid()) {
+    // 有爱车：模型 = 赛道标准车型 → 直接用；模型不同 → 重刷成标准车型爱车
+    // （销毁旧车 + 懒创建，玩家始终以标准车参赛）
+    if (owned.getModel() !== defaultModel) {
+      await spawnVehicle(player, defaultModel, true);
+      player.sendClientMessage(COLOR_RACE, `[赛车] 本赛道标准车型为 ${defaultModel}，已切换为对应爱车`);
+    }
+    const veh = getOwnedVehicle(player.id);
+    if (veh && veh.isValid()) {
+      veh.setPos(first.x, first.y, first.z);
+      veh.setZAngle(first.angle);
+      veh.putPlayerIn(player, 0);
+      player.setFacingAngle(first.angle); // putPlayerIn 后视角跟随车辆朝向的兜底
+    }
+  } else if (player.isInAnyVehicle()) {
+    // 没爱车但人在某辆车里：若是标准车型 → 挪当前车；否则也以标准车型刷爱车
+    const veh = player.getVehicle()!;
+    if (veh.getModel() === defaultModel) {
+      veh.setPos(first.x, first.y, first.z);
+      veh.setZAngle(first.angle);
+      player.setFacingAngle(first.angle); // 车内旋转车辆后玩家朝向同步（防视角没跟上）
+    } else {
+      await spawnVehicle(player, defaultModel, true);
+      player.sendClientMessage(COLOR_RACE, `[赛车] 本赛道标准车型为 ${defaultModel}，已刷为对应爱车`);
+      const v = getOwnedVehicle(player.id);
+      if (v && v.isValid()) {
+        v.setPos(first.x, first.y, first.z);
+        v.setZAngle(first.angle);
+        player.setFacingAngle(first.angle);
+      }
+    }
+  } else {
+    // 都没 → 用标准车型刷爱车（有该模型爱车则复用外观，没有则自动创建
+    // 成爱车——玩家始终用自己的爱车比赛），原地放入
+    await spawnVehicle(player, defaultModel, true);
+    const veh = getOwnedVehicle(player.id);
+    if (veh && veh.isValid()) {
+      veh.setPos(first.x, first.y, first.z);
+      veh.setZAngle(first.angle);
+      player.setFacingAngle(first.angle);
+    }
+  }
+  // 创建比赛信息 UI（加入房间即显示，对齐原版 Race_Game_Join → CreatePRaceTextDraw；
+  // 倒计时/开赛不再重建；换赛道时需先销毁旧的再重建）
+  const tds = createRaceTd(player, room);
+  void updateBestTd(player, room, tds);
+  // 显示第一个 CP（红色箭头指向第二个；open.mp 切换世界不改变坐标，
+  // 开赛切到比赛世界后仍站在同一位置，beginRace 的 setPos 幂等保留）
+  showNextCheckpoint(player, room.cps, -1);
 }
 
 /** 房主开始比赛：倒计时 5s */
@@ -1080,15 +1220,12 @@ export function initRaceSystem(): void {
       if (query) {
         void startRaceFlow(player, query);
       } else {
-        // 无参数：房主在房间内则开始比赛，否则提示用法
+        // 无参数：房主在房间内则开始比赛，否则随机创建（全部随机）
         const pr = playerRaces.get(player.id);
         if (pr && rooms.get(pr.roomId)?.ownerId === player.id) {
           void startRace(player);
         } else {
-          player.sendClientMessage(
-            COLOR_RACE,
-            "用法: /r s 赛道名称 创建比赛 · /r j 加入 · /r l 离开",
-          );
+          void startRaceFlow(player, "");
         }
       }
     } else if (cmd === "j") {
@@ -1215,10 +1352,14 @@ export function respawnToLastCp(player: Player, pr: PlayerRace, room: RaceRoom):
   player.sendClientMessage(COLOR_RACE, "[赛车] 已重生回上一个检查点");
 }
 
-/** 开始比赛流程：按赛道名/ID 创建房间 */
+/** 开始比赛流程：按赛道名/ID 创建房间；无赛道名或不存在 → 全部随机 */
 async function startRaceFlow(player: Player, query: string): Promise<void> {
   if (!query) {
-    player.sendClientMessage(COLOR_RACE, "用法: /r s 赛道名称 或 /r s 赛道ID");
+    // 无赛道名 → 全部随机创建（用户选择"随机一张"）
+    const room = await createRaceRoom(player, null);
+    if (room) {
+      player.sendClientMessage(COLOR_RACE, "再输入 /r s 开始比赛，或用面板「更换赛道」换一张");
+    }
     return;
   }
   // 先按名字查（同名字符串，参数安全）；查不到且 query 形如 uuid 才按 id 查——
@@ -1234,7 +1375,12 @@ async function startRaceFlow(player: Player, query: string): Promise<void> {
         })
       : null);
   if (!race) {
-    player.sendClientMessage(COLOR_ERROR, "未找到该赛道");
+    // 指定赛道不存在 → 全部随机创建（对齐"名字不存在 = 全部随机"语义）
+    player.sendClientMessage(COLOR_RACE, `未找到赛道「${query}」，已随机创建比赛房间`);
+    const room = await createRaceRoom(player, null);
+    if (room) {
+      player.sendClientMessage(COLOR_RACE, "再输入 /r s 开始比赛，或用面板「更换赛道」换一张");
+    }
     return;
   }
   const room = await createRaceRoom(player, race.id);
@@ -1244,22 +1390,75 @@ async function startRaceFlow(player: Player, query: string): Promise<void> {
   }
 }
 
-/**
- * /r 无参数 → 赛道列表对话框（对齐原版 Race_ShowGameMainSel 分页列表）。
- * 分页多列展示启用赛道（# 名称 长度 圈数 作者），选择后直接创建比赛。
- */
-async function openRaceListDialog(player: Player): Promise<void> {
-  const races = await prisma.race.findMany({
+/** 全部随机的占位赛道 id（列表首行：随机抽一张创建） */
+const RANDOM_RACE_ID = "__RANDOM__";
+
+/** 查询启用赛道（分页选择共用：列表创建 + 换赛道） */
+async function fetchEnabledRaces(): Promise<
+  { id: string; name: string; totalLength: unknown; laps: number | null; sysUser: { username: string } | null }[]
+> {
+  return prisma.race.findMany({
     where: { isEnabled: true, deletedAt: null },
     orderBy: { createdAt: "desc" },
     include: { sysUser: true },
   });
+}
+
+/**
+ * /r 无参数 → 赛道列表对话框（对齐原版 Race_ShowGameMainSel 分页列表）。
+ * 首行「全部随机」→ 随机抽一张赛道创建房间；其余选中直接创建。
+ */
+async function openRaceListDialog(player: Player): Promise<void> {
+  const races = await fetchEnabledRaces();
   if (races.length === 0) {
     player.sendClientMessage(COLOR_ERROR, "暂无可用赛道");
     return;
   }
+  // 首行「全部随机」：id 用占位符，其余字段留空（format 按 id 分支）
+  const data: (typeof races)[number][] = [
+    { id: RANDOM_RACE_ID, name: "", totalLength: null, laps: null, sysUser: null },
+    ...races,
+  ];
   const r = await showPagedDialog(player, {
     caption: "选择赛道开始比赛",
+    data,
+    headers: ["#", "名称", "长度", "圈数", "作者"],
+    format: (race, index) =>
+      race.id === RANDOM_RACE_ID
+        ? ["🎲", "全部随机（随机一张赛道）", "", "", ""]
+        : [
+            String(index),
+            race.name,
+            `${Math.round(Number(race.totalLength))}m`,
+            `${race.laps ?? 1}`,
+            race.sysUser?.username ?? "?",
+          ],
+    button1: "开始",
+    button2: "取消",
+  });
+  if (!r) return;
+  const room =
+    r.item.id === RANDOM_RACE_ID
+      ? await createRaceRoom(player, null)
+      : await createRaceRoom(player, r.item.id);
+  if (room) {
+    player.sendClientMessage(COLOR_RACE, "再输入 /r s 开始比赛");
+  }
+}
+
+/** 赛道选择器（换赛道/创建共用）：分页选择返回选中赛道，取消返回 null */
+async function showTrackPicker(
+  player: Player,
+  title: string,
+  button: string,
+): Promise<{ id: string } | null> {
+  const races = await fetchEnabledRaces();
+  if (races.length === 0) {
+    player.sendClientMessage(COLOR_ERROR, "暂无可用赛道");
+    return null;
+  }
+  const r = await showPagedDialog(player, {
+    caption: title,
     data: races,
     headers: ["#", "名称", "长度", "圈数", "作者"],
     format: (race, index) => [
@@ -1269,14 +1468,36 @@ async function openRaceListDialog(player: Player): Promise<void> {
       `${race.laps ?? 1}`,
       race.sysUser?.username ?? "?",
     ],
-    button1: "开始",
+    button1: button,
     button2: "取消",
   });
-  if (!r) return;
-  const room = await createRaceRoom(player, r.item.id);
-  if (room) {
-    player.sendClientMessage(COLOR_RACE, "再输入 /r s 开始比赛");
+  if (!r) return null;
+  return r.item;
+}
+
+/** 面板「更换赛道」：随机换一张 / 从列表选择（房主 + WAITING） */
+export async function openChangeTrackMenu(player: Player, back?: () => void | Promise<void>): Promise<void> {
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: "更换赛道",
+      info: "1. 随机换一张\n2. 从列表选择",
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!res) return;
+  if (res.response !== 1) return back?.();
+  if (res.listItem === 0) {
+    await changeRoomTrack(player);
+  } else if (res.listItem === 1) {
+    const race = await showTrackPicker(player, "选择新赛道", "更换");
+    if (race) {
+      await changeRoomTrack(player, race.id);
+    }
   }
+  return back?.();
 }
 
 /** 加入房间流程 */
