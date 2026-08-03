@@ -15,7 +15,7 @@ import { getAuthState } from "@/auth/auth";
 import { isInRace } from "@/race/room";
 import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
 import { getDefaultRaceModel } from "@/race/vehicle";
-import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
+import { setIntervalSafe, clearIntervalSafe, setTimeoutSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { parseReplayFile, type ReplayData } from "./format";
 import { join } from "node:path";
@@ -292,7 +292,24 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     tickMs: 0,
   };
   challenges.set(player.id, ch);
-  ch.timer = setIntervalSafe(() => tickChallenge(ch), 16);
+  // 发车倒计时 3 秒（对齐比赛：~y~N + 音效 1056；倒计时期间 ghost 停在起点、不计玩家用时）。
+  // 倒计时结束才启动 ghost 推进定时器（登记制）
+  let cd = 3;
+  const countdown = (): void => {
+    if (cd <= 0) {
+      const go = new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
+      go.forPlayer(player);
+      player.playSound(1057);
+      ch.timer = setIntervalSafe(() => tickChallenge(ch), 16);
+      return;
+    }
+    const gt = new GameText(`~y~${cd}`, 850, 3);
+    gt.forPlayer(player);
+    player.playSound(1056);
+    cd--;
+    setTimeoutSafe(countdown, 1000);
+  };
+  countdown();
 
   // 玩家放入（有爱车则用（模型不符也直接用——挑战自由），无则刷标准车型）
   const owned = getOwnedVehicle(player.id);
@@ -321,10 +338,6 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
   const nxt2 = ch.cps[1];
   RaceCheckpoint.set(player, 0, ch.cps[0].x, ch.cps[0].y, ch.cps[0].z, nxt2.x, nxt2.y, nxt2.z, ch.cps[0].size);
   player.sendClientMessage(COLOR_SUCCESS, `影子挑战开始！目标 ${replay.raceName ?? "该赛道"}，追上影子 /challenge stop 退出`);
-  // 同步起跑提示
-  const gt = new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
-  gt.forPlayer(player);
-  player.playSound(1057);
   return true;
 }
 
