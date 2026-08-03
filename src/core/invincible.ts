@@ -1,4 +1,4 @@
-import { BulletHitTypesEnum, Player, PlayerEvent, Vehicle } from "@infernus/core";
+import { BulletHitTypesEnum, GameMode, Player, PlayerEvent, Vehicle } from "@infernus/core";
 import { BulletSync, IPacket, PacketIdList } from "@infernus/raknet";
 import { getSetting } from "@/personalize/settings";
 import { applyDefaultArmor } from "@/core/armor";
@@ -100,28 +100,34 @@ export function initInvincible(): void {
 
   // raknet 层：子弹同步包拦截——目标为无敌玩家/其车辆时直接丢弃该包。
   // Pawn.RakNet 约定：return true(1) = 拦截包不交给游戏处理。
-  try {
-    IPacket(PacketIdList.BulletSync, ({ bs, next }) => {
-      try {
-        const bullet = new BulletSync(bs).readSync();
-        bs.resetReadPointer(); // 不拦截时恢复读取位置，让游戏正常处理
-        if (!bullet) return next();
-        if (bullet.hitType === BulletHitTypesEnum.PLAYER && invincibleSet.has(bullet.hitId)) {
-          return true; // 丢弃朝无敌玩家飞来的子弹包
-        }
-        if (bullet.hitType === BulletHitTypesEnum.VEHICLE) {
-          const veh = Vehicle.getInstance(bullet.hitId);
-          const driver = veh?.getDriver();
-          if (driver && invincibleSet.has(driver.id)) {
-            return true; // 丢弃朝无敌玩家车辆飞来的子弹包（保护车辆不被击毁）
+  // 注册延后到 GameMode.onInit：Pawn.RakNet 的 RegisterPacket 原生与 streamer
+  // 同理，模块导入期（Loaded Map 前）注册会静默失败（不抛错、无 warn、回调
+  // 永不触发）——否则无敌的子弹包拦截形同虚设，只剩回血兜底。
+  GameMode.onInit(({ next }) => {
+    try {
+      IPacket(PacketIdList.BulletSync, ({ bs, next }) => {
+        try {
+          const bullet = new BulletSync(bs).readSync();
+          bs.resetReadPointer(); // 不拦截时恢复读取位置，让游戏正常处理
+          if (!bullet) return next();
+          if (bullet.hitType === BulletHitTypesEnum.PLAYER && invincibleSet.has(bullet.hitId)) {
+            return true; // 丢弃朝无敌玩家飞来的子弹包
           }
+          if (bullet.hitType === BulletHitTypesEnum.VEHICLE) {
+            const veh = Vehicle.getInstance(bullet.hitId);
+            const driver = veh?.getDriver();
+            if (driver && invincibleSet.has(driver.id)) {
+              return true; // 丢弃朝无敌玩家车辆飞来的子弹包（保护车辆不被击毁）
+            }
+          }
+          return next();
+        } catch {
+          return next(); // 异常包不拦截，放行给游戏处理
         }
-        return next();
-      } catch {
-        return next(); // 异常包不拦截，放行给游戏处理
-      }
-    });
-  } catch (e) {
-    logger.warn(`[invincible] raknet 插件未加载，无敌仅靠回血兜底: ${e}`);
-  }
+      });
+    } catch (e) {
+      logger.warn(`[invincible] raknet 插件未加载，无敌仅靠回血兜底: ${e}`);
+    }
+    return next();
+  });
 }
