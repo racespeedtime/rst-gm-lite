@@ -179,6 +179,28 @@ export function initSpawnSystem(): void {
     void saveAllOnlinePositions();
   }, SAVE_INTERVAL_MS);
 
+  // 出生请求闸门：open.mp 的 RequestSpawn 处理对观战状态不做任何检查，观战
+  // （spect）中的玩家仍会被客户端的自动出生请求直接放行（toSpawn_=true）强制
+  // 出生。而服务器侧 spectateData.spectating 只有 Player::spawn() 会清除——
+  // 客户端已经出生可见，服务器却仍认为在观战，导致旧 onSpawn 兜底里的
+  // toggleSpectating(true) 因状态相同直接 return（no-op），玩家以"服务器认为
+  // 隐身、客户端实际可见"的错乱态出现在世界（认证/出生方式对话框期间出生）。
+  // 因此在 spect 未解除期间同步拦截出生请求：认证流程、大厅对话框、观战中一律
+  // 禁止客户端自发出生，只有正式出生（spawnPlayer）解除 spect 后才放行。
+  // 注意：spawnPlayer/比赛重生等走服务器端 Player::spawn()，不经过该请求，不受影响。
+  PlayerEvent.onRequestSpawn(({ player, next }) => {
+    if (player.isNpc()) {
+      return next();
+    }
+    // 观战模式下拒绝出生请求（必须同步 return false——async 返回值会被忽略，
+    // 放行请求导致上述错乱态）
+    if (player.isSpectating()) {
+      return false;
+    }
+    // 非观战（正式出生后 / 死亡重生 / 退出观战 / 重连恢复）：放行
+    return true;
+  });
+
   // 每次出生/重生（含死亡重生、/kill）按 spawnMode 自动定位。
   // 登录首次出生由 spawnPlayer 的 setSpawnInfo 定位——跳过本逻辑，
   // 否则 RANDOM 会再随机一次，出现两个不同出生点。
@@ -188,9 +210,10 @@ export function initSpawnSystem(): void {
     if (loginSpawned.delete(player.id)) return next();
     // 兜底：已认证但仍处于 spect（出生方式/进入世界对话框未完成）却触发了
     // 出生（open.mp 默认出生/时序竞态）→ 维持 spect 隐藏（拉回不可见无实体），
-    // 等 spawnPlayer 正式出生时一并 toggleSpectating(false)
+    // 等 spawnPlayer 正式出生时一并 toggleSpectating(false)。
+    // （onRequestSpawn 闸门已拦截 spect 期间的出生请求，此兜底仅防客户端绕过
+    // 请求直接发 Spawn RPC 的极端情况。）
     if (getAuthState(player.id) && player.isSpectating()) {
-      player.toggleSpectating(true);
       return next();
     }
     // 正常死亡重生：按 spawnMode 自动定位（随机/上次位置）
