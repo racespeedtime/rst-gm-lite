@@ -12,6 +12,7 @@ import {
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
+import { getOwnedVehicle } from "@/vehicles";
 import { invalidateSettingCache, getSetting } from "@/personalize/settings";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
@@ -46,11 +47,34 @@ interface AttireEditState {
 const playerEditing = new Map<number, AttireEditState>();
 const vehicleEditing = new Map<number, AttireEditState>();
 
+/** 人物骨骼列表（对齐原版 bone 目录，两处使用共用一份） */
+const PLAYER_BONES = [
+  "1 脊柱",
+  "2 头",
+  "3 左上臂",
+  "4 右上臂",
+  "5 左手",
+  "6 右手",
+  "7 左大腿",
+  "8 右大腿",
+  "9 左脚",
+  "10 右脚",
+  "11 右小腿",
+  "12 左小腿",
+  "13 左小臂",
+  "14 右小臂",
+  "15 左肩",
+  "16 右肩",
+  "17 颈",
+  "18 下巴",
+];
+
 /**
  * 应用人物预设：按 preset_item 顺序 setAttachedObject（bone 附着）。
  * 先清空已有槽位，再逐件应用（上限 20 槽）。
+ * 返回是否实际应用（false = 装扮显示关闭 / 预设不存在，调用方提示与实际一致）。
  */
-export async function applyPlayerPreset(player: Player, presetId: string | null): Promise<void> {
+export async function applyPlayerPreset(player: Player, presetId: string | null): Promise<boolean> {
   // 清空已附着对象
   for (const obj of appliedPlayerObjs.get(player.id) ?? []) {
     if (obj.isValid()) obj.destroy();
@@ -63,15 +87,18 @@ export async function applyPlayerPreset(player: Player, presetId: string | null)
       player.removeAttachedObject(i);
     }
   }
-  if (!presetId) return;
+  if (!presetId) {
+    appliedPresetByPlayer.set(player.id, null);
+    return true;
+  }
   // 人物装扮显示开关：关闭则不应用（菜单提示与实际行为一致）
   const setting = await getSetting(player);
-  if (setting && !setting.showPlayerAttire) return;
+  if (setting && !setting.showPlayerAttire) return false;
   const preset = await prisma.playerPreset.findUnique({
     where: { id: presetId },
     include: { items: { include: { attire: true } } },
   });
-  if (!preset) return;
+  if (!preset) return false;
   let slot = 0;
   const slotMap = new Map<number, string>();
   for (const item of preset.items) {
@@ -96,6 +123,7 @@ export async function applyPlayerPreset(player: Player, presetId: string | null)
   playerSlotMap.set(player.id, slotMap);
   // 记录当前应用的预设（死亡重生/重连时重新应用）
   appliedPresetByPlayer.set(player.id, presetId);
+  return true;
 }
 
 /**
@@ -471,8 +499,12 @@ async function playerPresetDetail(
   const idx = r.listItem;
   const toThis = () => playerPresetDetail(player, presetId, skinId, back);
   if (idx === 0) {
-    await applyPlayerPreset(player, presetId);
-    player.sendClientMessage(COLOR_SUCCESS, "已应用人物预设");
+    // B9：应用结果与实际一致（装扮显示关闭时提示"未展示"）
+    const applied = await applyPlayerPreset(player, presetId);
+    player.sendClientMessage(
+      applied ? COLOR_SUCCESS : COLOR_ERROR,
+      applied ? "已应用人物预设" : "装扮显示已关闭，未展示（可到「界面个性化」打开）",
+    );
     await toThis();
   } else if (idx === 1) {
     await addPlayerPresetItem(player, presetId, skinId, toThis);
@@ -489,6 +521,13 @@ async function playerPresetDetail(
   } else if (idx === options.length - 1) {
     await confirmDeletePreset(player, presetId, skinId, "人物");
     await back?.();
+  }
+}
+
+/** 仅当该预设正应用在玩家身上时才重应用（编辑/移除未上身的预设不强制替换当前装扮） */
+async function reapplyIfActive(player: Player, presetId: string): Promise<void> {
+  if (appliedPresetByPlayer.get(player.id) === presetId) {
+    await applyPlayerPreset(player, presetId);
   }
 }
 
@@ -513,7 +552,9 @@ async function editPlayerPresetItem(
   if (!res) return;
   if (res.response !== 1) return back?.();
   if (res.listItem === 0) {
-    await startEditPlayerAttire(player, item.id, presetId);
+    // B1：实时编辑失败（未穿戴）→ 回单件菜单，不丢面板流程
+    const ok = await startEditPlayerAttire(player, item.id, presetId);
+    if (!ok) return back?.();
     return; // 编辑结束后不弹回菜单（拖拽是独立交互）
   } else if (res.listItem === 1) {
     await adjustPlayerPresetItem(player, item.id, item.attire.name, presetId, back);
@@ -522,18 +563,19 @@ async function editPlayerPresetItem(
   } else if (res.listItem === 3) {
     await prisma.playerPresetItem.delete({ where: { id: item.id } });
     player.sendClientMessage(COLOR_SUCCESS, `已移除装扮 ${item.attire.name}`);
-    // 重新应用（当前预设已应用时，移除后身上的挂件同步消失）
-    await applyPlayerPreset(player, presetId);
+    // 仅当该预设正应用时重应用（未上身的预设不移除时强制替换当前装扮）
+    await reapplyIfActive(player, presetId);
     await playerPresetDetail(player, presetId, skinId, back);
   }
 }
 
-/** 开始实时编辑人物挂件：找到该件占用的槽位，进入原生 EditAttachedObject 拖拽编辑 */
+/** 开始实时编辑人物挂件：找到该件占用的槽位，进入原生 EditAttachedObject 拖拽编辑。
+ *  返回是否成功（未穿戴/失败 → false，调用方回菜单） */
 async function startEditPlayerAttire(
   player: Player,
   itemId: string,
   presetId: string,
-): Promise<void> {
+): Promise<boolean> {
   const slotMap = playerSlotMap.get(player.id);
   const slot = slotMap ? [...slotMap.entries()].find(([, id]) => id === itemId)?.[0] : undefined;
   if (slot == null) {
@@ -541,12 +583,13 @@ async function startEditPlayerAttire(
       COLOR_ERROR,
       "该装扮未穿戴在身上（先应用此预设），无法实时编辑",
     );
-    return;
+    return false;
   }
   // 登记编辑态：onPlayerEditAttached 回调按 playerId 取到 presetId/itemId 落库
   playerEditing.set(player.id, { presetId, itemId });
   player.sendClientMessage(COLOR_WHITE, "[装扮] 拖拽调整位置，按保存键确认（Enter/点击保存）保存，Esc 取消");
   player.editAttachedObject(slot);
+  return true;
 }
 
 /** 调整单件装扮的位置/旋转/缩放（输入 9 个数，留空保持当前值），调整后自动应用 */
@@ -596,8 +639,8 @@ async function adjustPlayerPresetItem(
     },
   });
   player.sendClientMessage(COLOR_SUCCESS, `已调整装扮「${name}」的位置/旋转/缩放`);
-  // 重新应用当前预设，让玩家身上的挂件立即更新
-  await applyPlayerPreset(player, presetId);
+  // 仅当该预设正应用时重应用（调整未上身的预设不强制替换当前装扮）
+  await reapplyIfActive(player, presetId);
   return back?.();
 }
 
@@ -612,26 +655,7 @@ async function changePlayerPresetBone(
 ): Promise<void> {
   const item = await prisma.playerPresetItem.findUnique({ where: { id: itemId } });
   if (!item) return;
-  const bones = [
-    "1 脊柱",
-    "2 头",
-    "3 左上臂",
-    "4 右上臂",
-    "5 左手",
-    "6 右手",
-    "7 左大腿",
-    "8 右大腿",
-    "9 左脚",
-    "10 右脚",
-    "11 右小腿",
-    "12 左小腿",
-    "13 左小臂",
-    "14 右小臂",
-    "15 左肩",
-    "16 右肩",
-    "17 颈",
-    "18 下巴",
-  ];
+  const bones = PLAYER_BONES;
   const boneRes = await showDialog(
     player,
     new Dialog({
@@ -651,8 +675,8 @@ async function changePlayerPresetBone(
   }
   await prisma.playerPresetItem.update({ where: { id: itemId }, data: { boneId } });
   player.sendClientMessage(COLOR_SUCCESS, `「${name}」已挂到骨骼 ${bones[boneId - 1]}`);
-  // 应用当前预设使玩家身上的挂件立即更新（重新 setAttachedObject）
-  await applyPlayerPreset(player, presetId);
+  // 仅当该预设正应用时重应用（换骨未上身的预设不强制替换当前装扮）
+  await reapplyIfActive(player, presetId);
   return back?.();
 }
 
@@ -688,26 +712,7 @@ async function addPlayerPresetItem(
   if (!r) return back?.();
   const attire = r.item;
   // 骨骼选择
-  const boneOptions = [
-    "1 脊柱",
-    "2 头",
-    "3 左上臂",
-    "4 右上臂",
-    "5 左手",
-    "6 右手",
-    "7 左大腿",
-    "8 右大腿",
-    "9 左脚",
-    "10 右脚",
-    "11 右小腿",
-    "12 左小腿",
-    "13 左小臂",
-    "14 右小臂",
-    "15 左肩",
-    "16 右肩",
-    "17 颈",
-    "18 下巴",
-  ];
+  const boneOptions = PLAYER_BONES;
   const boneRes = await showDialog(
     player,
     new Dialog({
@@ -769,6 +774,8 @@ async function addPlayerPresetItem(
       },
     });
     player.sendClientMessage(COLOR_SUCCESS, `已添加装扮 ${attire.name}`);
+    // U1：该预设已应用时重应用（添加后身上的挂件即时出现，与移除路径一致）
+    await reapplyIfActive(player, presetId);
     await playerPresetDetail(player, presetId, skinId, back);
   } catch (e) {
     logger.error(`[attire] 添加人物装扮失败`, e);
@@ -965,11 +972,18 @@ async function vehiclePresetDetail(
   const veh = player.getVehicle();
   const toThis = () => vehiclePresetDetail(player, presetId, modelId, back);
   if (idx === 0) {
-    if (!veh) {
-      player.sendClientMessage(COLOR_ERROR, "你不在车内，无法应用预设");
+    // B8：预设只能应用到"自己的爱车"（在别人的车/乘客座上应用会污染他人车辆 +
+    // 挂件残留到他车上），且车型必须与预设匹配（选 411 的预设挂到 560 上会错位）
+    const owned = getOwnedVehicle(player.id);
+    if (!owned || !owned.isValid() || owned !== veh) {
+      player.sendClientMessage(COLOR_ERROR, "请进入你的爱车后再应用车辆预设");
       return back?.();
     }
-    await applyVehiclePreset(veh, presetId, player.id);
+    if (owned.getModel() !== modelId) {
+      player.sendClientMessage(COLOR_ERROR, `该预设属于模型 ${modelId}，请先刷对应模型的爱车（/c ${modelId}）`);
+      return back?.();
+    }
+    await applyVehiclePreset(owned, presetId, player.id);
     player.sendClientMessage(COLOR_SUCCESS, "已应用车辆预设");
     return toThis();
   } else if (idx === 1) {
@@ -1003,26 +1017,29 @@ async function editVehiclePresetItem(
   if (!res) return;
   if (res.response !== 1) return back?.();
   if (res.listItem === 0) {
-    await startEditVehicleAttire(player, item.id, presetId);
+    // B1：实时编辑失败（未挂载）→ 回单件菜单，不丢面板流程
+    const ok = await startEditVehicleAttire(player, item.id, presetId);
+    if (!ok) return back?.();
     return; // 编辑结束后不弹回菜单
   } else if (res.listItem === 1) {
     await adjustVehiclePresetItem(player, item.id, item.attire.name, presetId, back);
   } else if (res.listItem === 2) {
     await prisma.vehiclePresetItem.delete({ where: { id: item.id } });
     player.sendClientMessage(COLOR_SUCCESS, `已移除挂件 ${item.attire.name}`);
-    // 当前车辆重新应用，挂件即时消失
-    const veh = player.getVehicle();
-    if (veh) await applyVehiclePreset(veh, presetId, player.id);
+    // 当前爱车重新应用，挂件即时消失（用爱车而非 player.getVehicle，防别人车/乘客座）
+    const veh = getOwnedVehicle(player.id);
+    if (veh && veh.isValid()) await applyVehiclePreset(veh, presetId, player.id);
     await vehiclePresetDetail(player, presetId, modelId, back);
   }
 }
 
-/** 开始实时编辑车辆挂件：对该挂件的 DynamicObject 进入 obj 拖拽编辑 */
+/** 开始实时编辑车辆挂件：对该挂件的 DynamicObject 进入 obj 拖拽编辑。
+ *  返回是否成功（未挂载 → false，调用方回菜单） */
 async function startEditVehicleAttire(
   player: Player,
   itemId: string,
   presetId: string,
-): Promise<void> {
+): Promise<boolean> {
   const objMap = vehicleObjMap.get(player.id);
   const obj = objMap?.get(itemId);
   if (!obj || !obj.isValid()) {
@@ -1030,11 +1047,12 @@ async function startEditVehicleAttire(
       COLOR_ERROR,
       "该挂件未挂载（先应用此预设或坐进车内），无法实时编辑",
     );
-    return;
+    return false;
   }
   vehicleEditing.set(player.id, { presetId, itemId });
   player.sendClientMessage(COLOR_WHITE, "[装扮] 拖拽调整挂件位置，保存确认 / Esc 取消");
   obj.edit(player);
+  return true;
 }
 
 /** 调整单件车辆挂件的位置/旋转（输入 6 个数，留空保持当前值），调整后自动应用 */
@@ -1074,9 +1092,10 @@ async function adjustVehiclePresetItem(
     data: { x: nums[0], y: nums[1], z: nums[2], rX: nums[3], rY: nums[4], rZ: nums[5] },
   });
   player.sendClientMessage(COLOR_SUCCESS, `已调整挂件「${name}」的位置/旋转`);
-  // 当前车辆重新应用，挂件即时更新
-  const veh = player.getVehicle();
-  if (veh) await applyVehiclePreset(veh, presetId, player.id);
+  // B4：用爱车实体重应用（玩家在车内时 player.getVehicle 可能不是爱车/为空，
+  // 调整后已刷出的爱车挂件必须刷新）
+  const veh = getOwnedVehicle(player.id);
+  if (veh && veh.isValid()) await applyVehiclePreset(veh, presetId, player.id);
   return back?.();
 }
 
@@ -1152,6 +1171,9 @@ async function addVehiclePresetItem(
       },
     });
     player.sendClientMessage(COLOR_SUCCESS, `已添加挂件 ${attire.name}`);
+    // U1：该预设正应用在当前爱车时重应用（添加后挂件即时出现）
+    const veh = getOwnedVehicle(player.id);
+    if (veh && veh.isValid()) await applyVehiclePreset(veh, presetId, player.id);
     await vehiclePresetDetail(player, presetId, modelId, back);
   } catch (e) {
     logger.error(`[attire] 添加车辆挂件失败`, e);
@@ -1212,6 +1234,18 @@ async function confirmDeletePreset(
       }
     });
     player.sendClientMessage(COLOR_SUCCESS, `${kind}预设已删除`);
+    // B10：删除的是当前正应用/正穿着的预设 → 立即清理身上/爱车上的挂件
+    // （否则 DB 删了但挂件残留到下次重应用/断线）
+    if (kind === "人物") {
+      if (appliedPresetByPlayer.get(player.id) === presetId) {
+        await applyPlayerPreset(player, null);
+      }
+    } else {
+      const veh = getOwnedVehicle(player.id);
+      if (veh && veh.isValid() && veh.getModel() === modelRef) {
+        await applyVehiclePreset(veh, null, player.id);
+      }
+    }
   } catch (e) {
     logger.error(`[attire] 删除预设失败`, e);
     player.sendClientMessage(COLOR_ERROR, "删除失败");
@@ -1219,11 +1253,11 @@ async function confirmDeletePreset(
 }
 
 /**
- * 实时编辑回调解救（防编辑态残留）：
- * 编辑期间玩家死亡/离开/车辆被销毁等导致回调不来 → 编辑态残留，
- * 下次菜单点"实时编辑"会沿用旧状态。死亡/重生时兜底清一次。
+ * 编辑态兜底清理（死亡/重生时调用）：编辑期间玩家死亡/离开/车辆被销毁等
+ * 导致回调不来 → 编辑态残留，下次菜单点"实时编辑"会沿用旧状态。onSpawn
+ * 时清一次（死亡重生挂件由 spawn 流程重应用）。
  */
-export function cleanupAttireEditing(playerId: number): void {
+function cleanupAttireEditing(playerId: number): void {
   playerEditing.delete(playerId);
   vehicleEditing.delete(playerId);
 }
@@ -1252,8 +1286,12 @@ export function initAttireEditor(): void {
       }
       if (response === EditResponseTypesEnum.FINAL) {
         playerEditing.delete(player.id);
+      } else {
+        // UPDATE 预览帧：客户端本地编辑态已实时显示效果，不落库（防拖拽
+        // 每帧写 DB 造成几十上百次写）；仅 FINAL 保存时写一次
+        return next();
       }
-      // 保存（FINAL）或预览（UPDATE）：落库最新参数（预览时玩家持续拖拽看效果）
+      // 保存（FINAL）：落库最终参数
       void (async () => {
         try {
           await prisma.playerPresetItem.update({
@@ -1270,9 +1308,7 @@ export function initAttireEditor(): void {
               sZ: fScaleZ,
             },
           });
-          if (response === EditResponseTypesEnum.FINAL) {
-            player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
-          }
+          player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
         } catch (e) {
           logger.error(`[attire] 保存挂件编辑失败 ${player.getName().name}`, e);
           player.sendClientMessage(COLOR_ERROR, "[装扮] 保存失败");
@@ -1293,19 +1329,26 @@ export function initAttireEditor(): void {
       if (!obj || objectMp?.id !== obj.id) return next();
       if (response === EditResponseTypesEnum.CANCEL) {
         vehicleEditing.delete(player.id);
-        player.sendClientMessage(COLOR_WHITE, "[装扮] 已取消编辑");
+        // B3：取消后按 DB 值重应用（原位置恢复）——否则 DynamicObject 停在拖拽后
+        // 的位置但 DB 未变（所见与所存不一致），与人物挂件 CANCEL 行为对齐
+        const veh = getOwnedVehicle(player.id);
+        if (veh && veh.isValid()) {
+          void applyVehiclePreset(veh, st.presetId, player.id);
+        }
+        player.sendClientMessage(COLOR_WHITE, "[装扮] 已取消编辑，恢复原位置");
         return next();
       }
+      if (response !== EditResponseTypesEnum.FINAL) {
+        return next(); // UPDATE 预览帧不落库（防拖拽每帧写 DB），仅保存时写
+      }
+      vehicleEditing.delete(player.id);
       void (async () => {
         try {
           await prisma.vehiclePresetItem.update({
             where: { id: st.itemId },
             data: { x: fX, y: fY, z: fZ, rX: fRotX, rY: fRotY, rZ: fRotZ },
           });
-          if (response === EditResponseTypesEnum.FINAL) {
-            vehicleEditing.delete(player.id);
-            player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
-          }
+          player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
         } catch (e) {
           logger.error(`[attire] 保存车辆挂件编辑失败 ${player.getName().name}`, e);
           player.sendClientMessage(COLOR_ERROR, "[装扮] 保存失败");
@@ -1319,6 +1362,13 @@ export function initAttireEditor(): void {
   PlayerEvent.onDisconnect(({ player, next }) => {
     playerEditing.delete(player.id);
     vehicleEditing.delete(player.id);
+    return next();
+  });
+  // 死亡/重生兜底清编辑态（编辑中死亡回调不来 → 防编辑态残留）
+  PlayerEvent.onSpawn(({ player, next }) => {
+    if (playerEditing.has(player.id) || vehicleEditing.has(player.id)) {
+      cleanupAttireEditing(player.id);
+    }
     return next();
   });
 }
