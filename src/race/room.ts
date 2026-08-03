@@ -1128,13 +1128,16 @@ export function initRaceSystem(): void {
 }
 
 /**
- * 计算重生坐标：用 colandreas 找 CP 坐标的实际地面高度，
- * 防止玩家重生时卡进建筑物里。超出地图范围或 colandreas 不可用时回退 CP 原始高度。
+ * 计算重生坐标 Z：以 CP 原始高度为基准（对齐原版重生 SetPlayerPos 用 CP 坐标——
+ * CP 是赛道编辑时贴地放置的，原始 z 即正确地面高度）。
+ * colandreas 仅当 CP 原始 z 异常偏低（数据异常/水下）时抬升到实际地面，
+ * 避免把坡顶/桥上/平台上的 CP 压到下方地面（原实现无条件取地面导致重生偏低）。
  */
 function getSafeRespawnZ(cp: { x: number; y: number; z: number }): number {
   const ground = getSafeGroundZ(cp.x, cp.y, cp.z);
-  // 地面高度合理（不低于地图下限），取地面；否则用原高度
-  return ground > MIN_Z ? ground : cp.z;
+  // ground 合理时取 CP 原始 z 与地面的较高者；colandreas 不可用/超范围时
+  // ground 回退为 cp.z（等于 CP 原始高度），自然取 cp.z
+  return ground > MIN_Z ? Math.max(cp.z, ground) : cp.z;
 }
 
 /** 重生回上一 CP（死亡场景：setSpawnInfo + spawn 复活） */
