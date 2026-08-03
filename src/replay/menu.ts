@@ -73,10 +73,11 @@ export async function openReplayMenu(player: Player, back?: MenuBack): Promise<v
   const r = await showPagedDialog(player, {
     caption: `我的录制（${list.length}）`,
     data: list,
-    headers: ["类型", "赛道", "时长", "时间"],
+    headers: ["类型", "赛道", "名次", "时长", "时间"],
     format: (v) => [
       typeLabel(v.type),
       v.raceName || "—",
+      v.type === "race" ? (v.rank != null ? `No.${v.rank}` : "{FF0000}未完成") : "—",
       fmtDur(v.durationMs),
       v.createdAt.toLocaleString("zh-CN", { hour12: false }).slice(5, 16),
     ],

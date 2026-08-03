@@ -282,6 +282,8 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     });
     vehicle.create();
     vehicle.setVirtualWorld(worldId);
+    // 锁门防玩家开走影子车（影子只可看不可开；NPC 已在车内不受影响）
+    vehicle.setParamsEx(true, false, false, true, false, false, false);
     npc.setVirtualWorld(worldId);
     npc.putInVehicle(vehicle, 0);
     npc.setInvulnerable(true);

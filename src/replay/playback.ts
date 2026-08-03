@@ -62,6 +62,8 @@ export interface ReplaySession {
   ownerPrevWorld: number;
   /** 回放类型：ghost=自由录制（当前世界，大家可玩可控制）；race=比赛回放（独立世界+观战） */
   replayType: "ghost" | "race";
+  /** 录制时名次快照（race 回放 RANK TD 用；null = 未完成/无） */
+  rank: number | null;
   data: ReplayData;
   ghosts: Ghost[];
   /** 录制者名（回放标签"扮演谁"用；从 replay 记录取） */
@@ -72,6 +74,8 @@ export interface ReplaySession {
   direction: 1 | -1;
   speed: number; // 倍速 0.5~4
   timer?: NodeJS.Timeout;
+  /** 播放到结尾是否已提示过（防每帧重复提示"已播完"） */
+  endedNotified: boolean;
   /** 观战者（发起人 + /rp watch 的人）的比赛信息 TD：playerId → 4 行 TD */
   tds: Map<number, { cp: TextDraw; time: TextDraw; best: TextDraw; rank: TextDraw }>;
   /** 当前观战中的玩家（含发起人）：会话停止时统一退出观战（防观战者卡 spectating） */
@@ -167,16 +171,17 @@ function fmtRaceTime(ms: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(cs).padStart(2, "0")}`;
 }
 
-/** 给观战者创建比赛信息 TD（回放事件无关，从帧状态渲染） */
+/** 给观战者创建比赛信息 TD（回放事件无关，从帧状态渲染；rank 用录制名次快照） */
 function ensureObserverTds(session: ReplaySession, player: Player): void {
   if (session.tds.has(player.id)) return;
   const header = session.data.header;
   const best = header.bestMs >= 0 ? `BEST / ${fmtRaceTime(header.bestMs)}` : "BEST / --:--:--";
+  const rank = session.rank != null ? `RANK / No.${session.rank}` : "RANK / --";
   const tds = {
     cp: replayTdBase(player, 118, `C  P / ~p~1~w~/~y~${header.totalCp || 1}`),
     time: replayTdBase(player, 136, "TIME / 00:00:00"),
     best: replayTdBase(player, 154, best),
-    rank: replayTdBase(player, 172, "RANK / --"),
+    rank: replayTdBase(player, 172, rank),
   };
   Object.values(tds).forEach((t) => t.show(player));
   session.tds.set(player.id, tds);
@@ -331,6 +336,18 @@ function tickSession(session: ReplaySession): void {
     // 播放时间推进并 clamp 到 [0, maxTime]（播到头/退到头停在边界，不循环）
     g.playTime = Math.min(maxTime, Math.max(0, g.playTime + dt));
   }
+  // 播完提示（一次）：正向播放到达结尾 → 提示用户可后退/seek 继续看
+  if (
+    !session.endedNotified &&
+    session.direction === 1 &&
+    session.ghosts.every((g) => g.playTime >= maxTime)
+  ) {
+    session.endedNotified = true;
+    const owner = Player.getInstance(session.ownerId);
+    if (owner && owner.isConnected()) {
+      owner.sendClientMessage(COLOR_RACE, "回放已播完（/rp back 或 /rp seek 可回看）");
+    }
+  }
   for (const g of session.ghosts) renderGhost(session, g);
   syncObserverTds(session);
 }
@@ -454,6 +471,8 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
       vehicle.create();
       vehicle.setVirtualWorld(worldId);
       vehicle.linkToInterior(0);
+      // 锁门防玩家开走 ghost 车（回放车只可看不可开；NPC 已在车内不受影响）
+      vehicle.setParamsEx(true, false, false, true, false, false, false);
       npc.setVirtualWorld(worldId);
       npc.putInVehicle(vehicle, 0);
       npc.setInvulnerable(true);
@@ -498,6 +517,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     worldId,
     ownerPrevWorld: player.getVirtualWorld(),
     replayType: isGhost ? "ghost" : "race",
+    rank: replay.rank ?? null,
     data,
     ghosts,
     recorderName: replay.recorderName,
@@ -505,6 +525,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     paused: false,
     direction: 1,
     speed: 1,
+    endedNotified: false,
     tds: new Map(),
     watchers: new Set(),
     lastCpText: "",
