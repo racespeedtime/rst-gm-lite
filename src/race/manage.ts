@@ -194,9 +194,10 @@ async function raceDetailFlow(player: Player, raceId: string, back?: MenuBack): 
   const idx = res.listItem;
   if (idx === 0) {
     await createRaceRoom(player, raceId);
-    // 建好房间后提示下一步（对齐 /r s 流程，避免首次使用者不知道要开始）
-    player.sendClientMessage(COLOR_RACE, "输入 /r s 开始比赛（倒计时 5 秒后开跑）");
-    return back?.();
+    // 创建比赛后进入房间：不再弹回赛道/赛车菜单（玩家在房间内，
+    // 按 Y 打开的是"比赛房间"面板）。提示下一步（对齐 /r s 流程）
+    player.sendClientMessage(COLOR_RACE, "比赛房间已创建，按 Y 或输入 /r s 开始比赛（倒计时 5 秒后开跑）");
+    return;
   } else if (idx === 1) {
     await leaderboardFlow(player, raceId, () => raceDetailFlow(player, raceId, back));
   } else if (mine && idx === 2) {
