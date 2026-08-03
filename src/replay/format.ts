@@ -142,7 +142,8 @@ export function encodeFrame(f: ReplayFrame): Buffer {
   buf.writeInt32LE(f.cpProgress | 0, 44);
   buf.writeUInt8(U8(f.hour), 48);
   buf.writeUInt8(U8(f.minute), 49);
-  buf.writeInt8(f.weather | 0, 50);
+  // 天气 0-255：必须用 UInt8（writeInt8 范围 -128..127，weather>127 会抛 RangeError 导致录制丢失）
+  buf.writeUInt8(U8(f.weather), 50);
   buf.writeFloatLE(V(f.vehicleHealth), 51);
   return buf;
 }
@@ -226,7 +227,7 @@ export function decodeFrame(buf: Buffer, index: number): ReplayFrame | null {
     cpProgress: buf.readInt32LE(o + 44),
     hour: buf.readUInt8(o + 48),
     minute: buf.readUInt8(o + 49),
-    weather: buf.readInt8(o + 50),
+    weather: buf.readUInt8(o + 50),
     vehicleHealth: buf.readFloatLE(o + 51),
   };
 }

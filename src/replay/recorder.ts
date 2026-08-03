@@ -49,6 +49,13 @@ export interface RecordingSession {
 const sessions = new Map<number, RecordingSession>();
 /** 兜底采样定时器句柄（模块级，init 时启动一次） */
 let fallbackTimer: NodeJS.Timeout | undefined;
+/** 最近一次采样帧（RakNet 帧间离散状态缓存用） */
+let lastCached = 0;
+let cacheModel = 0;
+let cacheHour = 12;
+let cacheMinute = 0;
+let cacheWeather = 0;
+let cacheHealth = 1000;
 
 export function isRecording(playerId: number): boolean {
   return sessions.has(playerId);
@@ -72,6 +79,25 @@ function sample(session: RecordingSession, frame: ReplayFrame): void {
   session.frames.push(frame);
   session.last = frame;
   session.lastSampleAt = Date.now();
+}
+
+/**
+ * 刷新离散状态缓存（时间/天气/车型/血量）：
+ * 30Hz sync 帧连续到来时若每帧都读 6-7 个 native（getPlayer/getTime/getWeather/
+ * getVehicle/getModel/getHealth）开销大。缓存节流：只在上次刷新 ≥2s 前才重读，
+ * 帧间用缓存（状态变化延迟最多 2s 写帧，CP 进度由 noteCpProgress 事件驱动不受影响）。
+ */
+function refreshDiscreteCache(session: RecordingSession, player: Player): void {
+  const now = Date.now();
+  if (now - lastCached < 2000) return;
+  lastCached = now;
+  const veh = getOwnedVehicle(session.playerId);
+  const tm = player.getTime();
+  cacheModel = veh && veh.isValid() ? veh.getModel() : session.vehicleModelId;
+  cacheHour = tm.ret ? tm.hour : 12;
+  cacheMinute = tm.ret ? tm.minute : 0;
+  cacheWeather = player.getWeather();
+  cacheHealth = veh && veh.isValid() ? veh.getHealth().health : 1000;
 }
 
 /** 从车辆实体采集当前帧（位置/四元数/速度/车型/时间天气/血量） */
@@ -298,11 +324,10 @@ export function initRecorder(): void {
           const p = sync.position;
           const v = sync.velocity;
           const q = sync.quaternion;
-          // 离散状态（车型/时间/天气/CP进度）在采样时从实体与会话读取——
-          // 帧要带"完整状态"，seek/回退才能恢复那一帧的观感
+          // 离散状态（车型/时间/天气/血量）节流采样：sync 帧间用缓存，
+          // 避免每帧读 6-7 个 native（CP 进度由 noteCpProgress 事件驱动）
           const player = Player.getInstance(playerId);
-          const veh = getOwnedVehicle(playerId);
-          const tm = player ? player.getTime() : { ret: false as const, hour: 12, minute: 0 };
+          if (player) refreshDiscreteCache(session, player);
           sample(session, {
             x: p[0],
             y: p[1],
@@ -314,12 +339,12 @@ export function initRecorder(): void {
             vx: v[0],
             vy: v[1],
             vz: v[2],
-            vehicleModel: veh && veh.isValid() ? veh.getModel() : session.vehicleModelId,
+            vehicleModel: cacheModel,
             cpProgress: session.cpProgress,
-            hour: tm.ret ? tm.hour : 12,
-            minute: tm.ret ? tm.minute : 0,
-            weather: player ? player.getWeather() : 0,
-            vehicleHealth: veh && veh.isValid() ? veh.getHealth().health : 1000,
+            hour: cacheHour,
+            minute: cacheMinute,
+            weather: cacheWeather,
+            vehicleHealth: cacheHealth,
           });
         }
       }

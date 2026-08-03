@@ -62,7 +62,9 @@ export function isInChallenge(playerId: number): boolean {
   return challenges.has(playerId);
 }
 
-/** 玩家断线/退出清理（挑战会话销毁 + ghost 清理 + 恢复原世界） */
+/** 玩家断线/退出清理（挑战会话销毁 + ghost 清理 + 恢复原世界）。
+ * 仅在玩家仍处于挑战世界时恢复世界/CP/爱车——若玩家已离开挑战世界
+ * （如挑战中途进入比赛/战局），不得覆盖其当前世界（防把玩家从比赛中拉走）。 */
 export function cleanupChallenge(playerId: number): void {
   const ch = challenges.get(playerId);
   if (!ch) return;
@@ -76,7 +78,7 @@ export function cleanupChallenge(playerId: number): void {
     /* 已销毁/失效 */
   }
   const p = Player.getInstance(playerId);
-  if (p && p.isConnected()) {
+  if (p && p.isConnected() && p.getVirtualWorld() === ch.worldId) {
     p.setVirtualWorld(ch.prevWorld);
     RaceCheckpoint.disable(p);
     // 爱车一并切回原世界（防留在挑战世界成幽灵车；对齐比赛 restorePlayerAfterRace）

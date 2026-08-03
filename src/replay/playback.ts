@@ -3,6 +3,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isInRace } from "@/race/room";
+import { isInChallenge } from "./challenge";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import { startObserveVehicle, stopObserve, isObserving } from "@/core/observe";
 import { parseReplayFile, decodeFrame, lerpFrame, type ReplayData, type ReplayFrame } from "./format";
@@ -69,6 +70,8 @@ export interface ReplaySession {
   autoObserve: boolean;
   /** 观战者（发起人 + /rp watch 的人）的比赛信息 TD：playerId → 4 行 TD */
   tds: Map<number, { cp: TextDraw; time: TextDraw; best: TextDraw; rank: TextDraw }>;
+  /** 当前观战中的玩家（含发起人）：会话停止时统一退出观战（防观战者卡 spectating） */
+  watchers: Set<number>;
   /** 上次渲染的 TD 内容（去重，防每帧 setString 重绘） */
   lastCpText: string;
   lastTimeText: string;
@@ -330,6 +333,10 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     player.sendClientMessage(COLOR_ERROR, "比赛中不能播放回放（世界隔离）");
     return false;
   }
+  if (isInChallenge(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "影子挑战中不能播放回放");
+    return false;
+  }
   const replay = await prisma.replay.findFirst({
     where: { id: replayId, deletedAt: null },
   });
@@ -429,6 +436,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     speed: 1,
     autoObserve: !isGhost,
     tds: new Map(),
+    watchers: new Set(),
     lastCpText: "",
     lastTimeText: "",
     lastHour: -1,
@@ -454,6 +462,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
   player.setPos(data.header.startX, data.header.startY, data.header.startZ + 1);
   try {
     startObserveVehicle(player, ghosts[0].vehicle);
+    session.watchers.add(player.id);
     // 观战者比赛信息 TD（事件无关，从帧状态渲染）——NPC 回放的 TextDraw 状态可见
     ensureObserverTds(session, player);
     syncObserverTds(session);
@@ -544,6 +553,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       // 观看回放（观战 ghost 车；比赛回放额外挂比赛信息 TD）
       if (!isObserving(player.id)) {
         startObserveVehicle(player, session.ghosts[0].vehicle);
+        session.watchers.add(player.id); // 会话停止时统一退出观战
         if (session.replayType === "race") {
           ensureObserverTds(session, player);
           syncObserverTds(session);
@@ -593,10 +603,18 @@ export function stopReplaySession(playerId: number): void {
   for (const pid of [...session.tds.keys()]) {
     destroyObserverTds(session, pid);
   }
-  const owner = Player.getInstance(playerId);
-  if (owner && owner.isConnected() && isObserving(playerId)) {
-    stopObserve(owner);
+  // 统一退出观战（发起人 + 非发起人 watch 者）：防观战者卡在 spectating 指向已销毁 ghost
+  for (const pid of session.watchers) {
+    const w = Player.getInstance(pid);
+    if (w && w.isConnected() && isObserving(pid)) {
+      try {
+        stopObserve(w);
+      } catch {
+        /* 观战状态已失效 */
+      }
+    }
   }
+  session.watchers.clear();
 }
 
 /** 玩家断线清理（发起的会话销毁） */
