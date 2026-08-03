@@ -1,4 +1,4 @@
-import { DynamicMapIcon, GameMode, Player, TextLabel } from "@infernus/core";
+import { DynamicCheckpoint, DynamicMapIcon, GameMode, Player, TextLabel } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -9,6 +9,7 @@ import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 interface WorldEnv {
   icons: DynamicMapIcon[];
   labels: TextLabel[];
+  checkpoints: DynamicCheckpoint[];
 }
 
 import { COLOR_LABEL, COLOR_RACE, COLOR_ORANGE } from "@/utils/colors";
@@ -101,7 +102,7 @@ export function startWorldClockTimers(): void {
   }, WEATHER_ROTATE_MS);
 }
 
-let worldEnv: WorldEnv = { icons: [], labels: [] };
+let worldEnv: WorldEnv = { icons: [], labels: [], checkpoints: [] };
 
 /** 清理世界环境实体（GameMode.onExit 调用） */
 export function clearWorldEnvironment(): void {
@@ -111,7 +112,10 @@ export function clearWorldEnvironment(): void {
   for (const label of worldEnv.labels) {
     if (label.isValid()) label.destroy();
   }
-  worldEnv = { icons: [], labels: [] };
+  for (const cp of worldEnv.checkpoints) {
+    if (cp.isValid()) cp.destroy();
+  }
+  worldEnv = { icons: [], labels: [], checkpoints: [] };
 }
 
 /** 地图图标定义（map_icon 表 → per-player SetPlayerMapIcon，登录时设置） */
@@ -150,6 +154,7 @@ export async function initWorldEnvironment(): Promise<void> {
 
   const icons: DynamicMapIcon[] = [];
   const labels: TextLabel[] = [];
+  const checkpoints: DynamicCheckpoint[] = [];
 
   // 2. 地图图标（数据库 map_icon 表）
   // 缓存定义即可（不创建实体）：登录时用 per-player SetPlayerMapIcon 设置，
@@ -200,10 +205,11 @@ export async function initWorldEnvironment(): Promise<void> {
     logger.error("[worldenv] 加载传送点标签失败", e);
   }
 
-  // 4. 赛道起点展示（3D 标签 + 小地图图标 类型 53）
-  // 对齐原版：大世界不常驻 RaceCheckpoint（那是 per-player 的比赛 HUD 追踪，
-  // 只在进入比赛/测试时由 race/room 用 RaceCheckpoint.set 显示）。
-  // 大世界起点只挂 3D 标签（"输入 /r s 赛道名 开始比赛"）+ 小地图检查点图标。
+  // 4. 赛道起点展示：对齐原版 RaceGetCpsQuery 三件套——
+  //    DynamicCheckpoint 圆圈（size 4，大世界常驻地面检查点）+
+  //    DynamicMapIcon 小地图图标（53）+
+  //    3D 标签（"输入 /r s 赛道名 开始比赛"）。
+  //    比赛中的 per-player HUD 追踪仍由 race/room 的 RaceCheckpoint.set 负责。
   try {
     const races = await prisma.race.findMany({
       where: { isEnabled: true, deletedAt: null },
@@ -216,6 +222,16 @@ export async function initWorldEnvironment(): Promise<void> {
       const first = race.raceCps[0];
       if (!first) continue;
       try {
+        // 圆圈：大世界常驻地面检查点（对齐原版 CreateDynamicCP size 4，world 0）
+        const cp = new DynamicCheckpoint({
+          x: Number(first.x),
+          y: Number(first.y),
+          z: Number(first.z),
+          size: 4,
+          worldId: 0,
+        });
+        cp.create();
+        checkpoints.push(cp);
         const label = new TextLabel({
           text: `{98cdfe}[赛车] ${race.name}\n输入 /r s ${race.name} 开始比赛`,
           color: COLOR_RACE,
@@ -250,7 +266,7 @@ export async function initWorldEnvironment(): Promise<void> {
     logger.error("[worldenv] 加载赛道起点失败", e);
   }
 
-  worldEnv = { icons, labels };
+  worldEnv = { icons, labels, checkpoints };
 }
 
 /** 玩家当前应跟随的现实游戏时间 */
