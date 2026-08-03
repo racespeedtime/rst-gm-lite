@@ -3,6 +3,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
+import { pickOption } from "@/personalize/settings";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import { formatTime } from "@/utils/format";
@@ -100,7 +101,13 @@ async function createRaceFlow(player: Player, back?: MenuBack): Promise<void> {
   }
 }
 
-/** 赛道列表（全部/我的，分页） */
+/** 短日期（MM-DD HH:MM），用于列表多列展示 */
+function fmtShortDate(d: Date): string {
+  const pad2 = (n: number): string => String(n).padStart(2, "0");
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** 赛道列表（全部/我的）：排序选择 + 多列展示，选择进入详情 */
 async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   const where = {
@@ -108,16 +115,47 @@ async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBac
     deletedAt: null,
     ...(mode === "MINE" && auth ? { userId: auth.userId } : {}),
   } as const;
-  const races = await prisma.race.findMany({ where, orderBy: { createdAt: "desc" } });
+  // 排序方式：按创建时间（默认，最新在前）/ 按名称（A-Z）
+  const sortIndex = await pickOption(player, mode === "MINE" ? "我的赛道 · 排序" : "赛道列表 · 排序", [
+    "按创建时间（最新在前）",
+    "按名称（A-Z）",
+  ]);
+  if (sortIndex < 0) return back?.();
+  // as const 固定字面量类型，否则联合类型导致 Prisma 泛型推断失败（orderBy 报错）
+  const orderBy = sortIndex === 1 ? ({ name: "asc" } as const) : ({ createdAt: "desc" } as const);
+  const races = await prisma.race.findMany({
+    where,
+    orderBy,
+    include: { sysUser: true },
+  });
   if (races.length === 0) {
     player.sendClientMessage(COLOR_WHITE, mode === "MINE" ? "你还没有创建赛道" : "暂无赛道");
     return back?.();
   }
+  const isAll = mode === "ALL";
   const r = await showPagedDialog(player, {
     caption: mode === "MINE" ? "我的赛道" : "赛道列表",
     data: races,
-    format: (race) =>
-      `${race.name}${race.description ? `（${race.description}）` : ""} ${Math.round(Number(race.totalLength))}m`,
+    headers: isAll
+      ? ["#", "名称", "长度", "圈数", "作者", "创建"]
+      : ["#", "名称", "长度", "圈数", "创建"],
+    format: (race, index) =>
+      isAll
+        ? [
+            String(index + 1),
+            race.name,
+            `${Math.round(Number(race.totalLength))}m`,
+            `${race.laps ?? 1}`,
+            race.sysUser?.username ?? "?",
+            fmtShortDate(race.createdAt),
+          ]
+        : [
+            String(index + 1),
+            race.name,
+            `${Math.round(Number(race.totalLength))}m`,
+            `${race.laps ?? 1}`,
+            fmtShortDate(race.createdAt),
+          ],
     button1: "选择",
     button2: "取消",
   });
