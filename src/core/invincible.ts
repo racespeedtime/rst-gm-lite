@@ -55,11 +55,12 @@ export function cleanupInvincible(playerId: number): void {
 /** 初始化无敌系统：伤害回血 + raknet 子弹包拦截 */
 export function initInvincible(): void {
   // 玩家受到伤害（跌落/爆炸/火焰/碰撞等非子弹伤害）：无敌则满血满甲。
-  // 同步 handler——不依赖返回值，直接结算回血。
+  // 同步 handler——回血后 return false（不再转发后续 handler/原生 filterscript），
+  // 语义清晰：无敌玩家的伤害在服务端结算前被拦截。open.mp 的 OnPlayerTakeDamage
+  // 返回值不阻止伤害，真正的免伤靠立即回满血（fullHealthAndArmor）。
   PlayerEvent.onTakeDamage(({ player, next }) => {
     if (invincibleSet.has(player.id)) {
       fullHealthAndArmor(player);
-      next();
       return false;
     }
     return next();

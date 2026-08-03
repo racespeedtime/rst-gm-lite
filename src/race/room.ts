@@ -20,6 +20,7 @@ import { startObservePlayer, stopObserve, isObserving, cleanupObserve, getObserv
 import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
 import { sessionManager } from "@/sessions/manager";
+import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { formatTime } from "@/utils/format";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import { MIN_Z } from "@/utils/map";
@@ -646,17 +647,17 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   pr.cpIndex++;
 
   // 更新 CP 进度 TD（对齐原版过 CP 时 "C  P / ~p~进度~w~/~y~总数"；完成时同样先刷满）
+  // 玩家自身 + 观战他的观察者（对齐原版 OnPlayerEnterRaceCheckpoint 对观战者的 CP TD 同步）
+  const cpDone = Math.min(pr.cpIndex + 1, room.cps.length);
+  const cpText = `C  P / ~p~${cpDone}~w~/~y~${room.cps.length}`;
   const raceTds = room.raceTextTds.get(player.id);
   if (raceTds) {
-    const done = Math.min(pr.cpIndex + 1, room.cps.length);
-    raceTds.cp.setString(`C  P / ~p~${done}~w~/~y~${room.cps.length}`);
+    raceTds.cp.setString(cpText);
   }
-  // 观战者同步 CP 进度（对齐原版 OnPlayerEnterRaceCheckpoint 对观战者的 CP TD 同步）
   for (const oid of getObserverIdsOf(player.id)) {
     const ot = room.raceTextTds.get(oid);
     if (ot) {
-      const done = Math.min(pr.cpIndex + 1, room.cps.length);
-      ot.cp.setString(`C  P / ~p~${done}~w~/~y~${room.cps.length}`);
+      ot.cp.setString(cpText);
     }
   }
 
@@ -874,7 +875,7 @@ function endRoom(room: RaceRoom): void {
       stopObserve(m);
     }
     // 恢复原世界 + 个人时间天气（在 playerRaces.delete 前取 prevWorld）
-    const prevWorld = mp?.prevWorld ?? 0;
+    const prevWorld = mp?.prevWorld ?? PUBLIC_WORLD_ID;
     playerRaces.delete(m.id);
     restorePlayerAfterRace(m, prevWorld);
     // 无碰撞恢复为个人设置（比赛中强制开启）
