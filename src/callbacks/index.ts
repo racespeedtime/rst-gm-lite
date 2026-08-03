@@ -45,6 +45,7 @@ import {
 } from "@/core/vehicleAuto";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
 import { initSkinCommands } from "@/personalize/skinPicker";
+import { initHelpCommand, sendWelcomeMessage } from "@/core/help";
 import { initColandreas } from "@/core/colandreas";
 import {
   applyWorldEnv,
@@ -153,6 +154,8 @@ async function handlePlayerConnect(player: Player) {
       .findUnique({ where: { userId: auth.userId } })
       .then((s) => s?.defaultPlayerPresetId ?? null);
     await applyPlayerPreset(player, defaultPreset);
+    // 登录欢迎（服务器名 + 核心玩法指引）
+    sendWelcomeMessage(player);
     if (auth.isSuperAdmin) {
       player.sendClientMessage(COLOR_INFO, "你已登录为系统管理员，按 Y 打开万能面板");
     }
@@ -330,6 +333,9 @@ initPlayerInfo();
 
 // 皮肤命令（/skin 3D 选肤 / /skin ID）
 initSkinCommands();
+
+// 帮助命令（/help 常用命令）
+initHelpCommand();
 
 // 无敌模式：伤害回血 + raknet 子弹包拦截
 initInvincible();

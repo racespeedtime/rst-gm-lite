@@ -378,11 +378,18 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
     // 开赛切到比赛世界后仍站在同一位置，beginRace 的 setPos 幂等保留）
     showNextCheckpoint(player, room.cps, -1);
   }
-  // 提示：房主（创建者）不需要"等待房主开始"
+  // 提示：房主（创建者）不需要"等待房主开始"；无车兜底说明已刷默认比赛车
+  const noCarHint = !getOwnedVehicle(player.id) ? "（无车已自动刷默认比赛车，可用 /c 换爱车）" : "";
   if (room.ownerId === player.id) {
-    player.sendClientMessage(COLOR_RACE, `你加入了比赛房间（赛道 ${room.raceName}），输入 /r s 开始比赛`);
+    player.sendClientMessage(
+      COLOR_RACE,
+      `你加入了比赛房间（赛道 ${room.raceName}），输入 /r s 开始比赛${noCarHint}`,
+    );
   } else {
-    player.sendClientMessage(COLOR_RACE, `你加入了比赛房间（赛道 ${room.raceName}），等待房主开始`);
+    player.sendClientMessage(
+      COLOR_RACE,
+      `你加入了比赛房间（赛道 ${room.raceName}），等待房主开始${noCarHint}`,
+    );
   }
 }
 
