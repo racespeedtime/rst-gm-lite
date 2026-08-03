@@ -110,13 +110,15 @@ export async function spawnVehicle(player: Player, modelId: number): Promise<boo
     // 应用完整预设外观（颜色/paintjob/改装件 + 挂件），默认预设挂件也自动生效
     await applyVehiclePreset(veh, uv.defaultPresetId, player.id);
     // 爱车 description 绑定 3D 文本（有描述才挂，跟随车辆移动）
+    // 注意：附着车辆时 x/y/z 是相对车辆的偏移（对齐原版 CreateDynamic3DTextLabel
+    // 附车时传 0,0,0），传绝对坐标会导致标签出现在世界原点/错位
     if (uv.description) {
       const label = new Dynamic3DTextLabel({
         text: uv.description,
         color: "#ffd700",
-        x: pos.x,
-        y: pos.y,
-        z: pos.z,
+        x: 0,
+        y: 0,
+        z: 0,
         drawDistance: 30,
         testLOS: false,
         attachedVehicle: veh.id,
