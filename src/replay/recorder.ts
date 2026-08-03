@@ -6,7 +6,7 @@ import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import { encodeHeader, encodeFrame, HEADER_BYTES, FRAME_BYTES, type ReplayFrame, type ReplayHeader } from "./format";
-import { saveRecordingFile } from "./storage";
+import { saveRecordingFile, deleteRecordingFile } from "./storage";
 
 /**
  * 录制会话（自定义二进制录制，非原生 .rec）：
@@ -161,20 +161,9 @@ export async function startRecording(
     player.sendClientMessage("#ff5555", "车辆状态读取失败，请重试");
     return false;
   }
-  // 比赛录制：带该赛道个人最佳（回放 BEST TD 用）——异步查询，不阻塞开始
-  let bestMs = -1;
-  if (opts.type === "race" && opts.raceId && auth) {
-    try {
-      const best = await prisma.raceRecord.findFirst({
-        where: { raceId: opts.raceId, userId: auth.userId, deletedAt: null },
-        orderBy: { record: "asc" },
-        select: { record: true },
-      });
-      bestMs = best?.record ?? -1;
-    } catch {
-      bestMs = -1;
-    }
-  }
+  // 同步注册会话（先 set 再异步补 bestMs）——消除竞态：beginRace 里
+  // void startRecording() 后若比赛很快结束触发 stopRecording，必须能
+  // 找到会话（否则该段录制静默丢失）
   const session: RecordingSession = {
     playerId: player.id,
     type: opts.type,
@@ -197,9 +186,24 @@ export async function startRecording(
     lastSampleAt: 0,
     cpProgress: 0,
     totalCp: 0,
-    bestMs,
+    bestMs: -1,
   };
   sessions.set(player.id, session);
+  // 比赛录制：异步补个人最佳（回放 BEST TD 用），不阻塞开始
+  if (opts.type === "race" && opts.raceId && auth) {
+    void (async () => {
+      try {
+        const best = await prisma.raceRecord.findFirst({
+          where: { raceId: opts.raceId!, userId: auth.userId, deletedAt: null },
+          orderBy: { record: "asc" },
+          select: { record: true },
+        });
+        session.bestMs = best?.record ?? -1;
+      } catch {
+        session.bestMs = -1;
+      }
+    })();
+  }
   return true;
 }
 
@@ -291,6 +295,12 @@ export async function stopRecording(
     return { id: created.id, fileName };
   } catch (e) {
     logger.error(`[replay] 写回放元数据失败`, e);
+    // DB 写入失败：文件已落盘但无索引 → 删除文件（防孤儿文件永久占空间；
+    // 启动时另有孤儿扫描兜底历史残留）
+    deleteRecordingFile(fileName);
+    if (player && player.isConnected() && !opts?.quiet) {
+      player.sendClientMessage("#ff5555", "回放元数据保存失败，已删除录像");
+    }
     return null;
   }
 }

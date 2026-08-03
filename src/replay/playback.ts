@@ -4,6 +4,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isInRace } from "@/race/room";
 import { isInChallenge } from "./challenge";
+import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import { startObserveVehicle, stopObserve, isObserving } from "@/core/observe";
 import { parseReplayFile, decodeFrame, lerpFrame, type ReplayData, type ReplayFrame } from "./format";
@@ -55,6 +56,8 @@ export interface ReplaySession {
   id: string; // replay 记录 id
   ownerId: number; // 发起人 playerId
   worldId: number;
+  /** 发起人进入回放前的世界（race 独立世界回放停止时恢复玩家+爱车） */
+  ownerPrevWorld: number;
   /** 回放类型：ghost=自由录制（当前世界，大家可玩可控制）；race=比赛回放（独立世界+观战） */
   replayType: "ghost" | "race";
   data: ReplayData;
@@ -82,6 +85,31 @@ export interface ReplaySession {
 }
 
 const sessions = new Map<number, ReplaySession>(); // playerId -> 该玩家自己的回放会话（各看各的）
+
+/**
+ * 回放文件只读缓存（LRU）：多人看同一回放共享解析后的数据（Buffer 帧切片），
+ * 避免各开会话时重复读文件。缓存只读共享——session 采样只读 frames，无写入，
+ * 线程安全。容量上限 + 最久未用淘汰（防内存累积）。
+ */
+const fileCache = new Map<string, ReplayData>();
+const CACHE_MAX = 16;
+
+/** 读取回放文件（带缓存）。损坏抛 Error（调用方处理）。 */
+export function loadReplayData(fileName: string): ReplayData {
+  const cached = fileCache.get(fileName);
+  if (cached) {
+    fileCache.delete(fileName); // LRU：移到末尾（最近使用）
+    fileCache.set(fileName, cached);
+    return cached;
+  }
+  const data = parseReplayFile(join(RECORDING_DIR, fileName));
+  if (fileCache.size >= CACHE_MAX) {
+    const oldest = fileCache.keys().next().value;
+    if (oldest != null) fileCache.delete(oldest);
+  }
+  fileCache.set(fileName, data);
+  return data;
+}
 
 /**
  * NPC 池子边界（回放/挑战共用，对齐 config.json max_bots=100）：
@@ -374,7 +402,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
   }
   let data: ReplayData;
   try {
-    data = parseReplayFile(join(RECORDING_DIR, replay.fileName));
+    data = loadReplayData(replay.fileName); // 只读缓存（多人共享同一文件数据）
   } catch (e) {
     logger.error(`[replay] 回放文件读取失败 ${replay.fileName}`, e);
     player.sendClientMessage(COLOR_ERROR, "回放文件损坏或不存在");
@@ -402,7 +430,9 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     for (let i = 0; i < count; i++) {
       // 创建中失败自动降级：某分身 NPC 分配失败（槽位被并发抢占）→
       // 若已成功 ≥1 个则用已成功的继续，否则整体失败（防一半资源半拉子）
-      const npc = allocReplayNpc(`RP_${Date.now()}_${i}`.slice(0, 24));
+      // 名字带随机后缀：同毫秒多人创建防重名冲突
+      const rand = Math.random().toString(36).slice(2, 6);
+      const npc = allocReplayNpc(`RP${Date.now().toString(36)}_${i}_${rand}`.slice(0, 24));
       if (!npc) {
         if (ghosts.length === 0) {
           player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足，回放创建失败");
@@ -466,6 +496,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     id: replay.id,
     ownerId: player.id,
     worldId,
+    ownerPrevWorld: player.getVirtualWorld(),
     replayType: isGhost ? "ghost" : "race",
     data,
     ghosts,
@@ -638,6 +669,16 @@ export function stopReplaySession(playerId: number): void {
     }
   }
   session.watchers.clear();
+  // 比赛回放（独立世界）：玩家可能在其中刷过车 → 恢复玩家世界 + 爱车世界，
+  // 防爱车留在独立世界成幽灵车（仅当玩家仍在回放世界；已离开则不覆盖其状态）
+  const owner = Player.getInstance(playerId);
+  if (owner && owner.isConnected() && session.replayType === "race" && owner.getVirtualWorld() === session.worldId) {
+    owner.setVirtualWorld(session.ownerPrevWorld);
+    const owned = getOwnedVehicle(playerId);
+    if (owned && owned.isValid() && owned !== owner.getVehicle()) {
+      owned.setVirtualWorld(session.ownerPrevWorld);
+    }
+  }
 }
 
 /** 玩家断线清理（发起的会话销毁） */

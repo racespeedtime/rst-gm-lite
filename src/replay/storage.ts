@@ -59,16 +59,27 @@ export function recordingFileInfo(fileName: string): { size: number } | null {
   }
 }
 
-/** 列出录制目录全部文件（含大小；临时文件 .tmp 过滤） */
-export function listRecordingFiles(): { name: string; size: number }[] {
+/**
+ * 清理孤儿回放文件 + .tmp 残留：
+ * - orphanNames：有文件但 DB 无记录（录制写文件后 DB 失败等历史残留）→ 删除
+ * - 所有 .tmp：上次写文件中断留下的半成品 → 删除
+ * 服务器启动时调用（GameMode.onInit）。
+ */
+export function cleanupOrphanFiles(orphanNames: string[]): void {
+  const orphan = new Set(orphanNames);
   try {
-    if (!existsSync(RECORDING_DIR)) return [];
-    return readdirSync(RECORDING_DIR)
-      .filter((f) => !f.endsWith(".tmp"))
-      .map((f) => ({ name: f, size: statSync(join(RECORDING_DIR, f)).size }))
-      .sort((a, b) => b.size - a.size);
+    if (!existsSync(RECORDING_DIR)) return;
+    for (const f of readdirSync(RECORDING_DIR)) {
+      const full = join(RECORDING_DIR, f);
+      if (f.endsWith(".tmp")) {
+        rmSync(full, { force: true });
+        logger.warn(`[replay] 清理残留临时文件 ${f}`);
+      } else if (orphan.has(f)) {
+        rmSync(full, { force: true });
+        logger.warn(`[replay] 清理孤儿回放文件 ${f}`);
+      }
+    }
   } catch (e) {
-    logger.error(`[replay] 列出录制目录失败`, e);
-    return [];
+    logger.error(`[replay] 清理孤儿文件失败`, e);
   }
 }

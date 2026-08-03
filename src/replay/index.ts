@@ -1,14 +1,15 @@
 import { Player } from "@infernus/core";
+import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { initReplayCommands } from "./commands";
 import { initRecorder, cleanupRecorder, forceStopRecording, isRecording, startRecording, stopRecording } from "./recorder";
 import { cleanupPlayback, destroyAllPlaybacks } from "./playback";
 import { initChallenge, destroyAllChallenges, challengeDisconnect } from "./challenge";
-import { ensureRecordingDir } from "./storage";
+import { ensureRecordingDir, cleanupOrphanFiles } from "./storage";
 
 /**
  * 回放系统总入口：
- * - GameMode.onInit 建录制目录
+ * - GameMode.onInit 建录制目录 + 清理孤儿文件/.tmp 残留
  * - initReplayCommands 注册命令；initRecorder 挂 RakNet 拦截 + 兜底采样
  * - initChallenge 注册影子挑战 CP 检测（与比赛共用 RaceCpEvent 入口）
  * - onExit 销毁全部回放/挑战会话/NPC/车辆 + 录制强制落盘
@@ -17,6 +18,19 @@ import { ensureRecordingDir } from "./storage";
 /** 初始化回放系统（callbacks init 序列调用） */
 export function initReplay(): void {
   ensureRecordingDir();
+  // 启动清理：孤儿回放文件（DB 无记录但文件在）与 .tmp 残留（写文件中断半成品）
+  void (async () => {
+    try {
+      const recorded = await prisma.replay.findMany({
+        where: { deletedAt: null },
+        select: { fileName: true },
+      });
+      const names = new Set(recorded.map((r) => r.fileName));
+      cleanupOrphanFiles([...names]);
+    } catch (e) {
+      logger.error(`[replay] 孤儿文件扫描失败`, e);
+    }
+  })();
   initReplayCommands();
   initRecorder();
   initChallenge();

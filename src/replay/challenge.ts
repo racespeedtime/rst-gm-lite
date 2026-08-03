@@ -17,10 +17,8 @@ import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
 import { getDefaultRaceModel } from "@/race/vehicle";
 import { setIntervalSafe, clearIntervalSafe, setTimeoutSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
-import { parseReplayFile, type ReplayData } from "./format";
-import { join } from "node:path";
-import { RECORDING_DIR } from "./storage";
-import { sampleAt, allocReplayWorld, allocReplayNpc, getReplaySession } from "./playback";
+import type { ReplayData } from "./format";
+import { sampleAt, allocReplayWorld, allocReplayNpc, loadReplayData, getReplaySession } from "./playback";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR } from "@/utils/colors";
 
@@ -51,8 +49,9 @@ export interface ChallengeSession {
   cpIndex: number;
   totalCp: number;
   startAt: number;
+  /** 实际发车时间（倒计时结束 GO 时刻；结算/超时用真实时间差，不用帧数累计防漂移） */
+  goAt: number;
   finished: boolean;
-  tickMs: number; // 玩家挑战已推进毫秒（结算用）
   timer?: NodeJS.Timeout;
 }
 
@@ -124,10 +123,9 @@ function tickChallenge(ch: ChallengeSession): void {
     if (ch.timer) clearIntervalSafe(ch.timer);
     return;
   }
-  ch.tickMs += 16;
   const dur = ch.data.header.frameCount * ch.data.header.frameIntervalMs;
-  // 影子播完 + 宽限后玩家未完成 → 自动结束（不需要 /challenge stop）
-  if (ch.tickMs > dur + CHALLENGE_GRACE_MS) {
+  // 影子播完 + 宽限后玩家未完成 → 自动结束（真实时间差，不用帧数累计防漂移）
+  if (Date.now() - ch.goAt > dur + CHALLENGE_GRACE_MS) {
     const p = Player.getInstance(ch.playerId);
     if (p && p.isConnected()) {
       p.sendClientMessage(COLOR_RACE, "[影子] 影子已到达终点，挑战超时结束（可再次挑战）");
@@ -168,7 +166,8 @@ function onChallengePlayerEnter(player: Player): void {
 
 /** 完成结算（玩家用时 vs 影子用时 = 录制时长） */
 async function finishChallenge(player: Player, ch: ChallengeSession): Promise<void> {
-  const playerMs = ch.tickMs;
+  // 真实时间差（从 GO 起跑，不用帧数累计防漂移）
+  const playerMs = Math.max(0, Date.now() - ch.goAt);
   const ghostMs = ch.data.header.durationMs;
   const diff = playerMs - ghostMs;
   const verdict =
@@ -240,7 +239,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
   const replay = races[0]; // 最近一次完成比赛的回放
   let data: ReplayData;
   try {
-    data = parseReplayFile(join(RECORDING_DIR, replay.fileName));
+    data = loadReplayData(replay.fileName); // 只读缓存（与回放共享文件数据）
   } catch (e) {
     logger.error(`[replay] 挑战回放读取失败 ${replay.fileName}`, e);
     player.sendClientMessage(COLOR_ERROR, "回放文件损坏或不存在");
@@ -310,8 +309,8 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     cpIndex: 0,
     totalCp: cps.length,
     startAt: Date.now(),
+    goAt: Date.now(),
     finished: false,
-    tickMs: 0,
   };
   challenges.set(player.id, ch);
 
@@ -356,6 +355,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     }
     if (cd <= 0) {
       if (!challenges.has(player.id)) return; // 双保险
+      ch.goAt = Date.now(); // 真实起跑时刻（结算/超时计时基准）
       const go = new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
       go.forPlayer(player);
       player.playSound(1057);
