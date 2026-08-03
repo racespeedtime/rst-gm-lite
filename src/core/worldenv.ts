@@ -24,25 +24,31 @@ const WEATHER_ROTATE_CHANCE = 0.2;
 /** 常用天气池（晴/多云/雨/雾等） */
 const WEATHER_POOL = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16];
 
-/** 天气 ID → 中文名（变更提示用，未列出的 ID 回退显示 ID） */
+/** 天气 ID → 中文名（变更提示用，对齐 open.mp weatherid 官方表 0-22；未列出的 ID 回退显示 ID） */
 const WEATHER_NAMES: Record<number, string> = {
-  0: "晴",
-  1: "晴",
-  2: "少云",
-  3: "多云",
-  4: "阴",
-  5: "雨",
-  6: "小雨",
-  7: "雷阵雨",
-  8: "浓雾",
-  9: "薄雾",
-  10: "晴",
-  11: "晴",
-  12: "多云",
-  13: "晴",
-  14: "晴",
-  15: "多云",
-  16: "雨",
+  0: "晴", // EXTRASUNNY_LA
+  1: "晴", // SUNNY_LA
+  2: "晴（薄雾）", // EXTRASUNNY_SMOG_LA
+  3: "晴（薄雾）", // SUNNY_SMOG_LA
+  4: "多云", // CLOUDY_LA
+  5: "晴", // SUNNY_SF
+  6: "晴", // EXTRASUNNY_SF
+  7: "多云", // CLOUDY_SF
+  8: "雨", // RAINY_SF
+  9: "雾", // FOGGY_SF
+  10: "晴", // SUNNY_VEGAS
+  11: "晴（热浪）", // EXTRASUNNY_VEGAS
+  12: "多云", // CLOUDY_VEGAS
+  13: "晴", // EXTRASUNNY_COUNTRYSIDE
+  14: "晴", // SUNNY_COUNTRYSIDE
+  15: "多云", // CLOUDY_COUNTRYSIDE
+  16: "雨", // RAINY_COUNTRYSIDE
+  17: "晴", // EXTRASUNNY_DESERT
+  18: "晴", // SUNNY_DESERT
+  19: "沙尘暴", // SANDSTORM_DESERT
+  20: "水下", // UNDERWATER
+  21: "室内特殊", // EXTRACOLOURS_1
+  22: "室内特殊", // EXTRACOLOURS_2
 };
 
 /**
