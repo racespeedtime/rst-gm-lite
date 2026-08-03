@@ -1,5 +1,4 @@
 import { Dialog, DialogStylesEnum, GameText, Player, Vehicle, WeaponEnum } from "@infernus/core";
-import { sessionManager } from "@/sessions/manager";
 import { pickOption, notifySaved, COLOR_ERROR } from "./settings";
 import { setTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve } from "@/core/observe";
@@ -151,15 +150,43 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
   await rows[index].run();
 }
 
-/** 战局/区域倒计时：倒计时期间全战局显示，结束时广播 */
+/**
+ * 范围倒计时（对齐原版 /djs）：
+ * - 倒计时开始时给 20 米内同世界玩家发一条 sendClientMessage 提示
+ * - 每秒给范围内玩家 GameText 显示数字（~w~N）+ 音效 1056
+ * - 结束时 GameText "GO!" + 音效 1057
+ */
 async function sessionCountdown(player: Player, seconds: number): Promise<void> {
-  const session = sessionManager.getPlayerSession(player);
+  const pos = player.getPos();
+  const world = player.getVirtualWorld();
+  // 倒计时开始时：范围内玩家收到一条提示
+  const near = Player.getInstances().filter(
+    (p) =>
+      !p.isNpc() &&
+      p.isConnected() &&
+      p.getVirtualWorld() === world &&
+      Math.hypot(p.getPos().x - pos.x, p.getPos().y - pos.y, p.getPos().z - pos.z) <= 20,
+  );
+  for (const p of near) {
+    p.sendClientMessage("#ffffff", `[倒计时] ${player.getName().name} 发起了 ${seconds} 秒倒计时`);
+  }
   for (let i = seconds; i >= 1; i--) {
     if (!player.isConnected()) return;
-    const countdown = new GameText(`${i}`, 1000, 3);
-    countdown.forPlayer(player);
-    session.broadcast(`[倒计时] ${player.getName().name} 发起了 ${seconds} 秒倒计时：${i}`);
+    const countdown = new GameText(`~w~${i}`, 1000, 3);
+    for (const p of near) {
+      if (!p.isConnected()) continue;
+      countdown.forPlayer(p);
+      p.playSound(1056);
+    }
     await sleep(1000);
+  }
+  // 结束：GO!
+  if (!player.isConnected()) return;
+  const go = new GameText("~g~GO~r~!~n~~g~GO~r~!~n~~g~GO~r~!", 3000, 3);
+  for (const p of near) {
+    if (!p.isConnected()) continue;
+    go.forPlayer(p);
+    p.playSound(1057);
   }
 }
 
