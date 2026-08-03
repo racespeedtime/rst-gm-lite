@@ -53,6 +53,15 @@ export class Session {
     }
   }
 
+  /** 向战局内除指定玩家外的所有成员发送文字（进出提示不发给本人） */
+  broadcastOthers(message: string, except?: Player): void {
+    for (const p of this.members.values()) {
+      if (p.id !== except?.id) {
+        p.sendClientMessage(SESSION_COLOR, message);
+      }
+    }
+  }
+
   /** 战局内是否包含指定玩家 */
   has(player: Player): boolean {
     return this.members.has(player.id);

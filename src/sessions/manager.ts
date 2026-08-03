@@ -88,6 +88,11 @@ export class SessionManager {
   onPlayerAuthenticated(player: Player): void {
     this.publicWorld.members.set(player.id, player);
     this.playerSessions.set(player.id, 0);
+    // 通知公共大世界内的其他玩家（登录广播）；本人由"欢迎回来"等提示覆盖，不重复发
+    this.publicWorld.broadcastOthers(
+      `[战局] ${player.getName().name} 进入了公共大世界`,
+      player,
+    );
   }
 
   /**
@@ -118,6 +123,11 @@ export class SessionManager {
     this.publicWorld.members.set(player.id, player);
     this.playerSessions.set(player.id, 0);
     await this.teleportTo(player, 0);
+    // 通知公共大世界内的其他玩家（本人由"你已回到..."覆盖，不重复发）
+    this.publicWorld.broadcastOthers(
+      `[战局] ${player.getName().name} 回到了公共大世界`,
+      player,
+    );
     player.sendClientMessage(SESSION_COLOR, `你已回到${this.publicWorld.name}`);
   }
 
@@ -146,11 +156,7 @@ export class SessionManager {
     // 加入提示：默认全员可见；silentSelf 时不发给本人（本人由"创建成功/已回到"提示覆盖）
     const name = player.getName().name;
     if (silentSelf) {
-      for (const p of session.members.values()) {
-        if (p.id !== player.id) {
-          p.sendClientMessage(SESSION_COLOR, `[战局] ${name} 加入了战局`);
-        }
-      }
+      session.broadcastOthers(`[战局] ${name} 加入了战局`, player);
     } else {
       session.broadcast(`[战局] ${name} 加入了战局`);
     }
