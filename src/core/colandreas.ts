@@ -48,3 +48,18 @@ export function getSafeGroundZ(x: number, y: number, fallbackZ: number): number 
   }
   return fallbackZ;
 }
+
+/**
+ * 出生/落地 Z 修正（防半身入地 + 防被抬到遮挡物顶）：
+ * - findZ_For2DCoord 是射线从上方打到的最顶面——若出生点在有屋檐/雨棚/立交
+ *   遮挡的下方，命中的是遮挡物顶而非实际站的地面，直接取 ground 会把玩家
+ *   抬到屋顶上。配置点 z 明显低于 ground（>2.5）时信配置点。
+ * - colandreas 地面与流式物件地表常有微小落差，玩家脚底正好在 ground 会
+ *   沉进去半身（模型原点在脚底 vs 地表高度差异），统一 +0.5 抬起。
+ */
+export function getSpawnGroundZ(x: number, y: number, pointZ: number): number {
+  const ground = getSafeGroundZ(x, y, pointZ);
+  // ground 远高于配置点 → 配置点在被遮挡物覆盖的下方，用配置点（+0.5 防入地）
+  const base = ground > pointZ + 2.5 ? pointZ : Math.max(pointZ, ground);
+  return base + 0.5;
+}

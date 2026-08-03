@@ -212,18 +212,46 @@ function destroyObserverTds(session: ReplaySession, playerId: number): void {
   session.tds.delete(playerId);
 }
 
-/** SA 车辆四元数 → 欧拉角（度）。与 getRotationQuat/setVehicleRot 同引擎约定。（challenge 复用） */
-export function quatToEuler(q: { x: number; y: number; z: number; w: number }): { rx: number; ry: number; rz: number } {
+/**
+ * GTAQuat → 欧拉角（度），[0,360)。忠实移植 open.mp SDK 的 GTAQuat::ToEuler
+ * （Server/.../SDK/include/gtaquat.hpp，IllidanS4 公式）：
+ * - 录制端 GetVehicleRotationQuat 返回的就是 GTAQuat（w,x,y,z）约定
+ * - NPC_SetVehicleRot 接收欧拉角 Vector3，内部经 GTAQuat(Vector3 度) 构造回四元数
+ * - 所以回放必须用 GTAQuat::ToEuler 的精确逆运算，否则换算出的朝向是错的
+ *   （glm 标准 ZYX 公式 ≠ GTAQuat 约定：本实现曾用通用公式导致车头乱摆）
+ * 特殊约定：rx=asin(2*y*z−2*x*w)，ry/rz 均带负号，gimbal lock 分支，分量归一到 [0,360)
+ */
+export function quatToEuler(q: {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}): { rx: number; ry: number; rz: number } {
+  const EPSILON = 0.00000202655792236328125;
+  const clamp = (v: number): number => Math.max(-1, Math.min(1, v));
+  const deg = (r: number): number => (r * 180) / Math.PI;
+  const mod360 = (v: number): number => ((v % 360) + 360) % 360;
+  const atan2Deg = (y: number, x: number): number => deg(Math.atan2(y, x));
+
   const { x, y, z, w } = q;
-  const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
-  const sinp = Math.min(1, Math.max(-1, 2 * (w * y - z * x)));
-  const pitch = Math.asin(sinp);
-  const roll = Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y));
-  return {
-    rx: (roll * 180) / Math.PI,
-    ry: (pitch * 180) / Math.PI,
-    rz: (yaw * 180) / Math.PI,
-  };
+  const temp = 2 * y * z - 2 * x * w;
+  let rx: number;
+  let ry: number;
+  let rz: number;
+  if (temp >= 1 - EPSILON) {
+    rx = 90;
+    ry = -atan2Deg(clamp(y), clamp(w));
+    rz = -atan2Deg(clamp(z), clamp(w));
+  } else if (-temp >= 1 - EPSILON) {
+    rx = -90;
+    ry = -atan2Deg(clamp(y), clamp(w));
+    rz = -atan2Deg(clamp(z), clamp(w));
+  } else {
+    rx = deg(Math.asin(clamp(temp)));
+    ry = -atan2Deg(clamp(x * z + y * w), clamp(0.5 - x * x - y * y));
+    rz = -atan2Deg(clamp(x * y + z * w), clamp(0.5 - x * x - z * z));
+  }
+  return { rx: mod360(rx), ry: mod360(ry), rz: mod360(rz) };
 }
 
 /** 采样帧解出的可渲染状态（位置/旋转/速度 + 完整离散状态） */

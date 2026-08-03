@@ -2,7 +2,7 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import { getSafeGroundZ } from "@/core/colandreas";
+import { getSpawnGroundZ } from "@/core/colandreas";
 import { isInRace } from "@/race/room";
 import { isEditing } from "@/race/editor";
 import { isPlayerLocked } from "@/core/interaction";
@@ -84,7 +84,8 @@ export class SessionManager {
     const points = await this.loadSpawnPoints();
     if (points.length > 0) {
       const p = points[Math.floor(Math.random() * points.length)];
-      const z = getSafeGroundZ(p.x, p.y, p.z);
+      // Z 修正：colandreas 找实际地面（防卡建筑/半身入地/被抬到遮挡物顶）
+      const z = getSpawnGroundZ(p.x, p.y, p.z);
       player.setPos(p.x, p.y, z);
       player.setFacingAngle(p.angle);
     }

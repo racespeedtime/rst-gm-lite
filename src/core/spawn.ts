@@ -5,7 +5,7 @@ import { getAuthState } from "@/auth/auth";
 import { invalidateSettingCache, getSetting } from "@/personalize/settings";
 import { showDialog } from "@/utils/dialog";
 import { setIntervalSafe } from "@/core/timers";
-import { getSafeGroundZ } from "@/core/colandreas";
+import { getSpawnGroundZ } from "@/core/colandreas";
 import { isInRace } from "@/race/room";
 import { isEditing } from "@/race/editor";
 import { reapplyCurrentPlayerPreset } from "@/attire";
@@ -66,16 +66,16 @@ export async function spawnPlayer(player: Player): Promise<void> {
   if (hasLast) {
     x = Number(setting.lastX);
     y = Number(setting.lastY);
-    // 上次位置也用 colandreas 修正 Z（防卡建筑/悬空）
-    z = getSafeGroundZ(x, y, Number(setting.lastZ));
+    // 上次位置也用 colandreas 修正 Z（防卡建筑/悬空/半身入地/被抬到遮挡物顶）
+    z = getSpawnGroundZ(x, y, Number(setting.lastZ));
     angle = setting.lastAngle != null ? Number(setting.lastAngle) : 0;
   } else {
     const point = await getRandomSpawnPoint();
     if (!point) return; // 无出生点配置，跳过（保持默认状态）
     x = point.x;
     y = point.y;
-    // 随机出生点用 colandreas 测实际地面高度（防出生卡进建筑）
-    z = getSafeGroundZ(x, y, point.z);
+    // 随机出生点用 colandreas 测实际地面高度（防出生卡进建筑/抬到屋檐顶）
+    z = getSpawnGroundZ(x, y, point.z);
     angle = point.angle;
   }
   const skin = setting?.skinId ?? 0;
@@ -156,11 +156,11 @@ async function computeSpawnPos(setting: {
   if (hasLast) {
     const x = Number(setting.lastX);
     const y = Number(setting.lastY);
-    // 最后位置也用 colandreas 修正 Z（防卡建筑/悬空）
+    // 最后位置也用 colandreas 修正 Z（防卡建筑/悬空/半身入地/被抬到遮挡物顶）
     return {
       x,
       y,
-      z: getSafeGroundZ(x, y, Number(setting.lastZ)),
+      z: getSpawnGroundZ(x, y, Number(setting.lastZ)),
       angle: setting.lastAngle != null ? Number(setting.lastAngle) : 0,
     };
   }
@@ -169,7 +169,7 @@ async function computeSpawnPos(setting: {
   return {
     x: point.x,
     y: point.y,
-    z: getSafeGroundZ(point.x, point.y, point.z),
+    z: getSpawnGroundZ(point.x, point.y, point.z),
     angle: point.angle,
   };
 }
