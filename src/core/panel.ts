@@ -178,6 +178,13 @@ async function showPanelList(player: Player): Promise<void> {
 async function showGroupMenu(player: Player, group: PanelGroup, back: MenuBack): Promise<void> {
   const items = getVisibleItems(group, player);
   if (items.length === 0) return back();
+  // 单子项分组（战局/赛车/爱车/传送）：跳过分组中间层直接执行子项，
+  // 子菜单取消时回主面板（back）——导航保持"主面板 ⇄ 功能菜单"两层，
+  // 避免点进去先看到一个只有一条的冗余菜单
+  if (items.length === 1) {
+    await items[0].run(player, back);
+    return;
+  }
   lastGroupByPlayer.set(player.id, group.label);
   const info = items.map((item, i) => `${i + 1}. ${item.label}`).join("\n");
   const res = await showDialog(
