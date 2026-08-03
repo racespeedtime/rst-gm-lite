@@ -33,12 +33,10 @@ import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR, COLOR_WHITE } from "@/utils/col
 const END_GRACE_MS = 20_000;
 /** UUID 格式（/r s 按 id 查询前校验，避免非法字符串触发 uuid 类型错误） */
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-/** 比赛小地图图标索引：下一个 CP / 下下个 CP（避开大世界 map_icon 的 0-69） */
+/** 比赛小地图图标索引（对齐原版 RACE_MAP_ICON_INDEX=1，避开大世界 map_icon 的 0-69） */
 const RACE_MAP_ICON_NEXT = 70;
-const RACE_MAP_ICON_NEXT2 = 71;
-/** 比赛小地图图标类型：56 = 赛车 CP 预览图标（原版 RACE_MAP_ICON_TYPE），55 = 普通检查点 */
+/** 比赛小地图图标类型：56 = 赛车 CP 预览图标（原版 RACE_MAP_ICON_TYPE） */
 const RACE_MAP_ICON_TYPE_NEXT = 56;
-const RACE_MAP_ICON_TYPE_NEXT2 = 55;
 /** 比赛房间独立世界起始 id（避开公共大世界 0 与战局 1..n） */
 const RACE_WORLD_BASE = 5000;
 let nextRaceWorldId = RACE_WORLD_BASE;
@@ -557,11 +555,12 @@ async function updateBestTd(player: Player, room: RaceRoom, tds: RoomRaceTds): P
 
 /**
  * 显示下一个检查点箭头（红色=指向下一个CP，黄色=终点CP）。
- * 同时更新小地图双图标：下一个 CP（赛车图标 56，对齐原版 RACE_MAP_ICON_TYPE）
- * + 下下个 CP（普通检查点图标 55，若有）——小地图提前预示两个点。
+ * 小地图图标：对齐原版 Race_ShowCp——只在下一个 CP 放一个图标
+ * （SetPlayerMapIcon(索引1, 下一个CP, RACE_MAP_ICON_TYPE=56, 0, 1)），
+ * 原版没有"下下个 CP"的第二个图标。
  */
 function showNextCheckpoint(player: Player, cps: RaceRoom["cps"], cpIndex: number): void {
-  // 下一个 CP（nxt）与下下个 CP（nxt2，若有）
+  // 下一个 CP（nxt）与下下个 CP（nxt2，若有）：RaceCheckpoint 箭头从 nxt 指向 nxt2
   let nxt = cps[cpIndex + 1];
   let nxt2 = nxt ? cps[cpIndex + 2] : undefined;
   if (!nxt) {
@@ -575,20 +574,14 @@ function showNextCheckpoint(player: Player, cps: RaceRoom["cps"], cpIndex: numbe
   } else {
     RaceCheckpoint.set(player, 1, nxt.x, nxt.y, nxt.z, nxt.x, nxt.y, nxt.z, nxt.size);
   }
-  // 小地图双图标（SetPlayerMapIcon 无 world 过滤，per-player 全局显示）
-  player.setMapIcon(RACE_MAP_ICON_NEXT, nxt.x, nxt.y, nxt.z, RACE_MAP_ICON_TYPE_NEXT, 0xffffffaa, 1);
-  if (nxt2) {
-    player.setMapIcon(RACE_MAP_ICON_NEXT2, nxt2.x, nxt2.y, nxt2.z, RACE_MAP_ICON_TYPE_NEXT2, 0xffffffaa, 1);
-  } else {
-    player.removeMapIcon(RACE_MAP_ICON_NEXT2); // 无下下个（终点）→ 只留一个图标
-  }
+  // 单个小地图图标：下一个 CP，类型 56 + color 0 + style 1（原版 RACE_MAP_ICON_TYPE）
+  player.setMapIcon(RACE_MAP_ICON_NEXT, nxt.x, nxt.y, nxt.z, RACE_MAP_ICON_TYPE_NEXT, 0, 1);
 }
 
 /** 清除比赛小地图图标（离开/结束/完成时，对齐原版 Race_HideCp 的 RemovePlayerMapIcon） */
 function clearRaceMapIcons(player: Player): void {
   if (!player.isConnected()) return;
   player.removeMapIcon(RACE_MAP_ICON_NEXT);
-  player.removeMapIcon(RACE_MAP_ICON_NEXT2);
 }
 
 /** 销毁房间所有比赛信息 TD（防未创建/已失效的 TD destroy 抛异常） */
