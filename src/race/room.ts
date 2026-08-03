@@ -383,10 +383,12 @@ export async function startRace(player: Player): Promise<void> {
       beginRace(room);
       return;
     }
-    // 倒计时只给房间成员
-    const gt = new GameText(`~w~${count}`, 1000, 3);
+    // 倒计时：黄色数字（对齐原版 ~y~N）+ 音效 1056
+    const gt = new GameText(`~y~${count}`, 850, 3);
     for (const m of room.members.values()) {
+      if (!m.isConnected()) continue;
       gt.forPlayer(m);
+      m.playSound(1056);
     }
     count--;
     room.countdownTimer = setTimeoutSafe(countdown, 1000);
@@ -460,6 +462,14 @@ function beginRace(room: RaceRoom): void {
       // 创建计时 UI
       createRaceTd(m, room);
     }
+  }
+  // 开始提示：对齐原版 ~y~Start! + 音效 1057 + 恢复第三人称视角
+  const go = new GameText("~y~Start!", 850, 3);
+  for (const m of room.members.values()) {
+    if (!m.isConnected()) continue;
+    go.forPlayer(m);
+    m.playSound(1057);
+    m.setCameraBehind();
   }
   broadcastToRoom(room, "[赛车] 比赛开始！");
 }
