@@ -81,9 +81,7 @@ export interface ReplaySession {
   lastWeather: number;
 }
 
-const sessions = new Map<number, ReplaySession>(); // ownerId -> session
-/** worldId -> 该世界当前回放会话的 ownerId（共享控制：同世界玩家可控制 ghost 回放） */
-const worldSessions = new Map<number, number>();
+const sessions = new Map<number, ReplaySession>(); // playerId -> 该玩家自己的回放会话（各看各的）
 
 export function getReplaySession(playerId: number): ReplaySession | undefined {
   return sessions.get(playerId);
@@ -354,15 +352,12 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
   }
 
   const count = Math.min(5, Math.max(1, opts?.npcCount ?? 1));
-  // 按类型分流：ghost（自由录制）→ 当前世界播放，其他玩家可见可玩可控制；
+  // 按类型分流：ghost（自由录制）→ 当前世界播放（其他玩家看得见、可一起玩，
+  // 但控制 strictly per-player——每人只能控制自己发起的会话，各看各的）；
   // race（比赛回放）→ 独立世界 + 发起人自动观战（重现比赛场景）。
-  // 同一世界同时只允许一个 ghost 回放会话（避免控制归属混乱）
+  // 同一世界允许多份 ghost 回放（每人各开一份实体，各自时间线互不干扰）。
   const isGhost = replay.type === "ghost";
   const worldId = isGhost ? player.getVirtualWorld() : allocReplayWorld();
-  if (isGhost && worldSessions.has(worldId)) {
-    player.sendClientMessage(COLOR_ERROR, "该世界已有回放播放中（可 /rp 控制或等待发起人停止）");
-    return false;
-  }
   const ghosts: Ghost[] = [];
   const duration = data.header.frameCount * data.header.frameIntervalMs;
   const staggerMs = count > 1 ? duration / count : 0;
@@ -444,13 +439,12 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     lastWeather: -128,
   };
   sessions.set(player.id, session);
-  worldSessions.set(worldId, player.id);
   session.timer = setIntervalSafe(() => tickSession(session), TICK_MS);
   for (const g of session.ghosts) renderGhost(session, g);
 
   if (isGhost) {
-    // 自由录制回放：ghost 放当前世界（不切世界、不观战），同世界玩家可见可玩；
-    // /rp watch 可进入观战视角，/rp 控制对同世界玩家开放
+    // 自由录制回放：ghost 放当前世界（不切世界、不观战），同世界玩家看得见
+    // 可一起玩；控制只对自己会话生效（各看各的）；/rp watch 进入自己的观战视角
     player.sendClientMessage(
       COLOR_SUCCESS,
       `回放已开始：${ghosts.length} 台车在世界上重播 · /rp 控制（暂停/快进/后退/倍速/seek）· /rp watch 观战`,
@@ -473,39 +467,24 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
   return true;
 }
 
-/** 会话级控制（作用于该世界所有 ghost 的播放状态）。发起人 + 同世界玩家都可控制。 */
+/** 会话级控制（各看各的：只作用于自己发起的会话）。想控制别人的 ghost → 自己开一份。 */
 export function controlReplay(player: Player, action: string, arg?: string): void {
-  let session = sessions.get(player.id);
-  let controllingOther = false;
-  if (!session) {
-    // 非发起人：控制自己当前所在世界的回放会话（自由录制回放共享控制）
-    const ownerId = worldSessions.get(player.getVirtualWorld());
-    if (ownerId != null) {
-      session = sessions.get(ownerId);
-      controllingOther = true;
-    }
-  }
+  const session = sessions.get(player.id);
   if (!session) {
     player.sendClientMessage(COLOR_ERROR, "你不在播放回放中，用 /rp play 开始");
     return;
   }
-  const notify = (msg: string): void => {
-    player.sendClientMessage(
-      COLOR_RACE,
-      controllingOther ? `[回放·${session?.recorderName}] ${msg}` : msg,
-    );
-  };
   switch (action) {
     case "pause": {
       session.paused = true;
-      notify("回放已暂停");
+      player.sendClientMessage(COLOR_RACE, "回放已暂停");
       break;
     }
     case "resume":
     case "play": {
       session.paused = false;
       session.direction = 1;
-      notify("回放继续");
+      player.sendClientMessage(COLOR_RACE, "回放继续");
       break;
     }
     case "forward": {
@@ -513,7 +492,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       session.direction = 1;
       session.speed = n === 2 || n === 4 ? n : 1; // 默认 ×1（正放）
       session.paused = false;
-      notify(`快进 ×${session.speed}`);
+      player.sendClientMessage(COLOR_RACE, `快进 ×${session.speed}`);
       break;
     }
     case "back": {
@@ -522,13 +501,13 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       session.direction = -1;
       session.speed = n === 0.5 || n === 1 || n === 2 || n === 4 ? n : 1;
       session.paused = false;
-      notify(`倒放 ×${session.speed}`);
+      player.sendClientMessage(COLOR_RACE, `倒放 ×${session.speed}`);
       break;
     }
     case "speed": {
       const n = Number(arg);
       session.speed = n === 0.5 || n === 1 || n === 2 || n === 4 ? n : 1;
-      notify(`倍速 ×${session.speed}`);
+      player.sendClientMessage(COLOR_RACE, `倍速 ×${session.speed}`);
       break;
     }
     case "seek": {
@@ -546,11 +525,11 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       for (const g of session.ghosts) g.playTime = target;
       for (const g of session.ghosts) renderGhost(session, g);
       syncObserverTds(session); // seek 后 TD 状态与时间线一致
-      notify(`已跳转到 ${(target / 1000).toFixed(1)}s`);
+      player.sendClientMessage(COLOR_RACE, `已跳转到 ${(target / 1000).toFixed(1)}s`);
       break;
     }
     case "watch": {
-      // 观看回放（观战 ghost 车；比赛回放额外挂比赛信息 TD）
+      // 观看自己的回放（观战 ghost 车；比赛回放额外挂比赛信息 TD）
       if (!isObserving(player.id)) {
         startObserveVehicle(player, session.ghosts[0].vehicle);
         session.watchers.add(player.id); // 会话停止时统一退出观战
@@ -563,7 +542,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       break;
     }
     case "stop": {
-      stopReplaySession(session.ownerId);
+      stopReplaySession(player.id);
       player.sendClientMessage(COLOR_SUCCESS, "回放已停止");
       break;
     }
@@ -589,7 +568,6 @@ export function stopReplaySession(playerId: number): void {
   const session = sessions.get(playerId);
   if (!session) return;
   sessions.delete(playerId);
-  worldSessions.delete(session.worldId);
   if (session.timer) clearIntervalSafe(session.timer);
   for (const g of session.ghosts) {
     try {
