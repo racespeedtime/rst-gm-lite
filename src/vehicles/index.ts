@@ -85,8 +85,16 @@ export async function getOrCreateUserVehicle(
 }
 
 /** 应用车辆外观（默认预设的 颜色/paintjob/改装件） */
-/** 刷车（懒创建爱车 + 一人一车 + 完整预设外观 + 氮气） */
-export async function spawnVehicle(player: Player, modelId: number): Promise<boolean> {
+/**
+ * 刷车（懒创建爱车 + 一人一车 + 完整预设外观 + 氮气）。
+ * 比赛默认发车/无车兜底也走这里（silent=true）：玩家有该模型爱车则复用其外观，
+ * 没有则自动创建成爱车——玩家始终在用自己的爱车比赛（对齐原版玩家车语义）。
+ */
+export async function spawnVehicle(
+  player: Player,
+  modelId: number,
+  silent = false,
+): Promise<boolean> {
   if (!isValidVehicleModel(modelId)) {
     player.sendClientMessage(COLOR_ERROR, "车辆ID需在 400-611 之间");
     return false;
@@ -135,10 +143,12 @@ export async function spawnVehicle(player: Player, modelId: number): Promise<boo
       playerVehLabels.set(player.id, label);
     }
     veh.putPlayerIn(player, 0);
-    player.sendClientMessage(
-      COLOR_SUCCESS,
-      `刷车成功！爱车模型 [${modelId}]，/cc 换色，/c wode 召唤`,
-    );
+    if (!silent) {
+      player.sendClientMessage(
+        COLOR_SUCCESS,
+        `刷车成功！爱车模型 [${modelId}]，/cc 换色，/c wode 召唤`,
+      );
+    }
     return true;
   } catch (e) {
     logger.error(`[veh] ${player.getName().name} 刷车失败 ${modelId}`, e);

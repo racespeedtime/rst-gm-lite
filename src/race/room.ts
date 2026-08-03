@@ -11,15 +11,10 @@ import {
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import { getOwnedVehicle } from "@/vehicles";
+import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
 import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scripts";
 import { isEditing } from "./editor";
-import {
-  applyRaceNoCollision,
-  restorePersonalNoCollision,
-  getDefaultRaceModel,
-  spawnRaceVehicleAt,
-} from "./vehicle";
+import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve, isObserving, cleanupObserve } from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
@@ -331,7 +326,7 @@ export async function createRaceRoom(player: Player, raceId: string): Promise<Ra
     reconnectSlots: new Map(),
   };
   rooms.set(room.id, room);
-  joinRoom(player, room);
+  await joinRoom(player, room);
   player.sendClientMessage(
     COLOR_SUCCESS,
     `比赛房间已创建，赛道「${race.name}」（${room.laps} 圈），输入 /r j 可加入`,
@@ -339,7 +334,7 @@ export async function createRaceRoom(player: Player, raceId: string): Promise<Ra
   return room;
 }
 
-function joinRoom(player: Player, room: RaceRoom): void {
+async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   // 已参与其他房间则先离开（防止 playerRaces 被覆盖、旧房间残留成员）
   if (isInRace(player.id)) {
     leaveRace(player);
@@ -358,7 +353,8 @@ function joinRoom(player: Player, room: RaceRoom): void {
   // 起点看到目标。优先级：
   // 1. 有爱车（playerVehs 实体，本次会话刷过的车）→ 用爱车（即使人不在车里）
   // 2. 没爱车但人在某辆车里 → 挪当前车
-  // 3. 都没 → 刷默认比赛车兜底（首个 CP 有 cveh 用其车型，否则 411）
+  // 3. 都没 → 用默认比赛车型刷爱车（有该模型爱车则复用外观，没有则自动创建
+  //    成爱车——玩家始终用自己的爱车比赛），原地放入
   const first = room.cps[0];
   if (first) {
     const owned = getOwnedVehicle(player.id);
@@ -371,7 +367,12 @@ function joinRoom(player: Player, room: RaceRoom): void {
       veh.setPos(first.x, first.y, first.z);
       veh.setZAngle(first.angle);
     } else {
-      spawnRaceVehicleAt(player, getDefaultRaceModel(room.cps), first.x, first.y, first.z, first.angle);
+      await spawnVehicle(player, getDefaultRaceModel(room.cps), true);
+      const veh = getOwnedVehicle(player.id);
+      if (veh && veh.isValid()) {
+        veh.setPos(first.x, first.y, first.z);
+        veh.setZAngle(first.angle);
+      }
     }
     // 显示第一个 CP（红色箭头指向第二个；open.mp 切换世界不改变坐标，
     // 开赛切到比赛世界后仍站在同一位置，beginRace 的 setPos 幂等保留）
@@ -469,25 +470,10 @@ function beginRace(room: RaceRoom): void {
       // 发车（对齐原版 Race_Game_Start_s）：不把玩家传送到第一个 CP——加入房间时
       // 已在起点定位（joinRoom），倒计时/等待期间可在起点自由活动，发车瞬间不应被拉回起点。
       if (!m.isInAnyVehicle()) {
-        // 无车兜底（等待期间车辆被销毁等极端情况）：优先用爱车，否则原地刷默认比赛车，
-        // 不移动玩家
-        const owned = getOwnedVehicle(m.id);
-        if (owned && owned.isValid()) {
-          const pos = m.getPos();
-          owned.setPos(pos.x, pos.y, pos.z);
-          owned.setZAngle(m.getFacingAngle().angle);
-          owned.putPlayerIn(m, 0);
-        } else {
-          const pos = m.getPos();
-          spawnRaceVehicleAt(
-            m,
-            getDefaultRaceModel(room.cps),
-            pos.x,
-            pos.y,
-            pos.z,
-            m.getFacingAngle().angle,
-          );
-        }
+        // 无车兜底（等待期间车辆被销毁等极端情况）：用默认比赛车型刷爱车
+        // （有该模型爱车则复用其外观，没有则自动创建成爱车——玩家始终用自己的
+        // 爱车），在玩家当前位置创建并放入，不移动玩家
+        void spawnVehicle(m, getDefaultRaceModel(room.cps), true);
       }
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);
@@ -1219,8 +1205,9 @@ function joinRoomFlow(player: Player): void {
     player.sendClientMessage(COLOR_ERROR, "当前没有等待中的比赛房间");
     return;
   }
-  joinRoom(player, room);
-  broadcastToRoom(room, `[赛车] ${player.getName().name} 加入了比赛`);
+  void joinRoom(player, room).then(() => {
+    broadcastToRoom(room, `[赛车] ${player.getName().name} 加入了比赛`);
+  });
 }
 
 /**
