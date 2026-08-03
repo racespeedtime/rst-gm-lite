@@ -1,4 +1,4 @@
-import { Npc, Player, TextDraw, Vehicle } from "@infernus/core";
+import { Dynamic3DTextLabel, Npc, Player, TextDraw, Vehicle } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -7,6 +7,7 @@ import { startObserveVehicle, stopObserve, isObserving } from "@/core/observe";
 import { parseReplayFile, decodeFrame, lerpFrame, type ReplayData, type ReplayFrame } from "./format";
 import { join } from "node:path";
 import { RECORDING_DIR } from "./storage";
+import { DEFAULT_CHARSET } from "@/utils/constants";
 import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
 
 /**
@@ -34,6 +35,8 @@ const TICK_MS = 16;
 interface Ghost {
   npc: Npc;
   vehicle: Vehicle;
+  /** 身份 3D 标签（NPC 无 nametag，用 Dynamic3DTextLabel 显示"本身身份 + 扮演谁"） */
+  label: Dynamic3DTextLabel;
   /** 该分身的播放时间（毫秒，从文件起点；错峰起始） */
   playTime: number;
   staggerMs: number;
@@ -47,6 +50,8 @@ export interface ReplaySession {
   worldId: number;
   data: ReplayData;
   ghosts: Ghost[];
+  /** 录制者名（回放标签"扮演谁"用；从 replay 记录取） */
+  recorderName: string;
   /** 会话级播放状态（作用于所有 ghost） */
   playing: boolean;
   paused: boolean;
@@ -337,6 +342,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     for (let i = 0; i < count; i++) {
       const name = `RP_${Date.now()}_${i}`.slice(0, 24);
       const npc = new Npc(name).create();
+      const npcPlayer = npc.getPlayer();
       const vehicle = new Vehicle({
         modelId: data.header.vehicleModelId,
         x: data.header.startX,
@@ -352,13 +358,31 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
       npc.setVirtualWorld(worldId);
       npc.putInVehicle(vehicle, 0);
       npc.setInvulnerable(true);
-      ghosts.push({ npc, vehicle, playTime: i * staggerMs, staggerMs, model: data.header.vehicleModelId });
+      // NPC 无 nametag：绑 3D 标签显示"本身身份（NPC 名）+ 扮演谁（录制者 + 分身编号）"
+      const label = new Dynamic3DTextLabel({
+        text:
+          `{FFD700}${name}` +
+          `\n{FFFFFF}回放 · ${replay.recorderName}` +
+          (count > 1 ? `{808080} [ghost ${i + 1}/${count}]` : ""),
+        color: "#ffffff",
+        x: 0,
+        y: 0,
+        z: 0.3, // 头顶上方（附着玩家时 x/y/z 为相对偏移）
+        drawDistance: 40,
+        testLOS: false,
+        attachedPlayer: npcPlayer.id, // IDynamic3DTextLabel.attachedPlayer 为 playerId（number）
+        worldId,
+        charset: DEFAULT_CHARSET, // 支持中文（录制者名可能为中文）
+      });
+      label.create();
+      ghosts.push({ npc, vehicle, label, playTime: i * staggerMs, staggerMs, model: data.header.vehicleModelId });
     }
   } catch (e) {
     logger.error(`[replay] 创建回放实体失败`, e);
     // 清理已创建的
     for (const g of ghosts) {
       try {
+        g.label.destroy();
         g.npc.destroy();
         g.vehicle.destroy();
       } catch {
@@ -375,6 +399,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     worldId,
     data,
     ghosts,
+    recorderName: replay.recorderName,
     playing: true,
     paused: false,
     direction: 1,
@@ -506,6 +531,7 @@ export function stopReplaySession(playerId: number): void {
   if (session.timer) clearIntervalSafe(session.timer);
   for (const g of session.ghosts) {
     try {
+      g.label.destroy();
       g.npc.destroy();
       g.vehicle.destroy();
     } catch {
