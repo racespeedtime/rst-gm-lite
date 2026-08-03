@@ -36,6 +36,7 @@ import {
   initVehicleAuto,
   cleanupVehicleAuto,
   syncVehicleAutoState,
+  syncStuntState,
   syncNoCollisionState,
 } from "@/core/vehicleAuto";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
@@ -103,6 +104,8 @@ async function handlePlayerConnect(player: Player) {
     await applyInvincibleState(player);
     // 车辆自动状态：autoFix 子弹拦截名单同步写入（onWeaponShot 同步热路径用）
     if (loginSetting) syncVehicleAutoState(player, loginSetting);
+    // 特技显示：按人启用/禁用原生 Stunt Bonus（登录时应用个人设置）
+    syncStuntState(player, loginSetting?.showStunt ?? true);
     // 无碰撞按个人设置（非比赛状态；比赛中由比赛系统强制覆盖）
     syncNoCollisionState(player, loginSetting?.vehicleNoCollision ?? false);
     // 应用玩家标识（NameTag 显隐 + 聊天前后缀缓存）

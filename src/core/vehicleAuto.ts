@@ -20,7 +20,8 @@ import { logger } from "@/logger";
  * - vehicleAutoFix 自动修复：onWeaponShot 拦截打向自己车辆的子弹 + 每秒 repair 兜底
  * - vehicleColorCycle 定时换色（变色龙）：每秒随机换色
  * - nitroType 氮气：timer=每 tick 计数、满 15 秒补一次；hold=按加速键补充
- * - showStunt 特技显示：车辆腾空提示
+ * - showStunt 特技显示：按人调用原生 EnableStuntBonusForPlayer（游戏内建特技
+ *   奖励，对齐原版 /stunt 开关——不再自造 GameText 提示）
  *
  * 1 秒定时器驱动（对齐原版 serverInfo.startSecondTimer）。
  */
@@ -28,15 +29,9 @@ import { logger } from "@/logger";
 const VEHICLE_TICK_MS = 1000;
 /** 氮气补充：累计 15 次 tick = 15 秒（原版 addNitro） */
 const NITRO_TICK_LIMIT = 15;
-/** 特技显示冷却（防刷屏） */
-const STUNT_COOLDOWN_MS = 2000;
-/** 视为腾空的 z 速度阈值（SA-MP 单位） */
-const STUNT_AIR_SPEED = 1.2;
 
 /** playerId -> 氮气 tick 计数 */
 const nitroCount = new Map<number, number>();
-/** playerId -> 上次特技提示时间 */
-const lastStuntAt = new Map<number, number>();
 /**
  * vehicleAutoFix 的同步缓存（onWeaponShot 是同步热路径，async handler 返回值会被
  * infernus 忽略导致拦截失效——对齐原版 PlayerInfo 内存态，登录/切换时同步写入）。
@@ -49,6 +44,21 @@ export function syncVehicleAutoState(player: Player, setting: { vehicleAutoFix: 
     autoFixSet.add(player.id);
   } else {
     autoFixSet.delete(player.id);
+  }
+}
+
+/**
+ * 应用特技显示（showStunt）：按人调用原生 EnableStuntBonusForPlayer——
+ * 游戏内建特技奖励（翻车/腾空时客户端原生弹 "Stunt Bonus"），对齐原版
+ * /stunt 开关（EnableStuntBonusForPlayer(playerid, 1/0)）。
+ * infernus 未暴露公开方法，用 Player.__inject__.enableStuntBonus 调原生。
+ * 登录/切换设置时调用。
+ */
+export function syncStuntState(player: Player, enabled: boolean): void {
+  try {
+    Player.__inject__.enableStuntBonus(player.id, enabled);
+  } catch (e) {
+    logger.warn(`[vehAuto] 设置特技显示失败 ${player.id}`, e);
   }
 }
 
@@ -97,7 +107,6 @@ export function flipVehicle(veh: Vehicle, lift = 0): void {
 /** 玩家断线清理（防 playerId 复用残留计时） */
 export function cleanupVehicleAuto(playerId: number): void {
   nitroCount.delete(playerId);
-  lastStuntAt.delete(playerId);
   autoFixSet.delete(playerId);
 }
 
@@ -132,14 +141,6 @@ async function vehicleTick(player: Player): Promise<void> {
       veh.addComponent(1010);
     } else {
       nitroCount.set(player.id, n);
-    }
-  }
-  // 特技显示：车辆腾空（z 速度大）提示，带冷却防刷屏
-  if (setting.showStunt && (lastStuntAt.get(player.id) ?? 0) + STUNT_COOLDOWN_MS < Date.now()) {
-    const vel = veh.getVelocity();
-    if (Math.abs(vel.z) > STUNT_AIR_SPEED) {
-      lastStuntAt.set(player.id, Date.now());
-      new GameText("~r~STUNT!~w~ +1", 1200, 6).forPlayer(player);
     }
   }
 }

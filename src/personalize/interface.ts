@@ -7,6 +7,7 @@ import {
   toggleText,
   toggleSetting,
 } from "./settings";
+import { syncStuntState } from "@/core/vehicleAuto";
 import type { MenuBack } from "@/core/panel";
 
 /**
@@ -83,7 +84,11 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     return again();
   }
   if (index === 5) {
-    await toggleSetting(player, "showStunt", "特技显示");
+    // 特技显示：切换后立即按人启用/禁用原生 Stunt Bonus（对齐原版 /stunt 开关）
+    const next = !setting.showStunt;
+    await updateSetting(player, { showStunt: next });
+    notifySaved(player, `特技显示已${next ? "开启" : "关闭"}`);
+    syncStuntState(player, next);
     return again();
   }
 }
