@@ -9,6 +9,35 @@ import { isPlayerInWater } from "@infernus/colandreas";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
+/** 海平面参考高度（SA 海水水面 z≈0；陆地判定取明显高于海平面） */
+const SEA_LEVEL = 0;
+
+/**
+ * 找最近的陆地：从 (x,y) 向四周方向逐步外扩扫描（24 方向 × 每 30 单位一圈，
+ * 最大半径 500）。每个采样点用 colandreas 找地面高度——水域点返回海底（远低于
+ * 海平面），陆地点的地面明显高于海平面。返回最近陆地坐标（地面 + 0.8 防半身
+ * 埋地）；扫描范围内无陆地返回 null（colandreas 不可用/无数据时所有点回退
+ * fallback，同样判非陆地）。
+ */
+function findNearestLand(x: number, y: number): { x: number; y: number; z: number } | null {
+  const STEP = 30; // 每步外扩距离
+  const MAX_DIST = 500; // 最大搜索半径
+  const ANGLES = 24; // 每圈方向数（15° 步进）
+  const FALLBACK_Z = -100; // getSafeGroundZ fallback（地图内最低值，保证无数据点不判陆地）
+  for (let dist = STEP; dist <= MAX_DIST; dist += STEP) {
+    for (let i = 0; i < ANGLES; i++) {
+      const ang = (i / ANGLES) * Math.PI * 2;
+      const sx = x + Math.cos(ang) * dist;
+      const sy = y + Math.sin(ang) * dist;
+      const ground = getSafeGroundZ(sx, sy, FALLBACK_Z);
+      if (ground > SEA_LEVEL + 1.5) {
+        return { x: sx, y: sy, z: ground + 0.8 };
+      }
+    }
+  }
+  return null;
+}
+
 /**
  * 快捷操作菜单（面板按钮触发）
  * 1. 脱离卡死（随机左右）
@@ -55,13 +84,20 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
         // 卡在建筑里/悬空时直接回到该点的地面。室内没有碰撞数据 → 退化为抬升。
         const pos = player.getPos();
         if (player.getInterior() === 0) {
-          // 水里：colandreas 找的是海底地面，传过去还在水里——
-          // 改为浮出水面（playerDepth = 玩家在水下的深度，水面 = 当前 z + playerDepth）
+          // 水里：不是浮出水面，而是找最近的陆地传送过去
+          // （colandreas 对水域返回的是海底地面，原地落下仍在水里）
           try {
             const water = isPlayerInWater(player);
             if (water && water.playerDepth > 0) {
+              const land = findNearestLand(pos.x, pos.y);
+              if (land) {
+                player.setPos(land.x, land.y, land.z);
+                player.sendClientMessage("#ffffff", "已脱离卡死（传送到最近陆地）");
+                return;
+              }
+              // 附近找不到陆地（罕见/远离岸边）：退化为浮出水面兜底
               player.setPos(pos.x, pos.y, pos.z + water.playerDepth + 0.5);
-              player.sendClientMessage("#ffffff", "已脱离卡死（浮出水面）");
+              player.sendClientMessage("#ffffff", "附近未找到陆地，已浮出水面");
               return;
             }
           } catch {
