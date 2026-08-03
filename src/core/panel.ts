@@ -25,6 +25,7 @@ import {
 import { isEditing, exitEdit } from "@/race/editor";
 import { showMySessionLogs } from "@/auth/sessionLog";
 import { showMyProfile } from "@/core/profile";
+import { openReplayMenuPanel } from "@/replay/menu";
 import { showDialog } from "@/utils/dialog";
 import { COLOR_INFO } from "@/utils/colors";
 
@@ -165,6 +166,19 @@ const panelGroups: PanelGroup[] = [
       { label: "修改密码", raceSafe: true, run: changeOwnPassword },
       { label: "快捷操作", raceSafe: true, run: openQuickActionsMenu },
       { label: "聊天范围", raceSafe: true, run: changeChatRangeFlow },
+    ],
+  },
+  {
+    label: "回放",
+    desc: "录制 / 观看 / 控制",
+    items: [
+      {
+        label: "回放",
+        desc: "我的录制 · 开始/停止录制 · 回放控制",
+        // 比赛中允许（比赛自动录制回放、回放控制）——用独立菜单避免比赛房间组膨胀
+        raceSafe: true,
+        run: openReplayMenuPanel,
+      },
     ],
   },
   {

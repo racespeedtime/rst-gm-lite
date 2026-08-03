@@ -16,6 +16,7 @@ import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scri
 import { isEditing } from "./editor";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
+import { raceRecordingStart, raceRecordingStop } from "@/replay";
 import { startObservePlayer, stopObserve, isObserving, cleanupObserve, getObserverIdsOf } from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
@@ -500,6 +501,8 @@ function beginRace(room: RaceRoom): void {
       mp.finished = false;
       // 比赛中强制无碰撞（防他人车辆穿模阻挡），结束/离开时按个人设置恢复
       applyRaceNoCollision(m, true);
+      // 比赛自动录制：开赛即记录整个房间（回放/后续观战/影子挑战用）
+      raceRecordingStart(m.id, { raceId: room.raceId, raceName: room.raceName });
       // 切到比赛独立世界（车辆同步）
       m.setVirtualWorld(room.worldId);
       if (m.isInAnyVehicle()) {
@@ -890,6 +893,9 @@ function endRoom(room: RaceRoom): void {
   for (const m of room.members.values()) {
     RaceCheckpoint.disable(m);
     clearRaceMapIcons(m); // 比赛结束：清每个成员的小地图图标
+    // 回放：比赛结束停止录制并落盘（名次/完成态快照）
+    const r = ranked.find((x) => x.playerId === m.id);
+    raceRecordingStop(m.id, { rank: r ? ranked.indexOf(r) + 1 : null, finished: r?.finished ?? false });
     // 脚本车辆（cveh）在比赛结束时统一清理，防残留比赛世界成为幽灵车
     cleanupScriptVehicle(m.id);
     const mp = playerRaces.get(m.id);
@@ -964,6 +970,8 @@ export function leaveRace(player: Player): void {
   RaceCheckpoint.disable(player);
   clearRaceMapIcons(player); // 离开：清比赛小地图图标
   playerRaces.delete(player.id);
+  // 回放：中途离开比赛仍停止录制落盘（未完成，无名次）
+  raceRecordingStop(player.id);
   // 脚本车辆（cveh）在离开比赛时销毁，防残留
   cleanupScriptVehicle(player.id);
   // 先退出观战（避免 stopObserve 覆盖世界回比赛世界），再恢复原世界
@@ -1314,6 +1322,8 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     // 切回比赛世界 + 恢复 CP 显示
     player.setVirtualWorld(room.worldId);
     if (room.state === "RACING") {
+      // 回放：重连玩家继续录制（断线时已强制落盘，重连后新开一段）
+      raceRecordingStart(player.id, { raceId: room.raceId, raceName: room.raceName });
       const tds = createRaceTd(player, room);
       // 恢复 BEST TD（房间缓存已有，无则查询）
       void updateBestTd(player, room, tds);

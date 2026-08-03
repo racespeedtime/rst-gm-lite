@@ -4,6 +4,7 @@ import { logger } from "@/logger";
 import { getAuthState, askNewPassword } from "@/auth/auth";
 import { showUserSessionLogs } from "@/auth/sessionLog";
 import { showProfileByUsername } from "@/core/profile";
+import { openOpReplayPanel } from "@/replay/menu";
 import type { MenuBack } from "@/core/panel";
 import { hashPassword } from "@/auth/password";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
@@ -85,7 +86,7 @@ export async function openOpPanel(player: Player, back?: MenuBack): Promise<void
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "管理员面板",
-      info: "1. 重置用户密码\n2. 查看玩家信息\n3. 查看用户登录记录",
+      info: "1. 重置用户密码\n2. 查看玩家信息\n3. 查看用户登录记录\n4. 回放管理（删除）",
       button1: "执行",
       button2: "关闭",
     }),
@@ -98,6 +99,8 @@ export async function openOpPanel(player: Player, back?: MenuBack): Promise<void
     await showProfileByUsername(player, () => openOpPanel(player, back));
   } else if (res.listItem === 2) {
     await showUserSessionLogs(player, () => openOpPanel(player, back));
+  } else if (res.listItem === 3) {
+    await openOpReplayPanel(player, () => openOpPanel(player, back));
   }
 }
 

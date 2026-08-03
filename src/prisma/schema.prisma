@@ -483,3 +483,31 @@ model SpawnPoint {
 
   @@map("spawn_point")
 }
+
+/**
+ * 赛车回放索引（元数据存 DB，录像数据本体存文件 scriptfiles/recordings/）。
+ * 玩家 uid 稳定，其余展示信息（玩家名/赛道名/爱车模型/名次）在录制结束时
+ * 快照落库——这些字段可能随时间变化（改名/删赛道/换车），快照保证回放列表
+ * 永远显示录制当时的信息。
+ */
+model Replay {
+  id             String   @id @default(uuid()) @db.Uuid
+  type           String   @db.VarChar(16) // race | ghost
+  userId         String   @db.Uuid // 录制者 uid（稳定）
+  recorderName   String   @db.VarChar(255) // 快照：录制时玩家名
+  raceId         String?  @db.Uuid // 比赛回放关联赛道
+  raceName       String?  @db.VarChar(255) // 快照：赛道名（赛道可能被改名/删除）
+  vehicleModelId Int      @map("vehicle_model_id") // 快照：爱车模型
+  fileName       String   @db.VarChar(255) // 录像文件相对路径（数据本体）
+  durationMs     Int      @map("duration_ms")
+  frameCount     Int      @map("frame_count")
+  fileSize       Int      @map("file_size")
+  rank           Int? // 比赛回放：名次快照（未完成/中途退出为 null）
+  finished       Boolean? // 比赛回放：是否完成
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  @@index([userId])
+  @@index([deletedAt])
+  @@map("replay")
+}

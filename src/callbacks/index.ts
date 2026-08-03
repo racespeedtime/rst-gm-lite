@@ -44,6 +44,7 @@ import { initSkinCommands } from "@/personalize/skinPicker";
 import { initQuickCommands } from "@/personalize/quickActions";
 import { initHelpCommand, sendWelcomeMessage } from "@/core/help";
 import { initColandreas } from "@/core/colandreas";
+import { initReplay, cleanupReplay, shutdownReplay } from "@/replay";
 import {
   applyWorldEnv,
   clearWorldEnvForPlayer,
@@ -210,6 +211,8 @@ PlayerEvent.onDisconnect(({ player, next }) => {
   cleanupObserve(player.id);
   // 世界环境：清理 timeFlow 定时器
   clearWorldEnvForPlayer(player.id);
+  // 回放：录制强制落盘 + 销毁该玩家发起的回放会话（NPC/车辆）
+  cleanupReplay(player.id);
   // 断线清理：空白预设（在清 auth 前取 userId）
   const leavingUserId = getAuthState(player.id)?.userId;
   if (leavingUserId) {
@@ -345,6 +348,9 @@ initVehicleAuto();
 // 装扮实时编辑器（人物 EditAttachedObject / 车辆 DynamicObject 拖拽编辑保存）
 initAttireEditor();
 
+// 回放系统（/rec 录制 · /rp 回放控制 · 比赛自动录制 · RakNet 拦截采样）
+initReplay();
+
 // 游戏会话心跳：定时更新 last_heartbeat_at + 更正异常掉线会话
 startSessionHeartbeat();
 
@@ -374,5 +380,7 @@ GameMode.onInit(({ next }) => {
 GameMode.onExit(({ next }) => {
   // 清理世界环境实体（图标/标签）与玩家 timeFlow 定时器
   clearWorldEnvironment();
+  // 回放：销毁全部回放会话（NPC/车辆）+ 录制强制落盘
+  shutdownReplay();
   return next();
 });

@@ -17,6 +17,9 @@ log.txt
 *.pdb
 *.so
 
+# 赛车回放录像文件（数据本体，不入库不提交）
+scriptfiles/recordings
+
 .agents
 .claude
 .zcode
