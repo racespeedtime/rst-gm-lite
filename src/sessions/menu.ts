@@ -49,7 +49,9 @@ export async function openSessionMenu(player: Player, back?: MenuBack): Promise<
           player.sendClientMessage(COLOR_ERROR, "你已经在自己的战局中");
           return;
         }
-        await sessionManager.joinSession(player, mine);
+        // 路由到 createSession：内部找到已有战局静默加入 + 提示"已回到你的战局"，
+        // 不再给自己广播"加入了战局"的重复提示
+        await sessionManager.createSession(player, mine.name, mine.password);
       },
     });
   }

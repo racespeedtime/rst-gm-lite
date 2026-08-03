@@ -131,6 +131,8 @@ export class SessionManager {
     player: Player,
     session: Session,
     password?: string,
+    /** 加入提示不发给加入者本人（房主创建/回到自己的战局时用，避免"自己加入了"的重复提示） */
+    silentSelf = false,
   ): Promise<{ ok: boolean; reason?: string }> {
     if (session.isFull) return { ok: false, reason: "战局已满" };
     if (session.password && session.password !== password) {
@@ -141,7 +143,17 @@ export class SessionManager {
     session.members.set(player.id, player);
     this.playerSessions.set(player.id, session.id);
     await this.teleportTo(player, session.worldId);
-    session.broadcast(`[战局] ${player.getName().name} 加入了战局`);
+    // 加入提示：默认全员可见；silentSelf 时不发给本人（本人由"创建成功/已回到"提示覆盖）
+    const name = player.getName().name;
+    if (silentSelf) {
+      for (const p of session.members.values()) {
+        if (p.id !== player.id) {
+          p.sendClientMessage(SESSION_COLOR, `[战局] ${name} 加入了战局`);
+        }
+      }
+    } else {
+      session.broadcast(`[战局] ${name} 加入了战局`);
+    }
     return { ok: true };
   }
 
@@ -150,7 +162,9 @@ export class SessionManager {
     // 若已有自己的战局则先加入它（防止重复创建）
     const mine = this.findOwnedSession(player);
     if (mine) {
-      await this.joinSession(player, mine);
+      // 回到已有战局：静默加入（自己不看"加入了"），其他成员仍可见
+      await this.joinSession(player, mine, undefined, true);
+      player.sendClientMessage(SESSION_COLOR, `已回到你的战局「${mine.name}」`);
       return mine;
     }
     const session = new Session({
@@ -161,7 +175,8 @@ export class SessionManager {
       password,
     });
     this.privateSessions.set(session.id, session);
-    await this.joinSession(player, session);
+    // 静默加入：房主不需要"加入了战局"提示（下面"创建成功，你是房主"已覆盖）
+    await this.joinSession(player, session, undefined, true);
     player.sendClientMessage(SESSION_COLOR, `战局「${session.name}」创建成功，你是房主`);
     return session;
   }

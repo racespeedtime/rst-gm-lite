@@ -70,13 +70,9 @@ export async function runLobby(player: Player): Promise<void> {
 
   // 3. 按设置进入战局
   if (enterRes.response === 1 && enterRes.listItem === 1) {
-    const mine = sessionManager.findOwnedSession(player);
-    if (mine) {
-      await sessionManager.joinSession(player, mine);
-    } else {
-      const pw = setting?.sessionPassword ?? null;
-      await sessionManager.createSession(player, `${player.getName().name} 的战局`, pw);
-    }
+    // 进入自身战局：已有则回到（createSession 内部处理防重复创建），没有则创建
+    const pw = setting?.sessionPassword ?? null;
+    await sessionManager.createSession(player, `${player.getName().name} 的战局`, pw);
   } else {
     await sessionManager.joinPublicWorld(player);
   }
