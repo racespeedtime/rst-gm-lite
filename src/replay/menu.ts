@@ -191,9 +191,9 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       info: [
         "1. 播放 / 继续",
         "2. 暂停",
-        "3. 快进 ×2",
-        "4. 后退 ×2",
-        "5. 倍速（0.5 / 1 / 2 / 4）",
+        "3. 正放（保持倍速）",
+        "4. 倒放（保持倍速）",
+        "5. 倍速（0.5 / 1 / 2 / 4，保持方向）",
         "6. 跳转时间（秒）",
         "7. 观看视角",
         "8. 停止回放",
@@ -217,10 +217,10 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       controlReplay(player, "pause");
       return back?.();
     case 2:
-      controlReplay(player, "forward", "2");
+      controlReplay(player, "forward");
       return back?.();
     case 3:
-      controlReplay(player, "back", "2");
+      controlReplay(player, "back");
       return back?.();
     case 4: {
       const sp = await showDialog(
