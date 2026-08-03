@@ -85,6 +85,10 @@ export interface ReplaySession {
   direction: 1 | -1;
   speed: number; // 倍速 0.5~4
   timer?: NodeJS.Timeout;
+  /** 上次播放推进时间（真实流逝计时）：
+   *  固定 16ms/tick 推进在事件循环繁忙/定时器节流时实际间隔 >16ms → 播放时间
+   *  走得比现实慢，回放呈慢倍速感。改用真实流逝时间推进，快慢恒定 1:1。 */
+  lastTickAt: number;
   /** 播放到结尾是否已提示过（防每帧重复提示"已播完"） */
   endedNotified: boolean;
   /** 观战者（发起人 + /rp watch 的人）的比赛信息 TD：playerId → 4 行 TD */
@@ -336,6 +340,7 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
     v.create();
     v.setVirtualWorld(session.worldId);
     v.linkToInterior(0);
+    v.addComponent(1010); // 氮气（换车型后新车同样带，对齐录制时玩家爱车）
     v.setHealth(1000);
     ghost.npc.setVirtualWorld(session.worldId);
     ghost.npc.putInVehicle(v, 0);
@@ -376,7 +381,12 @@ function tickSession(session: ReplaySession): void {
     return;
   }
   if (!session.playing || session.paused) return;
-  const dt = TICK_MS * session.speed * session.direction;
+  // 用真实流逝时间推进播放（固定 16ms/tick 在定时器节流时偏慢 → 慢倍速感）。
+  // clamp 250ms：服务器卡顿/断线恢复等单次大延迟不跳变（最多跳 0.25s 播放）
+  const now = Date.now();
+  const elapsed = Math.min(250, now - session.lastTickAt);
+  session.lastTickAt = now;
+  const dt = elapsed * session.speed * session.direction;
   const lastIdx = session.data.header.frameCount - 1;
   const maxTime = lastIdx * session.data.header.frameIntervalMs;
   // 倒放/后退离开结尾 → 重置"已播完"提示标记（back/seek 后再次正放播完会重新提示）
@@ -522,6 +532,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
       vehicle.create();
       vehicle.setVirtualWorld(worldId);
       vehicle.linkToInterior(0);
+      vehicle.addComponent(1010); // 氮气（录制时玩家爱车带氮气，回放车一致）
       // 锁门防玩家开走 ghost 车（回放车只可看不可开；NPC 已在车内不受影响）
       vehicle.setParamsEx(true, false, false, true, false, false, false);
       npc.setVirtualWorld(worldId);
@@ -576,6 +587,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     paused: false,
     direction: 1,
     speed: 1,
+    lastTickAt: Date.now(),
     endedNotified: false,
     tds: new Map(),
     watchers: new Set(),

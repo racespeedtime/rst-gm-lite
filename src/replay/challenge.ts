@@ -55,6 +55,8 @@ export interface ChallengeSession {
   /** 实际发车时间（倒计时结束 GO 时刻；结算/超时用真实时间差，不用帧数累计防漂移） */
   goAt: number;
   finished: boolean;
+  /** 影子播放推进基准（真实流逝计时，防定时器节流导致影子慢放） */
+  lastTickAt: number;
   timer?: NodeJS.Timeout;
 }
 
@@ -145,7 +147,12 @@ function tickChallenge(ch: ChallengeSession): void {
     cleanupChallenge(ch.playerId);
     return;
   }
-  ch.ghost.playTime = Math.min(dur, ch.ghost.playTime + 16);
+  // 影子播放用真实流逝时间推进（固定 16ms/tick 在定时器节流时影子会慢放，
+  // 与玩家实际速度不同步）；clamp 250ms 防卡顿后跳变
+  const now = Date.now();
+  const elapsed = Math.min(250, now - ch.lastTickAt);
+  ch.lastTickAt = now;
+  ch.ghost.playTime = Math.min(dur, ch.ghost.playTime + elapsed);
   renderGhost(ch);
 }
 
@@ -306,6 +313,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     });
     vehicle.create();
     vehicle.setVirtualWorld(worldId);
+    vehicle.addComponent(1010); // 氮气（影子车与录制时玩家爱车一致）
     // 锁门防玩家开走影子车（影子只可看不可开；NPC 已在车内不受影响）
     vehicle.setParamsEx(true, false, false, true, false, false, false);
     npc.setVirtualWorld(worldId);
@@ -346,6 +354,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     startAt: Date.now(),
     goAt: Date.now(),
     finished: false,
+    lastTickAt: Date.now(),
   };
   challenges.set(player.id, ch);
 
