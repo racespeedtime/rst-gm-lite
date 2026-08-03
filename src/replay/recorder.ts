@@ -91,14 +91,17 @@ export function noteCpProgress(playerId: number, cpDone: number, totalCp: number
 
 /** 录制时长硬上限（1 小时）：防玩家挂机无限录制拖垮内存/磁盘（帧数组常驻内存） */
 const MAX_RECORD_MS = 60 * 60 * 1000;
-/** 标称采样间隔（播放推进基准；与 DriverSync 30Hz 对齐） */
-const SAMPLE_INTERVAL_MS = 33;
 /** 离散状态缓存刷新间隔（sync 帧间少读 native） */
 const DISCRETE_REFRESH_MS = 2000;
-/** 兜底采样判定：距上次采样超过该间隔才补帧（有 RakNet 采样则跳过） */
-const FALLBACK_GAP_MS = 2000;
-/** 兜底采样定时器间隔（RakNet 中断时补帧） */
-const FALLBACK_INTERVAL_MS = 500;
+/**
+ * 兜底采样判定：距上次采样超过该间隔才补帧。
+ * 100ms：不依赖 RakNet 拦截的主采样频率（拦截是否触发不影响帧数）。
+ * 原 2000ms 时 15s 录制只有 8 帧，回放时间轴（按 33ms×帧数算）0.23s 就
+ * clamp 到尾帧 → 播放"瞬移+原地开"。加密后 15s ≈ 150 帧，回放正常。
+ */
+const FALLBACK_GAP_MS = 100;
+/** 兜底采样定时器间隔 */
+const FALLBACK_INTERVAL_MS = 100;
 
 /**
  * 录制边界检查（每次采样前调用）：
@@ -308,9 +311,14 @@ export async function stopRecording(
   // 不用 frames.length×33ms——RakNet 拦截失效时只剩兜底采样（每 2s 一帧），
   // 帧数算出的时长会严重偏短（6 秒录制 3 帧 ≈ 0.1s），提示误导。
   const durationMs = Math.max(1, Date.now() - session.startAt);
+  // 实际帧间隔：时长 / (帧数-1)。回放 sampleAt 按 header.frameIntervalMs×frameCount
+  // 算播放总时长——若固定写 33ms 而实际帧间隔是 100ms（兜底采样），总时长
+  // 会远小于真实录制时长，播放超 0.23s 即 clamp 到尾帧（"瞬移+原地开"）。
+  // 用实际间隔让播放时间轴与帧一一对应（帧少时慢放但位置正确）。
+  const frameIntervalMs = Math.round(durationMs / Math.max(1, session.frames.length - 1));
   const header: ReplayHeader = {
     type: session.type === "race" ? REPLAY_TYPE_RACE : REPLAY_TYPE_GHOST,
-    frameIntervalMs: SAMPLE_INTERVAL_MS, // 标称采样间隔（播放推进基准；实际帧间不均以帧序插值）
+    frameIntervalMs, // 实际帧间隔（播放推进基准；兜底采样时 ≈100ms，RakNet 拦截时 ≈33ms）
     vehicleModelId: session.vehicleModelId,
     startX: session.startX,
     startY: session.startY,
