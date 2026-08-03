@@ -25,6 +25,7 @@ import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
 import { sessionManager } from "@/sessions/manager";
 import { formatTime } from "@/utils/format";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import { MIN_Z } from "@/utils/map";
 import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR, COLOR_WHITE } from "@/utils/colors";
 
@@ -880,6 +881,10 @@ export function initRaceSystem(): void {
       joinRoomFlow(player);
     } else if (cmd === "l" || cmd === "leave") {
       leaveRace(player);
+    } else if (!cmd) {
+      // /r 无参数 → 弹赛道列表对话框（对齐原版 Race_ShowGameMainSel 分页列表，
+      // 选中赛道直接创建比赛）
+      void openRaceListDialog(player);
     } else {
       player.sendClientMessage(COLOR_RACE, "用法: /r s 赛道名称 创建比赛 · /r j 加入 · /r l 离开");
     }
@@ -1018,6 +1023,41 @@ async function startRaceFlow(player: Player, query: string): Promise<void> {
   const room = await createRaceRoom(player, race.id);
   if (room) {
     // 创建后等待加入：房主再次 /r s 开始
+    player.sendClientMessage(COLOR_RACE, "再输入 /r s 开始比赛");
+  }
+}
+
+/**
+ * /r 无参数 → 赛道列表对话框（对齐原版 Race_ShowGameMainSel 分页列表）。
+ * 分页多列展示启用赛道（# 名称 长度 圈数 作者），选择后直接创建比赛。
+ */
+async function openRaceListDialog(player: Player): Promise<void> {
+  const races = await prisma.race.findMany({
+    where: { isEnabled: true, deletedAt: null },
+    orderBy: { createdAt: "desc" },
+    include: { sysUser: true },
+  });
+  if (races.length === 0) {
+    player.sendClientMessage(COLOR_ERROR, "暂无可用赛道");
+    return;
+  }
+  const r = await showPagedDialog(player, {
+    caption: "选择赛道开始比赛",
+    data: races,
+    headers: ["#", "名称", "长度", "圈数", "作者"],
+    format: (race, index) => [
+      String(index + 1),
+      race.name,
+      `${Math.round(Number(race.totalLength))}m`,
+      `${race.laps ?? 1}`,
+      race.sysUser?.username ?? "?",
+    ],
+    button1: "开始",
+    button2: "取消",
+  });
+  if (!r) return;
+  const room = await createRaceRoom(player, r.item.id);
+  if (room) {
     player.sendClientMessage(COLOR_RACE, "再输入 /r s 开始比赛");
   }
 }
