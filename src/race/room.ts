@@ -464,15 +464,17 @@ function beginRace(room: RaceRoom): void {
   broadcastToRoom(room, "[赛车] 比赛开始！");
 }
 
-/** 创建比赛计时 UI（每人独立）。注意：TextDraw 不支持中文，只显示 ASCII 计时（赛道名不进 TextDraw） */
+/** 创建比赛计时/排名 UI（每人独立，右上角显示）。
+ * 注意：TextDraw 必须先 create() 再设置属性（setFont 等），否则抛
+ * "Cannot set font before create"——对齐 netstat/speedometer 的链式顺序。
+ * 位置右上角：x 625 右缘 + alignment 3（右对齐）+ y 20；TextDraw 不支持中文，
+ * 只显示 ASCII 排名/计时/圈数（赛道名不进 TextDraw） */
 function createRaceTd(player: Player, room: RaceRoom): void {
-  // 注意：TextDraw 必须先 create() 再设置属性（setFont 等），否则抛
-  // "Cannot set font before create"——对齐 netstat/speedometer 的链式顺序
-  const td = new TextDraw({ player, x: 320, y: 20, text: `00:00.000` })
+  const td = new TextDraw({ player, x: 625, y: 20, text: `No.1  00:00.000  L1/1` })
     .create()
     .setFont(2)
     .setLetterSize(0.5, 1.5)
-    .setAlignment(2)
+    .setAlignment(3)
     .setColor("#ffffff")
     .setOutline(1)
     .setProportional(true);
