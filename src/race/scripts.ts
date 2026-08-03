@@ -124,11 +124,13 @@ function normOp(s: string): Op {
   return OPS[s] ?? "|";
 }
 
-/** 设置车辆速度：km/h → velocity 分量（角度 0 = 正北） */
-function setVehicleSpeed(veh: Vehicle, kmh: number, angleDeg: number): void {
+/** 设置车辆速度：km/h → velocity 分量。
+ * 坐标系对齐原版 speed/speedex：x = 速度·cos(na)、y = 速度·sin(na)，角度 0 = 正东
+ * （SA-MP 方位角基准）。na 由调用方按"玩家朝向 + 90"（| 模式 = 角度 + 90）算好。 */
+function setVehicleSpeed(veh: Vehicle, kmh: number, angleDeg: number, z?: number): void {
   const units = kmh / KMH_UNIT;
   const rad = (angleDeg * Math.PI) / 180;
-  veh.setVelocity(units * Math.sin(rad), units * Math.cos(rad), veh.getVelocity().z);
+  veh.setVelocity(units * Math.cos(rad), units * Math.sin(rad), z ?? veh.getVelocity().z);
 }
 
 /** 执行一条 CP 脚本 */
@@ -212,6 +214,9 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
     }
     case "speed": {
       // speed 角度模式 角度 速度模式 速度(KM/H)
+      // 对齐原版 speed（HRace.inc:805）：基准角度 = 玩家朝向 + 90（车内 = 车辆角度 + 90），
+      // | 模式 = 角度 + 90；x = 速度·cos(na)、y = 速度·sin(na)（角度 0 = 正东）。
+      // 原版不设车辆朝向，只 SetVehicleVelocity。
       if (!veh) return err("speed 需要车辆");
       if (args.length < 4) return err("speed 参数不足");
       const angleOp = normOp(args[0]);
@@ -219,11 +224,10 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       const speedOp = normOp(args[2]);
       const speed = Number(args[3]);
       if ([angle, speed].some((n) => !Number.isFinite(n))) return err("speed 数值无效");
-      const curAngle = veh.getZAngle().angle;
-      const newAngle = applyOp(curAngle, angleOp, angle);
+      const base = veh.getZAngle().angle + 90;
+      const newAngle = angleOp === "|" ? angle + 90 : applyOp(base, angleOp, angle);
       const newSpeed = applyOp(veh.getSpeed(), speedOp, speed);
       setVehicleSpeed(veh, Math.max(0, newSpeed), newAngle);
-      veh.setZAngle(newAngle);
       break;
     }
     case "angle": {
@@ -250,6 +254,9 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
     }
     case "speedex": {
       // speedex 角度模式 角度 速度模式 速度 Z模式 Z速度
+      // 对齐原版 speedex（HRace.inc:728）：角度基准 = 玩家朝向 + 90（车内 = 车辆角度 + 90），
+      // | 模式 = 角度 + 90；x = 速度·cos(na)、y = 速度·sin(na)（角度 0 = 正东）；Z 轴独立。
+      // 原版不设车辆朝向，只 SetVehicleVelocity。
       if (!veh) return err("speedex 需要车辆");
       if (args.length < 6) return err("speedex 参数不足");
       const angleOp = normOp(args[0]);
@@ -259,14 +266,12 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       const zOp = normOp(args[4]);
       const zspeed = Number(args[5]);
       if ([angle, speed, zspeed].some((n) => !Number.isFinite(n))) return err("speedex 数值无效");
-      const newAngle = applyOp(veh.getZAngle().angle, angleOp, angle);
+      const base = veh.getZAngle().angle + 90;
+      const newAngle = angleOp === "|" ? angle + 90 : applyOp(base, angleOp, angle);
       const newSpeed = applyOp(veh.getSpeed(), speedOp, speed);
       const vv = veh.getVelocity();
       const newZ = applyOp(vv.z, zOp, zspeed);
-      const units = Math.max(0, newSpeed) / KMH_UNIT;
-      const rad = (newAngle * Math.PI) / 180;
-      veh.setVelocity(units * Math.sin(rad), units * Math.cos(rad), newZ);
-      veh.setZAngle(newAngle);
+      setVehicleSpeed(veh, Math.max(0, newSpeed), newAngle, newZ);
       break;
     }
     case "vgoto": {
