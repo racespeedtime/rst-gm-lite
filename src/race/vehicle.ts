@@ -25,14 +25,14 @@ export async function restorePersonalNoCollision(player: Player): Promise<void> 
 }
 
 /**
- * 赛道默认车型：第一个 CP 的 cveh 换车脚本优先（以换车模型为基础），否则默认 411。
+ * 赛道默认车型：仅看第一个 CP 的 cveh 换车脚本（首个 CP 有换车则用它，否则默认 411）。
+ * 不扫描整条赛道——cveh 是经过该 CP 时触发的中途换车（如 Car 赛道的 562 在 CP11），
+ * 不是开赛车型；开赛车型只应跟随起点 CP 的脚本。
  */
 export function getDefaultRaceModel(cps: { scripts: string[] }[]): number {
-  for (const cp of cps) {
-    const model = getFirstCvehModel(cp.scripts);
-    if (model != null) return model;
-  }
-  return 411;
+  const first = cps[0];
+  const model = first ? getFirstCvehModel(first.scripts) : null;
+  return model ?? 411;
 }
 
 /**

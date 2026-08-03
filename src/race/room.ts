@@ -452,24 +452,22 @@ function beginRace(room: RaceRoom): void {
       if (m.isInAnyVehicle()) {
         m.getVehicle()!.setVirtualWorld(room.worldId);
       }
-      // 传送到第一个 CP 前；无车则刷默认比赛车（首个 CP 有 cveh 换车用其车型，否则 411）并放入车内
-      const first = room.cps[0];
-      if (m.isInAnyVehicle()) {
-        const veh = m.getVehicle()!;
-        veh.setPos(first.x, first.y, first.z);
-      } else {
+      // 发车（对齐原版 Race_Game_Start_s）：不把玩家传送到第一个 CP——加入房间时
+      // 已在起点定位（joinRoom），倒计时/等待期间可在起点自由活动，发车瞬间不应被拉回起点。
+      if (!m.isInAnyVehicle()) {
+        // 无车兜底（等待期间车辆被销毁等极端情况）：原地刷默认比赛车，不移动玩家
+        const pos = m.getPos();
         spawnRaceVehicleAt(
           m,
           getDefaultRaceModel(room.cps),
-          first.x,
-          first.y,
-          first.z,
-          first.angle,
+          pos.x,
+          pos.y,
+          pos.z,
+          m.getFacingAngle().angle,
         );
       }
-      // 显示第一个 CP（红色箭头，指向第二个）
-      const second = room.cps[1];
-      RaceCheckpoint.set(m, 0, first.x, first.y, first.z, second.x, second.y, second.z, first.size);
+      // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
+      showNextCheckpoint(m, room.cps, -1);
       // 创建比赛信息 UI（4 行：CP/TIME/BEST/RANK）
       const tds = createRaceTd(m, room);
       // 异步查询个人最佳并更新 BEST TD（原版进比赛即显示）
@@ -555,12 +553,14 @@ async function updateBestTd(player: Player, room: RaceRoom, tds: RoomRaceTds): P
 
 /**
  * 显示下一个检查点箭头（红色=指向下一个CP，黄色=终点CP）。
- * 小地图图标：对齐原版 Race_ShowCp——只在下一个 CP 放一个图标
- * （SetPlayerMapIcon(索引1, 下一个CP, RACE_MAP_ICON_TYPE=56, 0, 1)），
- * 原版没有"下下个 CP"的第二个图标。
+ * 对齐原版 Race_ShowCp：
+ * - RaceCheckpoint 红圈在"当前要过的 CP"（nxt）、箭头指向下一个（nxt2）
+ * - 小地图图标在"下一个 CP"（nrcp = nxt2），类型 56 + color 0 + style 1
+ * - nxt 是最后一个 CP（无 nxt2）→ 终点黄圈；原版该分支不调 SetPlayerMapIcon，
+ *   图标保留在上一个位置（标记终点），不主动清除
  */
 function showNextCheckpoint(player: Player, cps: RaceRoom["cps"], cpIndex: number): void {
-  // 下一个 CP（nxt）与下下个 CP（nxt2，若有）：RaceCheckpoint 箭头从 nxt 指向 nxt2
+  // 下一个 CP（nxt）与下下个 CP（nxt2，若有）：箭头从 nxt 指向 nxt2
   let nxt = cps[cpIndex + 1];
   let nxt2 = nxt ? cps[cpIndex + 2] : undefined;
   if (!nxt) {
@@ -574,8 +574,10 @@ function showNextCheckpoint(player: Player, cps: RaceRoom["cps"], cpIndex: numbe
   } else {
     RaceCheckpoint.set(player, 1, nxt.x, nxt.y, nxt.z, nxt.x, nxt.y, nxt.z, nxt.size);
   }
-  // 单个小地图图标：下一个 CP，类型 56 + color 0 + style 1（原版 RACE_MAP_ICON_TYPE）
-  player.setMapIcon(RACE_MAP_ICON_NEXT, nxt.x, nxt.y, nxt.z, RACE_MAP_ICON_TYPE_NEXT, 0, 1);
+  // 小地图图标：下一个 CP（nrcp=nxt2），类型 56 + color 0 + style 1（原版 RACE_MAP_ICON_TYPE）
+  if (nxt2) {
+    player.setMapIcon(RACE_MAP_ICON_NEXT, nxt2.x, nxt2.y, nxt2.z, RACE_MAP_ICON_TYPE_NEXT, 0, 1);
+  }
 }
 
 /** 清除比赛小地图图标（离开/结束/完成时，对齐原版 Race_HideCp 的 RemovePlayerMapIcon） */
