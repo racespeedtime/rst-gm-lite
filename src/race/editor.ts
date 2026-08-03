@@ -9,6 +9,9 @@ import { spawnRaceVehicleAt, getDefaultRaceModel } from "./vehicle";
 
 import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
 
+/** UUID 格式（按 id 查赛道前校验，避免非 uuid 输入触发 PostgreSQL 类型错误） */
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 /** 编辑中的赛道（raceId + 玩家当前查看的 CP） */
 interface EditState {
   raceId: string;
@@ -648,6 +651,11 @@ export function initRaceEditor(): void {
     const raceId = subcommand[0];
     if (!raceId) {
       player.sendClientMessage(COLOR_RACE, "用法: /redit 赛道ID");
+      return next();
+    }
+    // id 是 uuid 列：非 uuid 输入直接查会让 PostgreSQL 抛类型错误
+    if (!UUID_RE.test(raceId)) {
+      player.sendClientMessage(COLOR_ERROR, "赛道ID无效（需为 UUID 格式）");
       return next();
     }
     await enterRaceEdit(player, raceId);

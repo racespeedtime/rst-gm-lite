@@ -449,14 +449,16 @@ function beginRace(room: RaceRoom): void {
 
 /** 创建比赛计时 UI（每人独立）。注意：TextDraw 不支持中文，只显示 ASCII 计时（赛道名不进 TextDraw） */
 function createRaceTd(player: Player, room: RaceRoom): void {
-  const td = new TextDraw({ player, x: 320, y: 20, text: `00:00.000` });
-  td.setFont(2)
+  // 注意：TextDraw 必须先 create() 再设置属性（setFont 等），否则抛
+  // "Cannot set font before create"——对齐 netstat/speedometer 的链式顺序
+  const td = new TextDraw({ player, x: 320, y: 20, text: `00:00.000` })
+    .create()
+    .setFont(2)
     .setLetterSize(0.5, 1.5)
     .setAlignment(2)
     .setColor("#ffffff")
     .setOutline(1)
-    .setProportional(true)
-    .create();
+    .setProportional(true);
   td.show(player);
   room.raceTextTds.set(player.id, td);
 }
