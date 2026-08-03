@@ -57,6 +57,14 @@ interface PlayerRace {
   prevWorld: number;
 }
 
+/** 比赛信息 UI（对齐原版 CreatePRaceTextDraw 的 4 行独立 TD） */
+interface RoomRaceTds {
+  cp: TextDraw; //   C  P / ~p~进度~w~/~y~总数
+  time: TextDraw; // TIME / mm:ss.cc
+  best: TextDraw; // BEST / mm:ss.cc（无记录 99:99:99）
+  rank: TextDraw; // RANK / N st/nd/rd/th
+}
+
 /** 比赛房间 */
 interface RaceRoom {
   id: number;
@@ -84,8 +92,10 @@ interface RaceRoom {
   lastCpAt: Map<number, number>;
   countdownTimer?: NodeJS.Timeout;
   endTimer?: NodeJS.Timeout;
-  /** 每个成员的计时/排名 TextDraw（playerId -> td） */
-  raceTextTds: Map<number, TextDraw>;
+  /** 每个成员的比赛信息 TextDraw（playerId -> 4 行 TD，开赛时创建） */
+  raceTextTds: Map<number, RoomRaceTds>;
+  /** 赛道个人最佳缓存（userId -> 最佳毫秒，开赛时查一次；重连复用） */
+  bestTimes: Map<string, number>;
   /** 完成结果索引（playerId -> time），避免每 tick 线性查找 */
   resultIndex: Map<number, number>;
   /** 创建时间（WAITING 超时回收） */
@@ -182,9 +192,11 @@ export function cleanupRacePlayer(playerId: number): void {
   if (pr) {
     const room = rooms.get(pr.roomId);
     if (room) {
-      const td = room.raceTextTds.get(playerId);
-      if (td) {
-        td.destroy();
+      const tds = room.raceTextTds.get(playerId);
+      if (tds) {
+        for (const td of Object.values(tds)) {
+          td.destroy();
+        }
         room.raceTextTds.delete(playerId);
       }
       // 比赛中且比赛支持重连 → 进入重连窗口（已完成玩家不开窗口：成绩已纪录，防重连后重复完成）
@@ -307,6 +319,7 @@ export async function createRaceRoom(player: Player, raceId: string): Promise<Ra
     results: [],
     lastCpAt: new Map(),
     raceTextTds: new Map(),
+    bestTimes: new Map(),
     resultIndex: new Map(),
     createdAt: Date.now(),
     reconnectUntil: new Map(),
@@ -459,8 +472,10 @@ function beginRace(room: RaceRoom): void {
       // 显示第一个 CP（红色箭头，指向第二个）
       const second = room.cps[1];
       RaceCheckpoint.set(m, 0, first.x, first.y, first.z, second.x, second.y, second.z, first.size);
-      // 创建计时 UI
-      createRaceTd(m, room);
+      // 创建比赛信息 UI（4 行：CP/TIME/BEST/RANK）
+      const tds = createRaceTd(m, room);
+      // 异步查询个人最佳并更新 BEST TD（原版进比赛即显示）
+      void updateBestTd(m, room, tds);
     }
   }
   // 开始提示：对齐原版 ~y~Start! + 音效 1057 + 恢复第三人称视角
@@ -474,22 +489,70 @@ function beginRace(room: RaceRoom): void {
   broadcastToRoom(room, "[赛车] 比赛开始！");
 }
 
-/** 创建比赛计时/排名 UI（每人独立，右上角显示）。
- * 注意：TextDraw 必须先 create() 再设置属性（setFont 等），否则抛
- * "Cannot set font before create"——对齐 netstat/speedometer 的链式顺序。
- * 位置右上角：x 625 右缘 + alignment 3（右对齐）+ y 20；TextDraw 不支持中文，
- * 只显示 ASCII 排名/计时/圈数（赛道名不进 TextDraw） */
-function createRaceTd(player: Player, room: RaceRoom): void {
-  const td = new TextDraw({ player, x: 625, y: 20, text: `No.1  00:00.000  L1/1` })
+/** 比赛信息 UI 通用样式（对齐原版 CreatePRaceTextDraw）：
+ * font 2 / letter 0.238 x 1.19 / 左对齐 / 白 / outline 0 / shadow 1 / 无底色。
+ * TextDraw 必须先 create() 再设置属性（否则抛 "Cannot set font before create"）。 */
+function raceTdBase(player: Player, y: number, text: string): TextDraw {
+  return new TextDraw({ player, x: 500, y, text })
     .create()
     .setFont(2)
-    .setLetterSize(0.5, 1.5)
-    .setAlignment(3)
-    .setColor("#ffffff")
-    .setOutline(1)
+    .setLetterSize(0.238, 1.19)
+    .setAlignment(1)
+    .setColor(0xffffffff)
+    .setOutline(0)
+    .setShadow(1)
     .setProportional(true);
-  td.show(player);
-  room.raceTextTds.set(player.id, td);
+}
+
+/** 创建比赛信息 UI（每人 4 行独立 TD，位置与原版一致：x 500 左缘，y 118/136/154/172） */
+function createRaceTd(player: Player, room: RaceRoom): RoomRaceTds {
+  const tds: RoomRaceTds = {
+    cp: raceTdBase(player, 118, "C  P / ~p~0~w~/~y~0"),
+    time: raceTdBase(player, 136, "TIME / 00:00:00"),
+    best: raceTdBase(player, 154, "BEST / 00:00:00"),
+    rank: raceTdBase(player, 172, "RANK / 1 st"),
+  };
+  Object.values(tds).forEach((t) => t.show(player));
+  room.raceTextTds.set(player.id, tds);
+  return tds;
+}
+
+/** 毫秒 → mm:ss.cc（两位百分秒，对齐原版 ms2time 后 msg[2]/10） */
+function formatRaceTime(ms: number): string {
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const cs = Math.floor((ms % 1000) / 10);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(cs).padStart(2, "0")}`;
+}
+
+/** 排名后缀（对齐原版 RANK / %i st/nd/rd/th） */
+function rankSuffix(rank: number): string {
+  const n = rank + 1;
+  if (n === 1) return "st";
+  if (n === 2) return "nd";
+  if (n === 3) return "rd";
+  return "th";
+}
+
+/** 查询赛道个人最佳并更新 BEST TD（对齐原版进比赛时 Race_GetPlayerRecord：
+ * 无记录显示 BEST / 99:99:99，有记录显示 BEST / mm:ss.cc）。房间级缓存，只查一次。 */
+async function updateBestTd(player: Player, room: RaceRoom, tds: RoomRaceTds): Promise<void> {
+  const auth = getAuthState(player.id);
+  if (!auth) return;
+  try {
+    let best = room.bestTimes.get(auth.userId);
+    if (best === undefined) {
+      const rec = await prisma.raceRecord.findFirst({
+        where: { userId: auth.userId, raceId: room.raceId, deletedAt: null },
+        orderBy: { record: "asc" },
+      });
+      best = rec ? rec.record : -1;
+      room.bestTimes.set(auth.userId, best);
+    }
+    tds.best.setString(best === -1 ? "BEST / 99:99:99" : `BEST / ${formatRaceTime(best)}`);
+  } catch (e) {
+    logger.error(`[race] 查询个人最佳失败 ${player.getName().name}`, e);
+  }
 }
 
 /**
@@ -528,11 +591,13 @@ function clearRaceMapIcons(player: Player): void {
   player.removeMapIcon(RACE_MAP_ICON_NEXT2);
 }
 
-/** 销毁房间所有计时 TD（防未创建/已失效的 TD destroy 抛异常） */
+/** 销毁房间所有比赛信息 TD（防未创建/已失效的 TD destroy 抛异常） */
 function destroyRaceTds(room: RaceRoom): void {
-  for (const td of room.raceTextTds.values()) {
-    if (td.isValid()) {
-      td.destroy();
+  for (const tds of room.raceTextTds.values()) {
+    for (const td of Object.values(tds)) {
+      if (td.isValid()) {
+        td.destroy();
+      }
     }
   }
   room.raceTextTds.clear();
@@ -557,6 +622,13 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   room.lastCpAt.set(player.id, now);
 
   pr.cpIndex++;
+
+  // 更新 CP 进度 TD（对齐原版过 CP 时 "C  P / ~p~进度~w~/~y~总数"；完成时同样先刷满）
+  const raceTds = room.raceTextTds.get(player.id);
+  if (raceTds) {
+    const done = Math.min(pr.cpIndex + 1, room.cps.length);
+    raceTds.cp.setString(`C  P / ~p~${done}~w~/~y~${room.cps.length}`);
+  }
 
   // 最后一圈且到达最后一个 CP → 完成
   if (pr.lap === room.laps - 1 && pr.cpIndex >= room.cps.length - 1) {
@@ -644,6 +716,15 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
         })) + 1;
     } catch (e) {
       logger.error(`[race] 写纪录失败`, e);
+    }
+  }
+
+  // 本次成绩优于旧纪录（或首次）→ 立即更新 BEST TD 与房间缓存（对齐原版刷新个人记录）
+  if (isPB && auth) {
+    const raceTds = room.raceTextTds.get(player.id);
+    if (raceTds) {
+      raceTds.best.setString(`BEST / ${formatRaceTime(time)}`);
+      room.bestTimes.set(auth.userId, time);
     }
   }
 
@@ -801,9 +882,11 @@ export function leaveRace(player: Player): void {
   if (room) {
     room.members.delete(player.id);
     broadcastToRoom(room, `[赛车] ${player.getName().name} 离开了比赛`);
-    const td = room.raceTextTds.get(player.id);
-    if (td) {
-      td.destroy();
+    const tds = room.raceTextTds.get(player.id);
+    if (tds) {
+      for (const td of Object.values(tds)) {
+        td.destroy();
+      }
       room.raceTextTds.delete(player.id);
     }
     // 房主离开 → 转移房主（否则其余成员永远无法开始比赛）
@@ -892,14 +975,15 @@ function tickRooms(): void {
       if (a.totalCp !== b.totalCp) return b.totalCp - a.totalCp;
       return a.dist - b.dist;
     });
-    // 更新每人 TD 文本（排名 + 计时；TextDraw 不支持中文，圈数用 ASCII 表示）
+    // 更新每人比赛信息 TD：TIME（对齐原版 RaceRunTime 计时）+ RANK（对齐原版
+    // RaceRunRank 排名）。CP/BEST 由事件驱动更新（过 CP / 进比赛 / 跑完 PB），不在此刷。
     rows.forEach((r, rank) => {
-      const td = room.raceTextTds.get(r.playerId);
+      const tds = room.raceTextTds.get(r.playerId);
       const mp = playerRaces.get(r.playerId);
-      if (!td || !mp) return;
+      if (!tds || !mp) return;
       const time = mp.finished ? r.time : now - mp.startTime;
-      const lapText = r.finished ? "FIN" : `L${mp.lap + 1}/${room.laps}`;
-      td.setString(`No.${rank + 1}  ${formatTime(time)}  ${lapText}`);
+      tds.time.setString(`TIME / ${formatRaceTime(time)}`);
+      tds.rank.setString(`RANK / ${rank + 1} ${rankSuffix(rank)}`);
     });
   }
 }
@@ -1158,7 +1242,12 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     // 切回比赛世界 + 恢复 CP 显示
     player.setVirtualWorld(room.worldId);
     if (room.state === "RACING") {
-      createRaceTd(player, room);
+      const tds = createRaceTd(player, room);
+      // 恢复 BEST TD（房间缓存已有，无则查询）
+      void updateBestTd(player, room, tds);
+      // 恢复 CP 进度 TD（按断线时进度）
+      const cpDone = Math.min((slot?.cpIndex ?? -1) + 1, room.cps.length);
+      tds.cp.setString(`C  P / ~p~${cpDone}~w~/~y~${room.cps.length}`);
       showNextCheckpoint(player, room.cps, slot?.cpIndex ?? -1);
       // 重新强制无碰撞（重连是全新连接，碰撞状态已重置）
       applyRaceNoCollision(player, true);
