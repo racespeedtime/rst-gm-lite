@@ -8,10 +8,12 @@ import { isInRace } from "@/race/room";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
-import { setIntervalSafe } from "@/core/timers";
+import { setIntervalSafe, setTimeoutSafe } from "@/core/timers";
 
 import { COLOR_INFO, COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
 const TP_TIMEOUT_MS = 18_000;
+/** 传送后冻结时长（对齐原版 DynUpdateStart：等待 obj 流式加载，避免下坠穿模） */
+const TELEPORT_FREEZE_MS = 2000;
 
 /** 临时位置（/s 保存 /l 传送） */
 interface TempPos {
@@ -72,6 +74,35 @@ export function teleportTo(
     player.setPos(x, y, z);
     player.setFacingAngle(angle);
   }
+  // 传送后短暂冻结（对齐原版 DynUpdateStart）：服务端立即传送，但客户端要
+  // 几百 ms 才流式加载周边物体（房屋 obj 等）——不冻结会先下坠/穿模。
+  // 冻结期间暂停物理（不会掉落），恢复时物体已加载。
+  freezeAfterTeleport(player);
+}
+
+/**
+ * 传送后短暂冻结玩家（车内不冻结——车有物理，冻结车辆反而不自然）。
+ * 对齐原版 DynUpdateStart：TogglePlayerControllable(false) + "Objects Loading"
+ * 提示 + 2 秒后解冻。GameText 不支持中文，保持原版英文文案。
+ */
+function freezeAfterTeleport(player: Player): void {
+  if (player.isNpc() || !player.isConnected()) return;
+  if (player.isInAnyVehicle()) return;
+  try {
+    player.toggleControllable(false);
+  } catch {
+    return; // 冻结失败（玩家已失效等）直接跳过
+  }
+  new GameText("~g~Objects~n~~r~Loading", TELEPORT_FREEZE_MS, 6).forPlayer(player);
+  setTimeoutSafe(() => {
+    if (player.isConnected()) {
+      try {
+        player.toggleControllable(true);
+      } catch {
+        // 玩家已断开/失效，忽略
+      }
+    }
+  }, TELEPORT_FREEZE_MS);
 }
 
 /** 玩家是否接受传送（设置校验） */
