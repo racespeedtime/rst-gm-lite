@@ -147,6 +147,11 @@ async function respawnBySetting(player: Player): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const setting = await getSetting(player); // 设置缓存，避免每次重生查库
+  // 按当前设置应用皮肤（对齐原版 OnPlayerSpawn → SetPlayerSkin）：
+  // 死亡重生会用 setSpawnInfo 的旧皮肤重置，中途改的皮肤会丢，这里强制设回
+  if (setting?.skinId != null && player.getSkin() !== setting.skinId) {
+    player.setSkin(setting.skinId);
+  }
   const hasLast =
     setting?.spawnMode === "LAST_POSITION" &&
     setting.lastX != null &&
