@@ -376,7 +376,7 @@ async function createPlayerPreset(
   }
 }
 
-/** 预设详情：应用/添加装扮/移除装扮/设为默认/删除 */
+/** 预设详情：应用/添加装扮/编辑装扮/设为默认/删除 */
 async function playerPresetDetail(
   player: Player,
   presetId: string,
@@ -391,10 +391,12 @@ async function playerPresetDetail(
     include: { attire: true },
     orderBy: { attireId: "asc" },
   });
+  // 每件装扮一项（点击进入该件的编辑操作：调整参数/更换骨骼/移除），
+  // 不再直接暴露"移除"——编辑菜单里可移除，避免"只能删不能调"的尴尬
   const options = [
     "应用此预设到当前角色",
     "添加装扮",
-    ...items.map((it, i) => `移除装扮 ${i + 1}: ${it.attire.name}`),
+    ...items.map((it, i) => `装扮 ${i + 1}: ${it.attire.name}`),
     ...(setting?.defaultPlayerPresetId === presetId ? [] : ["设为默认预设"]),
     "删除预设",
   ];
@@ -420,10 +422,7 @@ async function playerPresetDetail(
   } else if (idx === 1) {
     await addPlayerPresetItem(player, presetId, skinId, toThis);
   } else if (idx >= 2 && idx < 2 + items.length) {
-    const item = items[idx - 2];
-    await prisma.playerPresetItem.delete({ where: { id: item.id } });
-    player.sendClientMessage(COLOR_SUCCESS, `已移除装扮 ${item.attire.name}`);
-    await toThis();
+    await editPlayerPresetItem(player, items[idx - 2], presetId, skinId, toThis);
   } else if (idx === 2 + items.length && setting?.defaultPlayerPresetId !== presetId) {
     await prisma.sysUserSetting.update({
       where: { userId: auth.userId },
@@ -436,6 +435,146 @@ async function playerPresetDetail(
     await confirmDeletePreset(player, presetId, skinId, "人物");
     await back?.();
   }
+}
+
+/** 单件装扮操作：调整位置/旋转/缩放 / 更换骨骼 / 移除 */
+async function editPlayerPresetItem(
+  player: Player,
+  item: { id: string; attire: { name: string } },
+  presetId: string,
+  skinId: number,
+  back?: MenuBack,
+): Promise<void> {
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: `装扮：${item.attire.name}`,
+      info: "1. 调整位置/旋转/缩放\n2. 更换骨骼\n3. 移除该装扮",
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!res) return;
+  if (res.response !== 1) return back?.();
+  if (res.listItem === 0) {
+    await adjustPlayerPresetItem(player, item.id, item.attire.name, presetId, back);
+  } else if (res.listItem === 1) {
+    await changePlayerPresetBone(player, item.id, item.attire.name, presetId, skinId, back);
+  } else if (res.listItem === 2) {
+    await prisma.playerPresetItem.delete({ where: { id: item.id } });
+    player.sendClientMessage(COLOR_SUCCESS, `已移除装扮 ${item.attire.name}`);
+    // 重新应用（当前预设已应用时，移除后身上的挂件同步消失）
+    await applyPlayerPreset(player, presetId);
+    await playerPresetDetail(player, presetId, skinId, back);
+  }
+}
+
+/** 调整单件装扮的位置/旋转/缩放（输入 9 个数，留空保持当前值），调整后自动应用 */
+async function adjustPlayerPresetItem(
+  player: Player,
+  itemId: string,
+  name: string,
+  presetId: string,
+  back?: MenuBack,
+): Promise<void> {
+  const item = await prisma.playerPresetItem.findUnique({ where: { id: itemId } });
+  if (!item) return;
+  const cur = [item.x, item.y, item.z, item.rX, item.rY, item.rZ, item.sX, item.sY, item.sZ]
+    .map((v) => Number(v))
+    .join(" ");
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.INPUT,
+      caption: `调整「${name}」`,
+      info: `当前: ${cur}\n输入新的 偏移X Y Z 旋转X Y Z 缩放X Y Z（9个数，空格分隔）：`,
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!res) return;
+  if (res.response !== 1) return back?.();
+  const nums = res.inputText.trim()
+    ? res.inputText.trim().split(/\s+/).map(Number)
+    : [item.x, item.y, item.z, item.rX, item.rY, item.rZ, item.sX, item.sY, item.sZ].map(Number);
+  if (nums.length !== 9 || nums.some((n) => !Number.isFinite(n))) {
+    player.sendClientMessage(COLOR_ERROR, "需要 9 个数字（X Y Z 偏移 / 旋转 / 缩放），留空保持当前");
+    return back?.();
+  }
+  await prisma.playerPresetItem.update({
+    where: { id: itemId },
+    data: {
+      x: nums[0],
+      y: nums[1],
+      z: nums[2],
+      rX: nums[3],
+      rY: nums[4],
+      rZ: nums[5],
+      sX: nums[6],
+      sY: nums[7],
+      sZ: nums[8],
+    },
+  });
+  player.sendClientMessage(COLOR_SUCCESS, `已调整装扮「${name}」的位置/旋转/缩放`);
+  // 重新应用当前预设，让玩家身上的挂件立即更新
+  await applyPlayerPreset(player, presetId);
+  return back?.();
+}
+
+/** 更换单件装扮的骨骼（列表选择，标注当前） */
+async function changePlayerPresetBone(
+  player: Player,
+  itemId: string,
+  name: string,
+  presetId: string,
+  skinId: number,
+  back?: MenuBack,
+): Promise<void> {
+  const item = await prisma.playerPresetItem.findUnique({ where: { id: itemId } });
+  if (!item) return;
+  const bones = [
+    "1 脊柱",
+    "2 头",
+    "3 左上臂",
+    "4 右上臂",
+    "5 左手",
+    "6 右手",
+    "7 左大腿",
+    "8 右大腿",
+    "9 左脚",
+    "10 右脚",
+    "11 右小腿",
+    "12 左小腿",
+    "13 左小臂",
+    "14 右小臂",
+    "15 左肩",
+    "16 右肩",
+    "17 颈",
+    "18 下巴",
+  ];
+  const boneRes = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: `更换「${name}」骨骼`,
+      info: bones.map((o) => `${o}${Number(o.split(" ")[0]) === item.boneId ? "（当前）" : ""}`).join("\n"),
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!boneRes) return;
+  if (boneRes.response !== 1) return back?.();
+  const boneId = boneRes.listItem + 1;
+  if (boneId === item.boneId) {
+    player.sendClientMessage(COLOR_WHITE, "骨骼未变化");
+    return back?.();
+  }
+  await prisma.playerPresetItem.update({ where: { id: itemId }, data: { boneId } });
+  player.sendClientMessage(COLOR_SUCCESS, `「${name}」已挂到骨骼 ${bones[boneId - 1]}`);
+  // 应用当前预设使玩家身上的挂件立即更新（重新 setAttachedObject）
+  await applyPlayerPreset(player, presetId);
+  return back?.();
 }
 
 /** 添加装扮到人物预设：选装扮 → 选骨骼 → 输入偏移 */
@@ -709,7 +848,7 @@ async function createVehiclePreset(
   }
 }
 
-/** 车辆预设详情：应用/添加挂件/删除 */
+/** 车辆预设详情：应用/添加挂件/编辑挂件/删除 */
 async function vehiclePresetDetail(
   player: Player,
   presetId: string,
@@ -721,10 +860,11 @@ async function vehiclePresetDetail(
     include: { attire: true },
     orderBy: { slotId: "asc" },
   });
+  // 每件挂件一项（点击进入该件操作：调整参数/移除），与人物装扮一致
   const options = [
     "应用此预设到当前车辆",
     "添加挂件",
-    ...items.map((it) => `移除挂件: ${it.attire.name}`),
+    ...items.map((it, i) => `挂件 ${i + 1}: ${it.attire.name}`),
     "删除预设",
   ];
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
@@ -754,14 +894,86 @@ async function vehiclePresetDetail(
   } else if (idx === 1) {
     await addVehiclePresetItem(player, presetId, modelId, toThis);
   } else if (idx >= 2 && idx < 2 + items.length) {
-    const item = items[idx - 2];
-    await prisma.vehiclePresetItem.delete({ where: { id: item.id } });
-    player.sendClientMessage(COLOR_SUCCESS, `已移除挂件 ${item.attire.name}`);
-    await toThis();
+    await editVehiclePresetItem(player, items[idx - 2], presetId, modelId, toThis);
   } else if (idx === options.length - 1) {
     await confirmDeletePreset(player, presetId, modelId, "车辆");
     await back?.();
   }
+}
+
+/** 单件挂件操作：调整参数 / 移除 */
+async function editVehiclePresetItem(
+  player: Player,
+  item: { id: string; attire: { name: string } },
+  presetId: string,
+  modelId: number,
+  back?: MenuBack,
+): Promise<void> {
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: `挂件：${item.attire.name}`,
+      info: "1. 调整位置/旋转\n2. 移除该挂件",
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!res) return;
+  if (res.response !== 1) return back?.();
+  if (res.listItem === 0) {
+    await adjustVehiclePresetItem(player, item.id, item.attire.name, presetId, back);
+  } else if (res.listItem === 1) {
+    await prisma.vehiclePresetItem.delete({ where: { id: item.id } });
+    player.sendClientMessage(COLOR_SUCCESS, `已移除挂件 ${item.attire.name}`);
+    // 当前车辆重新应用，挂件即时消失
+    const veh = player.getVehicle();
+    if (veh) await applyVehiclePreset(veh, presetId, player.id);
+    await vehiclePresetDetail(player, presetId, modelId, back);
+  }
+}
+
+/** 调整单件车辆挂件的位置/旋转（输入 6 个数，留空保持当前值），调整后自动应用 */
+async function adjustVehiclePresetItem(
+  player: Player,
+  itemId: string,
+  name: string,
+  presetId: string,
+  back?: MenuBack,
+): Promise<void> {
+  const item = await prisma.vehiclePresetItem.findUnique({ where: { id: itemId } });
+  if (!item) return;
+  const cur = [item.x, item.y, item.z, item.rX, item.rY, item.rZ]
+    .map((v) => Number(v))
+    .join(" ");
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.INPUT,
+      caption: `调整「${name}」`,
+      info: `当前: ${cur}\n输入新的 偏移X Y Z 旋转X Y Z（6个数，空格分隔）：`,
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!res) return;
+  if (res.response !== 1) return back?.();
+  const nums = res.inputText.trim()
+    ? res.inputText.trim().split(/\s+/).map(Number)
+    : [item.x, item.y, item.z, item.rX, item.rY, item.rZ].map(Number);
+  if (nums.length !== 6 || nums.some((n) => !Number.isFinite(n))) {
+    player.sendClientMessage(COLOR_ERROR, "需要 6 个数字（偏移X Y Z / 旋转X Y Z），留空保持当前");
+    return back?.();
+  }
+  await prisma.vehiclePresetItem.update({
+    where: { id: itemId },
+    data: { x: nums[0], y: nums[1], z: nums[2], rX: nums[3], rY: nums[4], rZ: nums[5] },
+  });
+  player.sendClientMessage(COLOR_SUCCESS, `已调整挂件「${name}」的位置/旋转`);
+  // 当前车辆重新应用，挂件即时更新
+  const veh = player.getVehicle();
+  if (veh) await applyVehiclePreset(veh, presetId, player.id);
+  return back?.();
 }
 
 /** 添加挂件到车辆预设 */
