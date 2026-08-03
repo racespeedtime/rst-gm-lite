@@ -344,6 +344,11 @@ startSessionHeartbeat();
 
 GameMode.onInit(({ next }) => {
   logger.info("RST GameMode 已启动");
+  // 服务器列表显示名（客户端浏览器可见）：对齐原版 RST hostname 风格。
+  // open.mp hostname 为 UTF-8，直接 sendRconCommand 设置（config.json 的 name 在此覆盖）
+  GameMode.sendRconCommand("hostname [RST]RST团队");
+  // 服务器 Mode 文本（客户端浏览器 Mode 列显示，SetGameModeText）
+  GameMode.setGameModeText("[RST] racing-speed-time");
   // 昵称即账号：放开昵称字符限制（支持中文/特殊字符），否则部分昵称被 open.mp 默认规则拒绝连入
   GameMode.supportAllNickname();
   // 初始化碰撞检测插件（缺失时静默跳过，不影响其他功能）
