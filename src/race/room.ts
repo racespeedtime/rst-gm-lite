@@ -326,7 +326,18 @@ function joinRoom(player: Player, room: RaceRoom): void {
     finished: false,
     prevWorld: player.getVirtualWorld(),
   });
-  player.sendClientMessage(COLOR_RACE, `你加入了比赛房间（赛道 ${room.raceName}），等待房主开始`);
+  // 加入即发默认比赛车（无车时，放到第一个 CP 起点；有车则保留自己的车），
+  // 避免等待/热身期间空手（首个 CP 有 cveh 换车用其车型，否则 411）
+  const first = room.cps[0];
+  if (first && !player.isInAnyVehicle()) {
+    spawnRaceVehicleAt(player, getDefaultRaceModel(room.cps), first.x, first.y, first.z, first.angle);
+  }
+  // 提示：房主（创建者）不需要"等待房主开始"
+  if (room.ownerId === player.id) {
+    player.sendClientMessage(COLOR_RACE, `你加入了比赛房间（赛道 ${room.raceName}），输入 /r s 开始比赛`);
+  } else {
+    player.sendClientMessage(COLOR_RACE, `你加入了比赛房间（赛道 ${room.raceName}），等待房主开始`);
+  }
 }
 
 /** 房主开始比赛：倒计时 5s */
@@ -885,11 +896,12 @@ export function initRaceSystem(): void {
   setIntervalSafe(() => tickRooms(), 200);
 
   // 比赛中的命令隔离：非白名单命令一律拒绝
-  // 注意：onCommandReceived 的 command 是完整命令串（如 "r l"），必须用 strictMainCmd
-  // （主命令 "r"）匹配白名单，否则 /r l /r j /r s 全被当成未授权命令拦截
+  // 注意：onCommandReceived 的 command 是完整命令串（如 "r l"），strictMainCmd
+  // 是主命令（"r"），但运行时可能为 undefined——必须回退到 command 的第一个
+  // token 取主命令，否则 /r l /r j /r s 全被当成未授权命令拦截
   PlayerEvent.onCommandReceived(({ player, command, strictMainCmd, next }) => {
     if (!isInRace(player.id)) return next();
-    const main = strictMainCmd ?? command;
+    const main = (strictMainCmd || command.split(/\s+/)[0] || "").toLowerCase();
     if (isRaceCommandAllowed(main)) return next();
     player.sendClientMessage(
       COLOR_ERROR,
