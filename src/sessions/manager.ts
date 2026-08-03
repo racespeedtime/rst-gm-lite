@@ -3,7 +3,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getSafeGroundZ } from "@/core/colandreas";
-import { Session, SESSION_COLOR } from "./session";
+import { Session, SESSION_COLOR, PUBLIC_SESSION_ID, PUBLIC_WORLD_ID } from "./session";
 
 /** 公共大世界人数上限（不限制） */
 const PUBLIC_CAPACITY = Number.MAX_SAFE_INTEGER;
@@ -23,8 +23,8 @@ export class SessionManager {
 
   constructor() {
     this.publicWorld = new Session({
-      id: 0,
-      worldId: 0,
+      id: PUBLIC_SESSION_ID,
+      worldId: PUBLIC_WORLD_ID,
       name: "公共大世界",
       ownerUserId: null,
       password: null,
@@ -87,7 +87,7 @@ export class SessionManager {
   /** 玩家认证成功后进入游戏世界（默认公共大世界） */
   onPlayerAuthenticated(player: Player): void {
     this.publicWorld.members.set(player.id, player);
-    this.playerSessions.set(player.id, 0);
+    this.playerSessions.set(player.id, PUBLIC_SESSION_ID);
     // 通知公共大世界内的其他玩家（登录广播）；本人由"欢迎回来"等提示覆盖，不重复发
     this.publicWorld.broadcastOthers(
       `[战局] ${player.getName().name} 进入了公共大世界`,
@@ -102,7 +102,7 @@ export class SessionManager {
   private leaveCurrentSession(player: Player, notify: boolean): void {
     this.publicWorld.members.delete(player.id);
     const sid = this.playerSessions.get(player.id);
-    if (sid != null && sid !== 0) {
+    if (sid != null && sid !== PUBLIC_SESSION_ID) {
       const session = this.privateSessions.get(sid);
       if (session) {
         session.members.delete(player.id);
@@ -117,12 +117,12 @@ export class SessionManager {
   /** 玩家进入公共大世界 */
   async joinPublicWorld(player: Player): Promise<void> {
     const current = this.getPlayerSession(player);
-    if (current.id === 0) return;
+    if (current.id === PUBLIC_SESSION_ID) return;
     // 离开当前私人战局（含从 publicWorld 移除/加回）
     this.leaveCurrentSession(player, true);
     this.publicWorld.members.set(player.id, player);
-    this.playerSessions.set(player.id, 0);
-    await this.teleportTo(player, 0);
+    this.playerSessions.set(player.id, PUBLIC_SESSION_ID);
+    await this.teleportTo(player, PUBLIC_WORLD_ID);
     // 通知公共大世界内的其他玩家（本人由"你已回到..."覆盖，不重复发）
     this.publicWorld.broadcastOthers(
       `[战局] ${player.getName().name} 回到了公共大世界`,
@@ -197,7 +197,7 @@ export class SessionManager {
   /** 房主踢人（被踢者回到公共大世界） */
   async kickMember(owner: Player, target: Player): Promise<{ ok: boolean; reason?: string }> {
     const session = this.getPlayerSession(owner);
-    if (!this.isOwner(owner, session) || session.id === 0) {
+    if (!this.isOwner(owner, session) || session.id === PUBLIC_SESSION_ID) {
       return { ok: false, reason: "你不是房主" };
     }
     if (target.id === owner.id) return { ok: false, reason: "不能踢自己" };
@@ -206,8 +206,8 @@ export class SessionManager {
     // 被踢者回到公共大世界
     this.leaveCurrentSession(target, false);
     this.publicWorld.members.set(target.id, target);
-    this.playerSessions.set(target.id, 0);
-    await this.teleportTo(target, 0);
+    this.playerSessions.set(target.id, PUBLIC_SESSION_ID);
+    await this.teleportTo(target, PUBLIC_WORLD_ID);
     target.sendClientMessage(SESSION_COLOR, `你已被移出战局「${session.name}」`);
     return { ok: true };
   }
@@ -215,7 +215,7 @@ export class SessionManager {
   /** 房主邀请玩家（目标弹确认对话框） */
   async inviteMember(owner: Player, target: Player): Promise<{ ok: boolean; reason?: string }> {
     const session = this.getPlayerSession(owner);
-    if (!this.isOwner(owner, session) || session.id === 0) {
+    if (!this.isOwner(owner, session) || session.id === PUBLIC_SESSION_ID) {
       return { ok: false, reason: "你不是房主" };
     }
     if (session.isFull) return { ok: false, reason: "战局已满" };
@@ -244,7 +244,7 @@ export class SessionManager {
     password: string | null,
   ): Promise<{ ok: boolean; reason?: string }> {
     const session = this.getPlayerSession(owner);
-    if (!this.isOwner(owner, session) || session.id === 0) {
+    if (!this.isOwner(owner, session) || session.id === PUBLIC_SESSION_ID) {
       return { ok: false, reason: "你不是房主" };
     }
     session.password = password && password.length > 0 ? password : null;
@@ -268,7 +268,7 @@ export class SessionManager {
       return true;
     }
     this.publicWorld.members.set(player.id, player);
-    this.playerSessions.set(player.id, 0);
+    this.playerSessions.set(player.id, PUBLIC_SESSION_ID);
     return false;
   }
 
@@ -277,7 +277,7 @@ export class SessionManager {
     // 统一从 publicWorld.members 移除（防幽灵成员）
     this.publicWorld.members.delete(player.id);
     this.playerSessions.delete(player.id);
-    if (current.id === 0) {
+    if (current.id === PUBLIC_SESSION_ID) {
       return;
     }
     const name = player.getName().name;

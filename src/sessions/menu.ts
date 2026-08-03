@@ -1,5 +1,6 @@
 import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { sessionManager } from "./manager";
+import { PUBLIC_SESSION_ID } from "./session";
 import { getSetting } from "@/personalize/settings";
 import { openSessionSettingsMenu } from "@/personalize/sessionSettings";
 import { showDialog } from "@/utils/dialog";
@@ -33,7 +34,7 @@ export async function openSessionMenu(player: Player, back?: MenuBack): Promise<
     label: "回到公共大世界",
     run: async () => {
       const current = sessionManager.getPlayerSession(player);
-      if (current.id === 0) {
+      if (current.id === PUBLIC_SESSION_ID) {
         player.sendClientMessage(COLOR_ERROR, "你已经在公共大世界");
         return;
       }
@@ -56,7 +57,7 @@ export async function openSessionMenu(player: Player, back?: MenuBack): Promise<
     });
   }
   const current = sessionManager.getPlayerSession(player);
-  if (current.id !== 0 && sessionManager.isOwner(player, current)) {
+  if (current.id !== PUBLIC_SESSION_ID && sessionManager.isOwner(player, current)) {
     items.push({
       label: "我的战局管理",
       run: () => openOwnerMenu(player, () => openSessionMenu(player, back)),

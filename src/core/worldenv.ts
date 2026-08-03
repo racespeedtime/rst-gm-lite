@@ -4,6 +4,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getSetting } from "@/personalize/settings";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
+import { PUBLIC_WORLD_ID } from "@/sessions/session";
 
 /** 世界环境持有的实体（onExit 时统一销毁） */
 interface WorldEnv {
@@ -25,10 +26,23 @@ const WEATHER_POOL = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16];
 
 /** 天气 ID → 中文名（变更提示用，未列出的 ID 回退显示 ID） */
 const WEATHER_NAMES: Record<number, string> = {
-  0: "晴", 1: "晴", 2: "少云", 3: "多云", 4: "阴",
-  5: "雨", 6: "小雨", 7: "雷阵雨", 8: "浓雾", 9: "薄雾",
-  10: "晴", 11: "晴", 12: "多云", 13: "晴", 14: "晴",
-  15: "多云", 16: "雨",
+  0: "晴",
+  1: "晴",
+  2: "少云",
+  3: "多云",
+  4: "阴",
+  5: "雨",
+  6: "小雨",
+  7: "雷阵雨",
+  8: "浓雾",
+  9: "薄雾",
+  10: "晴",
+  11: "晴",
+  12: "多云",
+  13: "晴",
+  14: "晴",
+  15: "多云",
+  16: "雨",
 };
 
 /**
@@ -190,7 +204,7 @@ export async function initWorldEnvironment(): Promise<void> {
           y: Number(tp.y),
           z: Number(tp.z) + 1,
           drawDistance: 30,
-          virtualWorld: 0,
+          virtualWorld: PUBLIC_WORLD_ID,
           testLOS: false,
           charset: "gbk", // 玩家默认 gbk 字符集，3D 标签中文必须同字符集否则乱码
         });
@@ -222,13 +236,13 @@ export async function initWorldEnvironment(): Promise<void> {
       const first = race.raceCps[0];
       if (!first) continue;
       try {
-        // 圆圈：大世界常驻地面检查点（对齐原版 CreateDynamicCP size 4，world 0）
+        // 圆圈：大世界常驻地面检查点（对齐原版 CreateDynamicCP size 4，公共大世界）
         const cp = new DynamicCheckpoint({
           x: Number(first.x),
           y: Number(first.y),
           z: Number(first.z),
           size: 4,
-          worldId: 0,
+          worldId: PUBLIC_WORLD_ID,
         });
         cp.create();
         checkpoints.push(cp);
@@ -239,7 +253,7 @@ export async function initWorldEnvironment(): Promise<void> {
           y: Number(first.y),
           z: Number(first.z) + 1,
           drawDistance: 20,
-          virtualWorld: 0,
+          virtualWorld: PUBLIC_WORLD_ID,
           testLOS: false,
           charset: "gbk", // 玩家默认 gbk 字符集，3D 标签中文必须同字符集否则乱码
         });
@@ -251,7 +265,7 @@ export async function initWorldEnvironment(): Promise<void> {
           y: Number(first.y),
           z: Number(first.z),
           color: COLOR_RACE,
-          worldId: 0,
+          worldId: PUBLIC_WORLD_ID,
           streamDistance: 10000, // 全图常驻（默认 200 会导致起点图标走近才显示）
         });
         icon.create();

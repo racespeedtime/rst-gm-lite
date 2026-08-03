@@ -3,6 +3,11 @@ import { Player } from "@infernus/core";
 export const SESSION_COLOR = "#ffcc00";
 const DEFAULT_CAPACITY = 20;
 
+/** 公共大世界战局 id（公共大世界 = 战局 id 0，世界 worldId 0） */
+export const PUBLIC_SESSION_ID = 0;
+/** 公共大世界 world id（玩家/实体切回公共大世界时 setVirtualWorld 的目标） */
+export const PUBLIC_WORLD_ID = 0;
+
 /**
  * 战局（房间/世界）。
  * - 公共大世界：单例，worldId=0，无房主，不限制人数
