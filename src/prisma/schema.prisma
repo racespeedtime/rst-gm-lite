@@ -228,6 +228,7 @@ model SysUser {
   playerPresets       PlayerPreset[]
   vehiclePresets      VehiclePreset[]
   gameSessions        SysUserGameSession[]
+  replays             Replay[]
 
   @@unique([username])
   @@index([deletedAt])
@@ -506,6 +507,8 @@ model Replay {
   finished       Boolean? // 比赛回放：是否完成
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  sysUser        SysUser  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([userId])
   @@index([deletedAt])
