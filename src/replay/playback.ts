@@ -90,6 +90,8 @@ interface Ghost {
   npcPlayerId: number;
   /** 上次 emulate 发包时间（30Hz 节流） */
   lastEmulateAt: number;
+  /** emulate/send 失败是否已警告过（一次性防刷屏） */
+  warnedEmulateFail: boolean;
 }
 
 export interface ReplaySession {
@@ -455,8 +457,12 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     } finally {
       bs.delete(); // 释放 BitStream 原生句柄
     }
-  } catch {
-    // NPC/车辆失效（异常销毁由清理兜底）
+  } catch (e) {
+    // 一次性 warn 防刷屏（30Hz 下持续失败会刷日志）；实体失效由清理兜底
+    if (!ghost.warnedEmulateFail) {
+      ghost.warnedEmulateFail = true;
+      logger.warn(`[replay] ghost emulate/send 失败（仅提示一次）`, e);
+    }
   }
 }
 
@@ -658,6 +664,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         lastKeys: -1,
         npcPlayerId: npcPlayer.id,
         lastEmulateAt: 0,
+        warnedEmulateFail: false,
       });
     }
   } catch (e) {
@@ -781,7 +788,12 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       }
       const max = session.data.header.frameCount * session.data.header.frameIntervalMs;
       const target = Math.min(max, Math.max(0, ms));
-      for (const g of session.ghosts) g.playTime = target;
+      for (const g of session.ghosts) {
+        g.playTime = target;
+        // seek 后强制立即发包：重置节流时间戳，否则距上次发包 <33ms 时
+        // renderGhost 会被节流跳过，ghost 位置延迟最多 1 tick
+        g.lastEmulateAt = 0;
+      }
       // seek 离开结尾 → 重置"已播完"提示标记（再次正放播完会重新提示）
       if (target < max) session.endedNotified = false;
       for (const g of session.ghosts) renderGhost(session, g);
