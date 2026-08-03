@@ -3,8 +3,8 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { initReplayCommands } from "./commands";
 import { initRecorder, cleanupRecorder, forceStopRecording, isRecording, startRecording, stopRecording } from "./recorder";
-import { cleanupPlayback, destroyAllPlaybacks } from "./playback";
-import { initChallenge, destroyAllChallenges, challengeDisconnect } from "./challenge";
+import { cleanupPlayback, destroyAllPlaybacks, stopReplaySession, getReplaySession } from "./playback";
+import { initChallenge, destroyAllChallenges, challengeDisconnect, cleanupChallenge } from "./challenge";
 import { ensureRecordingDir, cleanupOrphanFiles } from "./storage";
 
 /**
@@ -44,6 +44,18 @@ export function cleanupReplay(playerId: number): void {
   }
   cleanupPlayback(playerId);
   challengeDisconnect(playerId);
+}
+
+/**
+ * 玩家离开当前活动状态（进入比赛/房间切换）：停止其回放会话 + 影子挑战。
+ * 比赛中 /rp 命令被白名单拦截无法主动停回放，且挑战世界与比赛世界隔离——
+ * 不清理会留下挂机 ghost（进比赛时自动清理，防 ghost 残留/挑战残留）。
+ */
+export function stopReplayForPlayer(playerId: number): void {
+  if (getReplaySession(playerId)) {
+    stopReplaySession(playerId);
+  }
+  cleanupChallenge(playerId);
 }
 
 /**

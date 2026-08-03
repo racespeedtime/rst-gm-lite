@@ -50,6 +50,8 @@ interface Ghost {
   staggerMs: number;
   /** 当前车辆模型（帧车型变化时重建） */
   model: number;
+  /** 上次应用的车辆血量（变化检测，防每帧 setHealth） */
+  lastHealth: number;
 }
 
 export interface ReplaySession {
@@ -70,7 +72,6 @@ export interface ReplaySession {
   direction: 1 | -1;
   speed: number; // 倍速 0.5~4
   timer?: NodeJS.Timeout;
-  autoObserve: boolean;
   /** 观战者（发起人 + /rp watch 的人）的比赛信息 TD：playerId → 4 行 TD */
   tds: Map<number, { cp: TextDraw; time: TextDraw; best: TextDraw; rank: TextDraw }>;
   /** 当前观战中的玩家（含发起人）：会话停止时统一退出观战（防观战者卡 spectating） */
@@ -143,11 +144,6 @@ export function allocReplayNpc(name: string): Npc | null {
 
 export function getReplaySession(playerId: number): ReplaySession | undefined {
   return sessions.get(playerId);
-}
-
-/** 正在播放回放的玩家数（菜单可显示） */
-export function isPlayingReplay(playerId: number): boolean {
-  return sessions.has(playerId);
 }
 
 /** 比赛信息 TD 样式（对齐原版 CreatePRaceTextDraw，与比赛房间一致） */
@@ -315,7 +311,11 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     ghost.npc.setVehiclePos(s.x, s.y, s.z, true);
     ghost.npc.setVehicleRot(s.rx, s.ry, s.rz, true);
     ghost.npc.setVelocity(s.vx, s.vy, s.vz);
-    ghost.vehicle.setHealth(s.vehicleHealth);
+    // 血量变化检测（血量帧间极少变化，防 60fps×N 每帧 setHealth）
+    if (Math.abs(s.vehicleHealth - ghost.lastHealth) > 0.5) {
+      ghost.lastHealth = s.vehicleHealth;
+      ghost.vehicle.setHealth(s.vehicleHealth);
+    }
   } catch {
     // NPC/车辆失效（异常销毁由清理兜底）
   }
@@ -474,7 +474,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         charset: DEFAULT_CHARSET, // 支持中文（录制者名可能为中文）
       });
       label.create();
-      ghosts.push({ npc, vehicle, label, playTime: i * staggerMs, staggerMs, model: data.header.vehicleModelId });
+      ghosts.push({ npc, vehicle, label, playTime: i * staggerMs, staggerMs, model: data.header.vehicleModelId, lastHealth: -1 });
     }
   } catch (e) {
     logger.error(`[replay] 创建回放实体失败`, e);
@@ -505,7 +505,6 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     paused: false,
     direction: 1,
     speed: 1,
-    autoObserve: !isGhost,
     tds: new Map(),
     watchers: new Set(),
     lastCpText: "",

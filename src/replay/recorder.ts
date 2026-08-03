@@ -5,7 +5,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
-import { encodeHeader, encodeFrame, HEADER_BYTES, FRAME_BYTES, type ReplayFrame, type ReplayHeader } from "./format";
+import { encodeHeader, encodeFrame, HEADER_BYTES, FRAME_BYTES, REPLAY_TYPE_GHOST, REPLAY_TYPE_RACE, type ReplayFrame, type ReplayHeader } from "./format";
 import { saveRecordingFile, deleteRecordingFile } from "./storage";
 
 /**
@@ -236,7 +236,7 @@ export async function stopRecording(
   // 时长按帧数×标称采样间隔（播放时逐帧推进，保持一致）；实际帧间不均以插值平滑
   const durationMs = session.frames.length * 33;
   const header: ReplayHeader = {
-    type: session.type === "race" ? 1 : 0,
+    type: session.type === "race" ? REPLAY_TYPE_RACE : REPLAY_TYPE_GHOST,
     frameIntervalMs: 33, // 标称采样间隔（播放推进基准；实际帧间不均以帧序插值）
     vehicleModelId: session.vehicleModelId,
     startX: session.startX,

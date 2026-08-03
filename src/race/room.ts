@@ -16,7 +16,7 @@ import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scri
 import { isEditing } from "./editor";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
-import { raceRecordingStart, raceRecordingStop } from "@/replay";
+import { raceRecordingStart, raceRecordingStop, stopReplayForPlayer } from "@/replay";
 import { noteCpProgress } from "@/replay/recorder";
 import { startObservePlayer, stopObserve, isObserving, cleanupObserve, getObserverIdsOf } from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
@@ -342,6 +342,9 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   if (isInRace(player.id)) {
     leaveRace(player);
   }
+  // 进比赛：停止玩家正在播放的回放 + 影子挑战（比赛中 /rp 被白名单拦截无法
+  // 主动停，挑战世界与比赛世界隔离——不清理会留下挂机 ghost）
+  stopReplayForPlayer(player.id);
   room.members.set(player.id, player);
   playerRaces.set(player.id, {
     roomId: room.id,

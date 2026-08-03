@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync, readdirSync, statSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { logger } from "@/logger";
 
@@ -45,17 +45,6 @@ export function deleteRecordingFile(fileName: string): void {
     rmSync(join(RECORDING_DIR, fileName), { force: true });
   } catch (e) {
     logger.error(`[replay] 删除回放文件失败 ${fileName}`, e);
-  }
-}
-
-/** 文件是否存在 + 大小 */
-export function recordingFileInfo(fileName: string): { size: number } | null {
-  try {
-    const p = join(RECORDING_DIR, fileName);
-    if (!existsSync(p)) return null;
-    return { size: statSync(p).size };
-  } catch {
-    return null;
   }
 }
 

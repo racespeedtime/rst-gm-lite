@@ -27,7 +27,7 @@ const MAGIC = "RSTREP01";
 /** 当前格式版本：v3 引入 header 自描述 frameBytes */
 export const FORMAT_VERSION = 3;
 
-/** 录制类型 */
+/** 录制类型（recorder 写 header 用） */
 export const REPLAY_TYPE_GHOST = 0;
 export const REPLAY_TYPE_RACE = 1;
 
@@ -238,11 +238,6 @@ export function parseReplayFile(filePath: string): ReplayData {
 /** 读魔数后的版本号（parseHeader 内部用，避免二次解析） */
 function readVersion(buf: Buffer): number {
   return buf.readUInt8(8);
-}
-
-/** 第 index 帧的起始偏移（帧体切片内） */
-export function frameOffset(index: number, frameBytes: number): number {
-  return index * frameBytes;
 }
 
 /** 解码帧体切片（越界返回 null）。frameBytes 用文件内自描述值（兼容未来版本）。 */

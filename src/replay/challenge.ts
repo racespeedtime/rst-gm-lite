@@ -123,10 +123,17 @@ function tickChallenge(ch: ChallengeSession): void {
     if (ch.timer) clearIntervalSafe(ch.timer);
     return;
   }
+  const p = Player.getInstance(ch.playerId);
+  // 玩家在线但已不在挑战世界（死亡重生回原世界/传送离开）→ 自动结束，
+  // 防 ghost 在挑战世界挂到超时（重生后玩家已不在挑战上下文）
+  if (p && p.isConnected() && p.getVirtualWorld() !== ch.worldId) {
+    p.sendClientMessage(COLOR_RACE, "[影子] 你已离开挑战世界，挑战结束");
+    cleanupChallenge(ch.playerId);
+    return;
+  }
   const dur = ch.data.header.frameCount * ch.data.header.frameIntervalMs;
   // 影子播完 + 宽限后玩家未完成 → 自动结束（真实时间差，不用帧数累计防漂移）
   if (Date.now() - ch.goAt > dur + CHALLENGE_GRACE_MS) {
-    const p = Player.getInstance(ch.playerId);
     if (p && p.isConnected()) {
       p.sendClientMessage(COLOR_RACE, "[影子] 影子已到达终点，挑战超时结束（可再次挑战）");
     }
