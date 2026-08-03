@@ -28,7 +28,10 @@ function formatDate(d: Date | null): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/** 登录记录单行展示（index 为全局序号，跨页连续） */
+/** 登录记录表头（TABLIST_HEADERS 多列展示，\t 分隔） */
+const SESSION_LOG_HEADERS = ["#", "登录时间", "登出时间", "时长", "IP", "状态"];
+
+/** 登录记录行（多列，与表头列数一致） */
 function formatSessionLine(
   s: {
     loginAt: Date | null;
@@ -38,15 +41,18 @@ function formatSessionLine(
     status: string;
   },
   index: number,
-): string {
-  return (
-    `${index + 1}. 登录 ${formatDate(s.loginAt)}${s.logoutAt ? ` → ${formatDate(s.logoutAt)}` : ""}` +
-    ` 时长 ${formatDuration(s.duration)}${s.ip ? ` IP:${s.ip}` : ""}` +
-    ` ${s.status === "ONLINE" ? "{00FF00}在线" : "{808080}离线"}`
-  );
+): string[] {
+  return [
+    String(index + 1),
+    formatDate(s.loginAt),
+    s.logoutAt ? formatDate(s.logoutAt) : "—",
+    formatDuration(s.duration),
+    s.ip ?? "—",
+    s.status === "ONLINE" ? "{00FF00}在线" : "{808080}离线",
+  ];
 }
 
-/** 展示登录记录（分页对话框，浏览模式） */
+/** 展示登录记录（分页多列对话框，浏览模式） */
 async function showSessionLog(player: Player, userId: string, title: string): Promise<void> {
   const logs = await prisma.sysUserGameSession.findMany({
     where: { userId },
@@ -63,6 +69,7 @@ async function showSessionLog(player: Player, userId: string, title: string): Pr
     pageSize: PAGE_SIZE,
     selectable: false, // 纯浏览：点普通条目忽略，只翻页/关闭
     button2: "关闭",
+    headers: SESSION_LOG_HEADERS,
     format: formatSessionLine,
   });
 }
