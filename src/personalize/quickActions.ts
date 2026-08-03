@@ -295,4 +295,17 @@ export function initQuickCommands(): void {
     notifySaved(player, "已获取降落伞（按 F 使用）");
     return next();
   });
+
+  // /f 车辆翻正（对齐原版 /f）：抬升 2 让物理重新落正 + 修复。与快捷操作菜单
+  // "车辆翻正"同一实现；车内任意模式可用（比赛内翻车自救也支持）。
+  PlayerEvent.onCommandText("f", ({ player, next }) => {
+    const vehicle = Vehicle.getInstances().find((v) => v.isPlayerIn(player));
+    if (!vehicle) {
+      player.sendClientMessage(COLOR_ERROR, "你不在车内，无法翻正车辆");
+      return next();
+    }
+    flipVehicle(vehicle, 2);
+    notifySaved(player, "车辆已翻正并修复");
+    return next();
+  });
 }
