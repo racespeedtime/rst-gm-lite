@@ -5,6 +5,7 @@ import { startObservePlayer, stopObserve } from "@/core/observe";
 import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";
 import { flipVehicle } from "@/core/vehicleAuto";
 import { getSafeGroundZ } from "@/core/colandreas";
+import { isPlayerInWater } from "@infernus/colandreas";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
@@ -54,9 +55,22 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
         // 卡在建筑里/悬空时直接回到该点的地面。室内没有碰撞数据 → 退化为抬升。
         const pos = player.getPos();
         if (player.getInterior() === 0) {
+          // 水里：colandreas 找的是海底地面，传过去还在水里——
+          // 改为浮出水面（playerDepth = 玩家在水下的深度，水面 = 当前 z + playerDepth）
+          try {
+            const water = isPlayerInWater(player);
+            if (water && water.playerDepth > 0) {
+              player.setPos(pos.x, pos.y, pos.z + water.playerDepth + 0.5);
+              player.sendClientMessage("#ffffff", "已脱离卡死（浮出水面）");
+              return;
+            }
+          } catch {
+            // colandreas 不可用，忽略
+          }
           const ground = getSafeGroundZ(pos.x, pos.y, pos.z);
           if (Math.abs(ground - pos.z) > 0.5) {
-            player.setPos(pos.x, pos.y, ground);
+            // 抬高 0.8 防半身埋地（colandreas 地面高度可能略低于实际地表/流式 obj）
+            player.setPos(pos.x, pos.y, ground + 0.8);
             player.sendClientMessage("#ffffff", "已脱离卡死（传送到最近地面）");
             return;
           }
