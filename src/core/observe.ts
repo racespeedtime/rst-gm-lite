@@ -30,6 +30,18 @@ export function getObserveTarget(playerId: number): ObserveState | undefined {
   return observeStates.get(playerId);
 }
 
+/** 当前正在观战指定玩家的观察者 id 列表（供比赛信息同步：观察者看到被观战者的
+ *  CP/计时/排名——对齐原版 RaceRunTime/RaceRunRank 对观战者的 TD 同步） */
+export function getObserverIdsOf(targetId: number): number[] {
+  const ids: number[] = [];
+  for (const [pid, st] of observeStates) {
+    if (st.kind === "player" && st.targetId === targetId) {
+      ids.push(pid);
+    }
+  }
+  return ids;
+}
+
 /** 开始观战玩家（自动跟踪其车辆/步行状态） */
 export function startObservePlayer(observer: Player, target: Player): void {
   if (observer.id === target.id) {

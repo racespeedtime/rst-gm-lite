@@ -16,7 +16,7 @@ import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scri
 import { isEditing } from "./editor";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
-import { startObservePlayer, stopObserve, isObserving, cleanupObserve } from "@/core/observe";
+import { startObservePlayer, stopObserve, isObserving, cleanupObserve, getObserverIdsOf } from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
 import { sessionManager } from "@/sessions/manager";
@@ -362,18 +362,25 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
       owned.setPos(first.x, first.y, first.z);
       owned.setZAngle(first.angle);
       owned.putPlayerIn(player, 0);
+      player.setFacingAngle(first.angle); // putPlayerIn 后视角跟随车辆朝向的兜底
     } else if (player.isInAnyVehicle()) {
       const veh = player.getVehicle()!;
       veh.setPos(first.x, first.y, first.z);
       veh.setZAngle(first.angle);
+      player.setFacingAngle(first.angle); // 车内旋转车辆后玩家朝向同步（防视角没跟上）
     } else {
       await spawnVehicle(player, getDefaultRaceModel(room.cps), true);
       const veh = getOwnedVehicle(player.id);
       if (veh && veh.isValid()) {
         veh.setPos(first.x, first.y, first.z);
         veh.setZAngle(first.angle);
+        player.setFacingAngle(first.angle);
       }
     }
+    // 创建比赛信息 UI（加入房间即显示，对齐原版 Race_Game_Join → CreatePRaceTextDraw；
+    // 倒计时/开赛不再重建）
+    const tds = createRaceTd(player, room);
+    void updateBestTd(player, room, tds);
     // 显示第一个 CP（红色箭头指向第二个；open.mp 切换世界不改变坐标，
     // 开赛切到比赛世界后仍站在同一位置，beginRace 的 setPos 幂等保留）
     showNextCheckpoint(player, room.cps, -1);
@@ -484,10 +491,14 @@ function beginRace(room: RaceRoom): void {
       }
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);
-      // 创建比赛信息 UI（4 行：CP/TIME/BEST/RANK）
-      const tds = createRaceTd(m, room);
-      // 异步查询个人最佳并更新 BEST TD（原版进比赛即显示）
-      void updateBestTd(m, room, tds);
+      // 比赛信息 UI（C P/TIME/BEST/RANK）已在加入房间时创建（joinRoom），
+      // 开赛重置 TIME 显示为 0（tickRooms 开始计时刷新）
+      const tds = room.raceTextTds.get(m.id);
+      if (tds) {
+        tds.cp.setString(`C  P / ~p~0~w~/~y~${room.cps.length}`);
+        tds.time.setString("TIME / 00:00:00");
+        tds.rank.setString("RANK / 1 st");
+      }
     }
   }
   // 开始提示：对齐原版 ~y~Start! + 音效 1057 + 恢复第三人称视角
@@ -639,6 +650,14 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   if (raceTds) {
     const done = Math.min(pr.cpIndex + 1, room.cps.length);
     raceTds.cp.setString(`C  P / ~p~${done}~w~/~y~${room.cps.length}`);
+  }
+  // 观战者同步 CP 进度（对齐原版 OnPlayerEnterRaceCheckpoint 对观战者的 CP TD 同步）
+  for (const oid of getObserverIdsOf(player.id)) {
+    const ot = room.raceTextTds.get(oid);
+    if (ot) {
+      const done = Math.min(pr.cpIndex + 1, room.cps.length);
+      ot.cp.setString(`C  P / ~p~${done}~w~/~y~${room.cps.length}`);
+    }
   }
 
   // 最后一圈且到达最后一个 CP → 完成
@@ -998,6 +1017,14 @@ function tickRooms(): void {
       const time = mp.finished ? r.time : now - mp.startTime;
       tds.time.setString(`TIME / ${formatRaceTime(time)}`);
       tds.rank.setString(`RANK / ${rank + 1} ${rankSuffix(rank)}`);
+      // 观战者同步：观察该玩家的玩家显示同样的 TIME/RANK（对齐原版 RaceRunTime/
+      // RaceRunRank 里对观战者的 TD 同步——观战者看到被观战者的比赛信息）
+      for (const oid of getObserverIdsOf(r.playerId)) {
+        const ot = room.raceTextTds.get(oid);
+        if (!ot) continue;
+        ot.time.setString(`TIME / ${formatRaceTime(time)}`);
+        ot.rank.setString(`RANK / ${rank + 1} ${rankSuffix(rank)}`);
+      }
     });
   }
 }

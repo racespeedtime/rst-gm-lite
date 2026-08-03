@@ -49,6 +49,12 @@ interface PanelGroup {
   desc?: string;
   /** 组级可见条件（如 OP 专属） */
   visible?: (player: Player) => boolean;
+  /**
+   * 禁止单子项自动展开（默认 false：组内只有一个可见项时直接执行该项）。
+   * 状态驱动的分组（比赛房间/赛道编辑）必须开启——比赛中"离开房间"是唯一可见项，
+   * 若自动展开会在按 Y 的瞬间直接执行离开，把玩家踢出比赛。
+   */
+  noAutoExpand?: boolean;
   items: PanelItem[];
 }
 
@@ -65,6 +71,8 @@ const panelGroups: PanelGroup[] = [
   {
     label: "比赛房间",
     desc: "开始 / 离开比赛",
+    // 状态驱动分组：不自动展开单子项（否则比赛中唯一可见的"离开房间"会在按 Y 瞬间执行）
+    noAutoExpand: true,
     // 仅在比赛房间内（创建/加入比赛后）显示；其余玩法组在比赛中自动隐藏
     visible: (player) => isInRace(player.id),
     items: [
@@ -92,6 +100,7 @@ const panelGroups: PanelGroup[] = [
   {
     label: "赛道编辑",
     desc: "退出编辑模式",
+    noAutoExpand: true,
     // 仅在赛道编辑模式中显示；其余玩法组在编辑中自动隐藏（编辑用 F5 交互，避免干扰）
     visible: (player) => isEditing(player.id),
     items: [
@@ -248,8 +257,10 @@ async function showGroupMenu(player: Player, group: PanelGroup, back: MenuBack):
   if (items.length === 0) return back();
   // 单子项分组（战局/赛车/爱车/传送）：跳过分组中间层直接执行子项，
   // 子菜单取消时回主面板（back）——导航保持"主面板 ⇄ 功能菜单"两层，
-  // 避免点进去先看到一个只有一条的冗余菜单
-  if (items.length === 1) {
+  // 避免点进去先看到一个只有一条的冗余菜单。
+  // 状态驱动分组（noAutoExpand，如比赛房间/赛道编辑）例外：始终显示菜单列表，
+  // 让玩家主动选择，防止"比赛中唯一可见的离开房间"被自动执行。
+  if (items.length === 1 && !group.noAutoExpand) {
     await items[0].run(player, back);
     return;
   }
