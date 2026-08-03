@@ -2,7 +2,10 @@ import { Dialog, DialogStylesEnum, Player, PlayerEvent } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
-import { isPlayerLocked } from "@/core/interaction";
+import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
+import { pickOption } from "@/personalize/settings";
+import { startObservePlayer } from "@/core/observe";
+import { requestTpa } from "@/teleport";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
@@ -186,7 +189,31 @@ export async function showProfileByUsername(player: Player, back?: MenuBack): Pr
   return back?.();
 }
 
-/** 初始化：点击玩家 → 查看其信息（对齐原版 ClickPlayer） */
+/** 点击玩家操作菜单：查看信息 / 观战 / 请求传送到身边（对齐原版 ClickPlayer 列表） */
+async function openClickPlayerMenu(player: Player, target: Player): Promise<void> {
+  lockPlayer(player.id); // 菜单对话框流程期间锁定，防重复触发/覆盖当前对话框
+  try {
+    const name = target.getName().name;
+    const index = await pickOption(player, `${name} 的操作`, [
+      "查看个人信息",
+      "观战玩家",
+      "请求传送到TA身边",
+    ]);
+    if (index < 0) return; // 取消/关闭
+    if (index === 0) {
+      const auth = getAuthState(target.id);
+      if (auth) await showProfile(player, auth.userId, `${name} 的信息`);
+    } else if (index === 1) {
+      startObservePlayer(player, target);
+    } else if (index === 2) {
+      await requestTpa(player, target.id);
+    }
+  } finally {
+    unlockPlayer(player.id);
+  }
+}
+
+/** 初始化：点击玩家（Tab 记分板双击）→ 操作菜单 */
 export function initPlayerInfo(): void {
   PlayerEvent.onClickPlayer(({ player, clickedPlayer, next }) => {
     // 点击者正处在其他对话框流程（万能面板等）→ 忽略，避免覆盖当前对话框
@@ -197,10 +224,7 @@ export function initPlayerInfo(): void {
     if (clickedPlayer.isNpc() || !getAuthState(clickedPlayer.id)) {
       return next();
     }
-    const auth = getAuthState(clickedPlayer.id);
-    if (auth) {
-      void showProfile(player, auth.userId, `${clickedPlayer.getName().name} 的信息`);
-    }
+    void openClickPlayerMenu(player, clickedPlayer);
     return true;
   });
 }

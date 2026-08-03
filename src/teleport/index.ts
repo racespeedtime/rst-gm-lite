@@ -83,6 +83,73 @@ async function acceptsTeleport(player: Player): Promise<boolean> {
 }
 
 /**
+ * 发起传送到目标玩家的请求（/tpa 命令与点击玩家菜单共用）。
+ * 含全部校验（未处理请求/自己/在线/NPC/登录/比赛/同战局/接受传送），
+ * 任一校验失败给出提示并返回 false；成功发出请求返回 true。
+ */
+export async function requestTpa(player: Player, targetId: number): Promise<boolean> {
+  if (tpGotoId.has(player.id) || tpFromId.has(player.id)) {
+    player.sendClientMessage(COLOR_WHITE, "[TP] 你已有未处理的传送请求");
+    return false;
+  }
+  if (targetId === player.id) {
+    player.sendClientMessage(COLOR_WHITE, "[TP] 不能向自己发送传送请求");
+    return false;
+  }
+  const target = Player.getInstance(targetId);
+  if (!target) {
+    player.sendClientMessage(COLOR_WHITE, "[TP] 错误的玩家ID");
+    return false;
+  }
+  if (target.isNpc()) {
+    player.sendClientMessage(COLOR_WHITE, "[TP] 不能向NPC发送传送请求");
+    return false;
+  }
+  if (!getAuthState(target.id)) {
+    player.sendClientMessage(COLOR_WHITE, "[TP] 对方尚未登录");
+    return false;
+  }
+  // 比赛中禁止传送（请求方与目标方均检查）
+  if (isInRace(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "[TP] 比赛中不能传送");
+    return false;
+  }
+  if (isInRace(target.id)) {
+    player.sendClientMessage(COLOR_WHITE, "[TP] 对方正在比赛中，无法传送");
+    return false;
+  }
+  // 同战局限制
+  const mySession = sessionManager.getPlayerSession(player);
+  const targetSession = sessionManager.getPlayerSession(target);
+  if (mySession.id !== targetSession.id) {
+    player.sendClientMessage(COLOR_ERROR, "[TP] 对方与你不在同一战局，无法传送");
+    return false;
+  }
+  if (!(await acceptsTeleport(target))) {
+    player.sendClientMessage(COLOR_WHITE, "[TP] 对方关闭了接受传送");
+    return false;
+  }
+  if (tpFromId.has(target.id) || tpGotoId.has(target.id)) {
+    player.sendClientMessage(COLOR_WHITE, "[TP] 对方正在处理其他请求");
+    return false;
+  }
+  const timeout = Date.now() + TP_TIMEOUT_MS;
+  tpGotoId.set(player.id, target.id);
+  tpFromId.set(target.id, player.id);
+  tpTimeoutAt.set(player.id, timeout);
+  tpTimeoutAt.set(target.id, timeout);
+  target.sendClientMessage(
+    COLOR_INFO,
+    `[TP] ${player.getName().name}(${player.id}) 请求传送到你身边，/ta 同意 /td 拒绝`,
+  );
+  player.sendClientMessage(COLOR_INFO, `[TP] 请求已发至 ${target.getName().name}(${target.id})`);
+  new GameText("~n~~n~~n~~n~~n~~n~~n~~n~~w~Player want to move ~r~you~w~.", 3000, 3).forPlayer(
+    target,
+  );
+  return true;
+}
+
+/**
  * / 与 // 传送点兜底（挂在 onCommandError code 4）：
  * - /名称 → 系统传送点（isSystem=true），全服/战局公告
  * - //名称 → 用户传送点（isSystem=false），仅本人提示
@@ -172,69 +239,11 @@ export function initTeleport(): void {
       );
       return next();
     }
-    if (tpGotoId.has(player.id) || tpFromId.has(player.id)) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 你已有未处理的传送请求");
-      return next();
-    }
     if (!arg || Number.isNaN(+arg)) {
       player.sendClientMessage(COLOR_WHITE, "[TP] 用法: /tpa 玩家ID");
       return next();
     }
-    const targetId = +arg;
-    if (targetId === player.id) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 不能向自己发送传送请求");
-      return next();
-    }
-    const target = Player.getInstance(targetId);
-    if (!target) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 错误的玩家ID");
-      return next();
-    }
-    if (target.isNpc()) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 不能向NPC发送传送请求");
-      return next();
-    }
-    if (!getAuthState(target.id)) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 对方尚未登录");
-      return next();
-    }
-    // 比赛中禁止传送（请求方与目标方均检查）
-    if (isInRace(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "[TP] 比赛中不能传送");
-      return next();
-    }
-    if (isInRace(target.id)) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 对方正在比赛中，无法传送");
-      return next();
-    }
-    // 同战局限制
-    const mySession = sessionManager.getPlayerSession(player);
-    const targetSession = sessionManager.getPlayerSession(target);
-    if (mySession.id !== targetSession.id) {
-      player.sendClientMessage(COLOR_ERROR, "[TP] 对方与你不在同一战局，无法传送");
-      return next();
-    }
-    if (!(await acceptsTeleport(target))) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 对方关闭了接受传送");
-      return next();
-    }
-    if (tpFromId.has(target.id) || tpGotoId.has(target.id)) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 对方正在处理其他请求");
-      return next();
-    }
-    const timeout = Date.now() + TP_TIMEOUT_MS;
-    tpGotoId.set(player.id, target.id);
-    tpFromId.set(target.id, player.id);
-    tpTimeoutAt.set(player.id, timeout);
-    tpTimeoutAt.set(target.id, timeout);
-    target.sendClientMessage(
-      COLOR_INFO,
-      `[TP] ${player.getName().name}(${player.id}) 请求传送到你身边，/ta 同意 /td 拒绝`,
-    );
-    player.sendClientMessage(COLOR_INFO, `[TP] 请求已发至 ${target.getName().name}(${target.id})`);
-    new GameText("~n~~n~~n~~n~~n~~n~~n~~n~~w~Player want to move ~r~you~w~.", 3000, 3).forPlayer(
-      target,
-    );
+    await requestTpa(player, +arg);
     return next();
   });
 
