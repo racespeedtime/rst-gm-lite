@@ -351,26 +351,49 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   });
   // 加入即定位到第一个 CP 起点（对齐原版 Race_Game_Join：玩家有自己的车就用
   // 自己的车放起点）并显示第一个 CP 箭头（指向第二个），等待/热身阶段就站在
-  // 起点看到目标。优先级：
-  // 1. 有爱车（playerVehs 实体，本次会话刷过的车）→ 用爱车（即使人不在车里）
-  // 2. 没爱车但人在某辆车里 → 挪当前车
-  // 3. 都没 → 用默认比赛车型刷爱车（有该模型爱车则复用外观，没有则自动创建
-  //    成爱车——玩家始终用自己的爱车比赛），原地放入
+  // 起点看到目标。
+  // 目标车型 = 第一 CP 的 cveh 脚本车型（赛道标准车，如无则维持玩家当前爱车）：
+  // 进赛道即以该车为标准——玩家有该模型爱车则直接开进来，没有则自动创建成爱车
+  // （懒创建，对齐"没这个模型的爱车就为它创建一辆"）。第一 CP 触碰时不再临时换车。
   const first = room.cps[0];
   if (first) {
+    const defaultModel = getDefaultRaceModel(room.cps);
     const owned = getOwnedVehicle(player.id);
     if (owned && owned.isValid()) {
-      owned.setPos(first.x, first.y, first.z);
-      owned.setZAngle(first.angle);
-      owned.putPlayerIn(player, 0);
-      player.setFacingAngle(first.angle); // putPlayerIn 后视角跟随车辆朝向的兜底
+      // 有爱车：模型 = 赛道标准车型 → 直接用；模型不同 → 重刷成标准车型爱车
+      // （销毁旧车 + 懒创建，玩家始终以标准车参赛）
+      if (owned.getModel() !== defaultModel) {
+        await spawnVehicle(player, defaultModel, true);
+        player.sendClientMessage(COLOR_RACE, `[赛车] 本赛道标准车型为 ${defaultModel}，已切换为对应爱车`);
+      }
+      const veh = getOwnedVehicle(player.id);
+      if (veh && veh.isValid()) {
+        veh.setPos(first.x, first.y, first.z);
+        veh.setZAngle(first.angle);
+        veh.putPlayerIn(player, 0);
+        player.setFacingAngle(first.angle); // putPlayerIn 后视角跟随车辆朝向的兜底
+      }
     } else if (player.isInAnyVehicle()) {
+      // 没爱车但人在某辆车里：若是标准车型 → 挪当前车；否则也以标准车型刷爱车
       const veh = player.getVehicle()!;
-      veh.setPos(first.x, first.y, first.z);
-      veh.setZAngle(first.angle);
-      player.setFacingAngle(first.angle); // 车内旋转车辆后玩家朝向同步（防视角没跟上）
+      if (veh.getModel() === defaultModel) {
+        veh.setPos(first.x, first.y, first.z);
+        veh.setZAngle(first.angle);
+        player.setFacingAngle(first.angle); // 车内旋转车辆后玩家朝向同步（防视角没跟上）
+      } else {
+        await spawnVehicle(player, defaultModel, true);
+        player.sendClientMessage(COLOR_RACE, `[赛车] 本赛道标准车型为 ${defaultModel}，已刷为对应爱车`);
+        const v = getOwnedVehicle(player.id);
+        if (v && v.isValid()) {
+          v.setPos(first.x, first.y, first.z);
+          v.setZAngle(first.angle);
+          player.setFacingAngle(first.angle);
+        }
+      }
     } else {
-      await spawnVehicle(player, getDefaultRaceModel(room.cps), true);
+      // 都没 → 用标准车型刷爱车（有该模型爱车则复用外观，没有则自动创建
+      // 成爱车——玩家始终用自己的爱车比赛），原地放入
+      await spawnVehicle(player, defaultModel, true);
       const veh = getOwnedVehicle(player.id);
       if (veh && veh.isValid()) {
         veh.setPos(first.x, first.y, first.z);
@@ -674,7 +697,10 @@ async function onPlayerReachCp(player: Player): Promise<void> {
     player.sendClientMessage(COLOR_RACE, `[赛车] 第 ${pr.lap + 1} 圈（共 ${room.laps} 圈）`);
   }
 
-  // 触发当前 CP 脚本（脚本已随房间载入内存，不再查库）
+  // 触发当前 CP 脚本（脚本已随房间载入内存，不再查库）。
+  // 第一 CP 的 cveh 是赛道标准车型（进赛道时已按它匹配/刷车），到达时跳过换车，
+  // 其余 CP 的 cveh（如 Car 赛道 CP11 的 562 中途换车）照常执行。
+  const isFirstCp = nextCp.index === room.cps[0].index;
   const scriptCtx: CpScriptContext = {
     raceId: room.raceId,
     cpid: nextCp.index,
@@ -684,7 +710,7 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   };
   for (const script of nextCp.scripts) {
     // spawnpos 返回 false → 终止整条脚本链（对齐原版 Race_Cp_Script_Start 的 return 1）
-    if (!execCpScript(player, scriptCtx, script)) return;
+    if (!execCpScript(player, scriptCtx, script, { skipCveh: isFirstCp })) return;
     // 脚本执行（同步）期间玩家可能已离开/比赛结束 → 终止后续操作
     if (!playerRaces.has(player.id) || rooms.get(pr.roomId)?.state !== "RACING" || pr.finished) {
       return;

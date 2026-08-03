@@ -141,8 +141,14 @@ function setVehicleSpeed(veh: Vehicle, kmh: number, angleDeg: number, z?: number
 }
 
 /** 执行一条 CP 脚本。返回 false 表示终止整条脚本链（对齐原版 Race_Cp_Script_Start：
- * 碰到 spawnpos 直接 return 1，其后的脚本全部不再执行）。其余情况返回 true 继续。 */
-export function execCpScript(player: Player, ctx: CpScriptContext, script: string): boolean {
+ * 碰到 spawnpos 直接 return 1，其后的脚本全部不再执行）。其余情况返回 true 继续。
+ * opts.skipCveh：跳过 cveh 换车（第一 CP 的 cveh = 进赛道默认车型，到达时不再换车）。 */
+export function execCpScript(
+  player: Player,
+  ctx: CpScriptContext,
+  script: string,
+  opts?: { skipCveh?: boolean },
+): boolean {
   const [fn, ...rawArgs] = script.trim().split(/\s+/);
   const args = resolveArgs(player, ctx, rawArgs);
   const veh = player.getVehicle();
@@ -184,6 +190,9 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       break;
     }
     case "cveh": {
+      // 第一 CP 的 cveh = 赛道标准车型，进赛道时（joinRoom）已按它刷车/匹配爱车，
+      // 到达第一 CP 不再换车——防"临时换车"销毁玩家爱车（对齐"进赛道即以该车为标准"）
+      if (opts?.skipCveh) return true;
       const model = Number(args[0]);
       if (!isValidVehicleModel(model)) {
         err("cveh 车辆ID需 400-611");
