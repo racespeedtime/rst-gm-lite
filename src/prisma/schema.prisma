@@ -493,12 +493,12 @@ model SpawnPoint {
 model Replay {
   id             String   @id @default(uuid()) @db.Uuid
   type           String   @db.VarChar(16) // race | ghost
-  userId         String   @db.Uuid // 录制者 uid（稳定）
-  recorderName   String   @db.VarChar(255) // 快照：录制时玩家名
-  raceId         String?  @db.Uuid // 比赛回放关联赛道
-  raceName       String?  @db.VarChar(255) // 快照：赛道名（赛道可能被改名/删除）
+  userId         String   @map("user_id") @db.Uuid // 录制者 uid（稳定）
+  recorderName   String   @map("recorder_name") @db.VarChar(255) // 快照：录制时玩家名
+  raceId         String?  @map("race_id") @db.Uuid // 比赛回放关联赛道
+  raceName       String?  @map("race_name") @db.VarChar(255) // 快照：赛道名（赛道可能被改名/删除）
   vehicleModelId Int      @map("vehicle_model_id") // 快照：爱车模型
-  fileName       String   @db.VarChar(255) // 录像文件相对路径（数据本体）
+  fileName       String   @map("file_name") @db.VarChar(255) // 录像文件相对路径（数据本体）
   durationMs     Int      @map("duration_ms")
   frameCount     Int      @map("frame_count")
   fileSize       Int      @map("file_size")
