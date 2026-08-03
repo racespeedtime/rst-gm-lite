@@ -465,6 +465,56 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
   return true;
 }
 
+/**
+ * 房主重开当前赛道比赛（同一赛道重置回 WAITING）：
+ * 中断进行中的比赛（清倒计时/结束定时器 + 排名/进度数据），所有成员回起点 +
+ * 进度清零（含退出观战），房主再 /r s 或面板「开始比赛」重新开局。
+ * 适用：单人房间跑一半想重来 / 倒计时中反悔 / 成员乱跑想重置。
+ * 注：比赛结束（FINISHED）时房间已销毁（endRoom），重开需重新创建房间。
+ */
+export async function restartRace(player: Player): Promise<void> {
+  const pr = playerRaces.get(player.id);
+  const room = pr ? rooms.get(pr.roomId) : undefined;
+  if (!room) {
+    player.sendClientMessage(COLOR_ERROR, "你不在比赛房间中");
+    return;
+  }
+  if (room.ownerId !== player.id) {
+    player.sendClientMessage(COLOR_ERROR, "只有房主能重开比赛");
+    return;
+  }
+  if (room.state === "FINISHED") {
+    player.sendClientMessage(COLOR_ERROR, "比赛已结束（房间已解散），请重新创建比赛");
+    return;
+  }
+  // 中断进行中的比赛（倒计时/结束宽限定时器清理）
+  if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
+  if (room.endTimer) clearTimeoutSafe(room.endTimer);
+  const wasRunning = room.state === "RACING" || room.state === "COUNTDOWN";
+  room.state = "WAITING";
+  // 清空排名/CP 进度数据（重开后从零开始）
+  room.results = [];
+  room.lastCpAt.clear();
+  room.resultIndex.clear();
+  // 成员重置：退出观战（防 putPlayerIn 无效）+ 进度清零 + 回起点 + TD/CP 重建
+  for (const m of room.members.values()) {
+    const mp = playerRaces.get(m.id);
+    if (!mp) continue;
+    if (isObserving(m.id)) stopObserve(m);
+    mp.cpIndex = -1;
+    mp.lap = 0;
+    mp.startTime = 0;
+    mp.finished = false;
+    await positionPlayerAtStart(m, room);
+  }
+  if (wasRunning) {
+    broadcastToRoom(room, `[赛车] 房主重开了比赛（赛道不变「${room.raceName}」），成员已回到起点`);
+  } else {
+    player.sendClientMessage(COLOR_RACE, `已重置比赛（赛道 ${room.raceName}），成员已回到起点`);
+  }
+  player.sendClientMessage(COLOR_RACE, "输入 /r s 或面板「开始比赛」重新开局");
+}
+
 async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   // 已参与其他房间则先离开（防止 playerRaces 被覆盖、旧房间残留成员）
   if (isInRace(player.id)) {

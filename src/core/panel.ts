@@ -22,6 +22,7 @@ import {
   leaveRace,
   respawnToLastCp,
   openChangeTrackMenu,
+  restartRace,
 } from "@/race/room";
 import { isEditing, exitEdit } from "@/race/editor";
 import { showMySessionLogs } from "@/auth/sessionLog";
@@ -100,6 +101,17 @@ const panelGroups: PanelGroup[] = [
           return !!room && room.state === "WAITING" && room.ownerId === player.id;
         },
         run: openChangeTrackMenu,
+      },
+      {
+        label: "重开比赛",
+        raceSafe: true,
+        // 仅房主：当前赛道重置回起点（同一赛道再来一场），倒计时/比赛中也可用
+        visible: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          return !!room && room.state !== "FINISHED" && room.ownerId === player.id;
+        },
+        run: restartRace,
       },
       {
         label: "重生",
