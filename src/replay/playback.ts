@@ -65,6 +65,10 @@ interface Ghost {
   lastHealth: number;
   /** 上次注入的按键状态（变化检测，防每帧 setKeys） */
   lastKeys: number;
+  /** 当前帧速度（录制 m/s，从插值帧 vx/vy/vz 算）——velocity 已学 open.mp
+   *  官方回放清零（防"搬位置+赋速度"物理打架导致 getSpeed 跳变），速度表
+   *  观战 ghost 时改从这里读（getReplayGhostSpeed） */
+  currentSpeed: number;
 }
 
 export interface ReplaySession {
@@ -355,7 +359,11 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
   }
 }
 
-/** 渲染单个 ghost 到当前帧（位置/旋转/速度 + 按键 + 车型/血量；时间天气随帧给观察者） */
+/** 渲染单个 ghost 到当前帧（位置/旋转/速度 + 按键 + 车型/血量；时间天气随帧给观察者）
+ * 速度学 open.mp 官方回放（NPCs/Playback/playback.cpp）：setVelocity 清零 +
+ * 只搬位置/旋转——"搬位置 + 赋速度"双 native 每 tick 交替覆盖会让 getSpeed()
+ * 跳变（SetVehiclePos 重置物理再 SetVehicleVelocity 设速，客户端测速打架）。
+ * 官方也不赋录制速度（网络位移增量非 m/s）。速度表观战改读 currentSpeed。 */
 function renderGhost(session: ReplaySession, ghost: Ghost): void {
   const s = sampleAt(session.data, ghost.playTime);
   if (!s) return;
@@ -363,12 +371,13 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     ensureGhostVehicle(session, ghost, s.vehicleModel);
     ghost.npc.setVehiclePos(s.x, s.y, s.z, true);
     ghost.npc.setVehicleRot(s.rx, s.ry, s.rz, true);
-    // 速度：录制存多少这里赋多少（录制 velocity 与回放 setVelocity 同引擎约定）。
-    // 兜底采样 getVelocity() 就是 m/s；回放 setVelocity 原样写回，速度显示正确。
-    ghost.npc.setVelocity(s.vx, s.vy, s.vz);
+    // 清零物理速度（官方模式）；真实速度由帧数据提供（getReplayGhostSpeed）
+    ghost.npc.setVelocity(0, 0, 0);
     // 车辆实体朝向同步（rz=yaw 车头朝向）：setVehicleRot 设的是 NPC 视角旋转，
     // 车辆实体本身 zAngle 也要跟上，否则客户端车体朝向与 NPC 驱动不一致
     ghost.vehicle.setZAngle(s.rz);
+    // 记录当前帧速度（录制 m/s，插值帧间平滑）——速度表观战 ghost 用
+    ghost.currentSpeed = Math.hypot(s.vx, s.vy, s.vz);
     // 按键状态（DriverSync keys 帧）：SPRINT=氮气等按键在对应时刻注入 NPC，
     // 让回放车在录制按加速键的时刻喷氮气。变化检测防每帧 setKeys。
     if (s.keys !== ghost.lastKeys) {
@@ -383,6 +392,13 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
   } catch {
     // NPC/车辆失效（异常销毁由清理兜底）
   }
+}
+
+/** 读取某玩家发起回放的第一个 ghost 当前速度（帧数据 m/s）——速度表观战用 */
+export function getReplayGhostSpeed(playerId: number): number {
+  const session = sessions.get(playerId);
+  if (!session || session.ghosts.length === 0) return 0;
+  return session.ghosts[0].currentSpeed;
 }
 
 /** 60fps 播放推进 */
@@ -579,6 +595,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         model: data.header.vehicleModelId,
         lastHealth: -1,
         lastKeys: -1,
+        currentSpeed: 0,
       });
     }
   } catch (e) {

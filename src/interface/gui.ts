@@ -3,6 +3,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { setIntervalSafe } from "@/core/timers";
 import { getObserveTarget } from "@/core/observe";
+import { getReplayGhostSpeed } from "@/replay/playback";
 import { getSetting } from "@/personalize/settings";
 import {
   createSpeed2d,
@@ -118,13 +119,21 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
  * 获取速度表显示速度（对齐原版 RST）：
  * - 观战中：取被观战者速度（观战玩家 → 其自身；观战车辆 → 车辆速度）
  * - 非观战：车内取车辆速度，步行取玩家自身速度
+ * - 回放 ghost 车：velocity 已清零（学 open.mp 官方回放），getSpeed() 恒 0，
+ *   改读回放帧数据速度（getReplayGhostSpeed）——观战 ghost 时速度表正常
  */
 function getDisplaySpeed(player: Player): number {
   const st = getObserveTarget(player.id);
   if (st) {
-    const inst =
-      st.kind === "player" ? Player.getInstance(st.targetId) : Vehicle.getInstance(st.targetId);
-    return inst ? inst.getSpeed() : 0;
+    if (st.kind === "vehicle") {
+      // 回放 ghost 车（发起人自己观战 / /rp watch）：读帧速度
+      const replaySpeed = getReplayGhostSpeed(player.id);
+      if (replaySpeed > 0) return replaySpeed;
+      const veh = Vehicle.getInstance(st.targetId);
+      return veh ? veh.getSpeed() : 0;
+    }
+    const target = Player.getInstance(st.targetId);
+    return target ? target.getSpeed() : 0;
   }
   const veh = player.isInAnyVehicle() ? player.getVehicle() : null;
   return veh ? veh.getSpeed() : player.getSpeed();
