@@ -49,18 +49,20 @@ export interface RecordingSession {
   totalCp: number;
   /** 录制者该赛道个人最佳毫秒（回放 BEST TD；无 -1） */
   bestMs: number;
+  /** 离散状态缓存（车型/时间/天气/血量）——必须 per-session：
+   *  多人比赛同时录制时模块级缓存会互相污染（A 的车型/血量写进 B 的帧），
+   *  且 cveh 换车后各玩家车型独立。缓存随会话生命周期，startRecording 初始化。 */
+  cacheModel: number;
+  cacheHour: number;
+  cacheMinute: number;
+  cacheWeather: number;
+  cacheHealth: number;
+  cacheAt: number;
 }
 
 const sessions = new Map<number, RecordingSession>();
 /** 兜底采样定时器句柄（模块级，init 时启动一次） */
 let fallbackTimer: NodeJS.Timeout | undefined;
-/** 最近一次采样帧（RakNet 帧间离散状态缓存用） */
-let lastCached = 0;
-let cacheModel = 0;
-let cacheHour = 12;
-let cacheMinute = 0;
-let cacheWeather = 0;
-let cacheHealth = 1000;
 
 export function isRecording(playerId: number): boolean {
   return sessions.has(playerId);
@@ -127,18 +129,19 @@ function sample(session: RecordingSession, frame: ReplayFrame): void {
  * getVehicle/getModel/getHealth）开销大。缓存节流：只在上次刷新 ≥DISCRETE_REFRESH_MS
  * 前才重读，帧间用缓存（状态变化延迟最多该间隔写帧，CP 进度由 noteCpProgress
  * 事件驱动不受影响）。
+ * 缓存存于会话内：并发录制（多人比赛）时各会话互不干扰。
  */
 function refreshDiscreteCache(session: RecordingSession, player: Player): void {
   const now = Date.now();
-  if (now - lastCached < DISCRETE_REFRESH_MS) return;
-  lastCached = now;
+  if (now - session.cacheAt < DISCRETE_REFRESH_MS) return;
+  session.cacheAt = now;
   const veh = getOwnedVehicle(session.playerId);
   const tm = player.getTime();
-  cacheModel = veh && veh.isValid() ? veh.getModel() : session.vehicleModelId;
-  cacheHour = tm.ret ? tm.hour : 12;
-  cacheMinute = tm.ret ? tm.minute : 0;
-  cacheWeather = player.getWeather();
-  cacheHealth = veh && veh.isValid() ? veh.getHealth().health : 1000;
+  session.cacheModel = veh && veh.isValid() ? veh.getModel() : session.vehicleModelId;
+  session.cacheHour = tm.ret ? tm.hour : 12;
+  session.cacheMinute = tm.ret ? tm.minute : 0;
+  session.cacheWeather = player.getWeather();
+  session.cacheHealth = veh && veh.isValid() ? veh.getHealth().health : 1000;
 }
 
 /** 从车辆实体采集当前帧（位置/四元数/速度/车型/时间天气/血量） */
@@ -230,6 +233,14 @@ export async function startRecording(
     cpProgress: 0,
     totalCp: 0,
     bestMs: -1,
+    // 离散缓存初始化为空态（cacheAt=0 使首次采样立即刷新），
+    // 避免首帧用默认值（车型/血量等与实际不符）
+    cacheModel: veh.getModel(),
+    cacheHour: 12,
+    cacheMinute: 0,
+    cacheWeather: 0,
+    cacheHealth: 1000,
+    cacheAt: 0,
   };
   sessions.set(player.id, session);
   // 比赛录制：异步补个人最佳（回放 BEST TD 用），不阻塞开始
@@ -383,7 +394,7 @@ export function initRecorder(): void {
             const p = sync.position;
             const v = sync.velocity;
             const q = sync.quaternion;
-            // 离散状态（车型/时间/天气/血量）节流采样：sync 帧间用缓存，
+            // 离散状态（车型/时间/天气/血量）节流采样：sync 帧间用会话内缓存，
             // 避免每帧读 6-7 个 native（CP 进度由 noteCpProgress 事件驱动）
             if (player) refreshDiscreteCache(session, player);
             sample(session, {
@@ -397,12 +408,12 @@ export function initRecorder(): void {
               vx: v[0],
               vy: v[1],
               vz: v[2],
-              vehicleModel: cacheModel,
+              vehicleModel: session.cacheModel,
               cpProgress: session.cpProgress,
-              hour: cacheHour,
-              minute: cacheMinute,
-              weather: cacheWeather,
-              vehicleHealth: cacheHealth,
+              hour: session.cacheHour,
+              minute: session.cacheMinute,
+              weather: session.cacheWeather,
+              vehicleHealth: session.cacheHealth,
             });
           }
         }

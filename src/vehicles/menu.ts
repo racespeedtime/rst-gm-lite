@@ -204,7 +204,8 @@ async function manageCurrentVehicle(player: Player, back?: MenuBack): Promise<vo
       if (!p.isInAnyVehicle() || p.getVehicle() !== veh) continue;
       const pos = p.getPos();
       p.setPos(pos.x, pos.y, pos.z + 5);
-      p.sendClientMessage(COLOR_ERROR, "该车已被锁，你被移出");
+      // 实际是车主主动踢人（车没锁），文案与动作一致（对齐 /c kick）
+      p.sendClientMessage(COLOR_ERROR, "你被车主移出了车辆");
       kicked++;
     }
     player.sendClientMessage(

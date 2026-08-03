@@ -48,11 +48,6 @@ export function headerBytesFor(version: number): number {
   return version >= 3 ? HEADER_BYTES_V3 : HEADER_BYTES_V2;
 }
 
-/** 版本 → 帧字节数（向后兼容 v2） */
-export function frameBytesFor(version: number): number {
-  return version >= 3 ? FRAME_BYTES_V2 : FRAME_BYTES_V2;
-}
-
 export interface ReplayFrame {
   x: number;
   y: number;
@@ -226,18 +221,14 @@ export function parseHeader(buf: Buffer): ReplayHeader {
 export function parseReplayFile(filePath: string): ReplayData {
   const buf = readFileSync(filePath);
   const header = parseHeader(buf);
-  const headerBytes = headerBytesFor(readVersion(buf));
+  // 头字节数按版本分支：v3 多 4B frameBytes（自描述；魔数 0-7，版本在偏移 8）
+  const headerBytes = headerBytesFor(buf.readUInt8(8));
   const frames = buf.subarray(headerBytes);
   // 帧数与文件长度一致性校验（用文件内自描述的 frameBytes，兼容未来帧加字段）
   if (frames.length < header.frameCount * header.frameBytes) {
     throw new Error("回放文件数据不完整");
   }
   return { header, headerBytes, frames };
-}
-
-/** 读魔数后的版本号（parseHeader 内部用，避免二次解析） */
-function readVersion(buf: Buffer): number {
-  return buf.readUInt8(8);
 }
 
 /** 解码帧体切片（越界返回 null）。frameBytes 用文件内自描述值（兼容未来版本）。 */

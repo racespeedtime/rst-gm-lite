@@ -31,10 +31,21 @@ import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/co
 /** 回放世界起始 id（避开公共大世界 0、战局 1..n、比赛 5000+；挑战共用） */
 const REPLAY_WORLD_BASE = 6000;
 let nextReplayWorldId = REPLAY_WORLD_BASE;
+/**
+ * 已释放的回放/挑战世界 id（复用防无界增长）：
+ * 回放/挑战会话频繁创建销毁（每人可开多场），只递增不复用会一直涨；
+ * 复用已回收 id 避免长期运行后无界增长。
+ */
+const freedReplayWorlds: number[] = [];
 
 /** 分配回放/挑战独立世界 id */
 export function allocReplayWorld(): number {
-  return nextReplayWorldId++;
+  return freedReplayWorlds.pop() ?? nextReplayWorldId++;
+}
+
+/** 回收回放/挑战世界 id（仅回收本模块分配的 id；ghost 回放用当前世界不回收） */
+export function freeReplayWorld(worldId: number): void {
+  if (worldId >= REPLAY_WORLD_BASE) freedReplayWorlds.push(worldId);
 }
 
 /** 播放推进帧间隔（60fps） */
@@ -340,6 +351,10 @@ function tickSession(session: ReplaySession): void {
   const dt = TICK_MS * session.speed * session.direction;
   const lastIdx = session.data.header.frameCount - 1;
   const maxTime = lastIdx * session.data.header.frameIntervalMs;
+  // 倒放/后退离开结尾 → 重置"已播完"提示标记（back/seek 后再次正放播完会重新提示）
+  if (session.direction === -1 && session.endedNotified) {
+    session.endedNotified = false;
+  }
   for (const g of session.ghosts) {
     // 播放时间推进并 clamp 到 [0, maxTime]（播到头/退到头停在边界，不循环）
     g.playTime = Math.min(maxTime, Math.max(0, g.playTime + dt));
@@ -627,6 +642,8 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       const max = session.data.header.frameCount * session.data.header.frameIntervalMs;
       const target = Math.min(max, Math.max(0, ms));
       for (const g of session.ghosts) g.playTime = target;
+      // seek 离开结尾 → 重置"已播完"提示标记（再次正放播完会重新提示）
+      if (target < max) session.endedNotified = false;
       for (const g of session.ghosts) renderGhost(session, g);
       syncObserverTds(session); // seek 后 TD 状态与时间线一致
       player.sendClientMessage(COLOR_RACE, `已跳转到 ${(target / 1000).toFixed(1)}s`);
@@ -697,6 +714,8 @@ export function stopReplaySession(playerId: number): void {
     }
   }
   session.watchers.clear();
+  // 独立世界（比赛回放）的会话：会话销毁后世界无人使用 → 回收世界 id 供复用
+  if (session.replayType === "race") freeReplayWorld(session.worldId);
   // 比赛回放（独立世界）：玩家可能在其中刷过车 → 恢复玩家世界 + 爱车世界，
   // 防爱车留在独立世界成幽灵车（仅当玩家仍在回放世界；已离开则不覆盖其状态）
   const owner = Player.getInstance(playerId);

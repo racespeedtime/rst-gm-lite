@@ -43,8 +43,10 @@ export function initReplayCommands(): void {
         return next();
       }
       void (async () => {
-        await startRecording(player, { type: "ghost" });
-        player.sendClientMessage(COLOR_INFO, "录制中… /rec stop 停止");
+        // startRecording 内部已发错误提示（未登录/已在录制/无车等），
+        // 仅成功时补充"录制中"引导（失败不再追加误导文案）
+        const ok = await startRecording(player, { type: "ghost" });
+        if (ok) player.sendClientMessage(COLOR_INFO, "录制中… /rec stop 停止");
       })();
       return next();
     }

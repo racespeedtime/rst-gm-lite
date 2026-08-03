@@ -7,7 +7,7 @@ import { COLOR_INFO } from "@/utils/colors";
 /** 登录欢迎消息（服务器名 + 核心玩法指引） */
 export function sendWelcomeMessage(player: Player): void {
   player.sendClientMessage(COLOR_INFO, "[RST] 欢迎回来！按 Y 打开万能面板（赛车/爱车/个性化等主要入口）");
-  player.sendClientMessage(COLOR_INFO, "[RST] 输入 /help 查看常用命令，/r 进入赛车（创建/加入比赛）");
+  player.sendClientMessage(COLOR_INFO, "[RST] 输入 /help 查看常用命令，/r 进入赛车（创建/加入比赛），/drift 乘坐漂移 NPC");
 }
 
 /** 常用命令帮助内容（Dialog 支持中文） */
@@ -16,6 +16,7 @@ const HELP_LINES = [
   "{FFFFFF}/r — 赛车：无参数打开赛道列表，/r s 创建比赛 · /r j 加入 · /r l 离开",
   "{FFFFFF}/c — 刷车（/c 车辆ID · /c list 图片选车 · /c wode 召唤）",
   "{FFFFFF}/skin — 3D 选皮肤（/skin 打开菜单 · /skin ID 直接切换）",
+  "{FFFFFF}/drift — 乘坐漂移 NPC 随行观光（NPC 开车，您当乘客）",
   "{FFFFFF}/tv — 观战玩家（/tv 玩家ID · /tv off 关闭）",
   "{FFFFFF}/s /l — 保存当前位置 / 传送回去",
   "{FFFFFF}/rec — 自由录制回放（/rec start 开始 · /rec stop 停止 · /rec list 我的录制）",

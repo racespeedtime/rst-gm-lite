@@ -6,7 +6,6 @@ import { getSetting } from "@/personalize/settings";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { DEFAULT_CHARSET } from "@/utils/constants";
-
 /** 世界环境持有的实体（onExit 时统一销毁） */
 interface WorldEnv {
   icons: DynamicMapIcon[];
@@ -304,9 +303,9 @@ const timeFlowTimers = new Map<number, NodeJS.Timeout>();
 export async function applyWorldEnv(player: Player): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
-  const setting = await prisma.sysUserSetting.findUnique({
-    where: { userId: auth.userId },
-  });
+  // 走设置缓存（登录时 getSetting 已预热；与各个性化菜单共用同一份数据，
+  // 避免直查库读到旧值/多一次 DB 往返）
+  const setting = await getSetting(player);
   if (!setting) return;
 
   if (setting.syncGameTime) {

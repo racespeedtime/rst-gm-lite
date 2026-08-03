@@ -137,7 +137,7 @@ export function initChat(): void {
       return next();
     }
     const target = Player.getInstance(targetId);
-    if (!target || target.isNpc()) {
+    if (!target || target.isNpc() || !target.isConnected()) {
       player.sendClientMessage(COLOR_ERROR, "无效的玩家ID");
       return next();
     }

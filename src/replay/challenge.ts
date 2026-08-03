@@ -18,7 +18,7 @@ import { getDefaultRaceModel } from "@/race/vehicle";
 import { setIntervalSafe, clearIntervalSafe, setTimeoutSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import type { ReplayData } from "./format";
-import { sampleAt, allocReplayWorld, allocReplayNpc, loadReplayData, getReplaySession } from "./playback";
+import { sampleAt, allocReplayWorld, freeReplayWorld, allocReplayNpc, loadReplayData, getReplaySession } from "./playback";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR } from "@/utils/colors";
 
@@ -89,6 +89,8 @@ export function cleanupChallenge(playerId: number): void {
       owned.setVirtualWorld(ch.prevWorld);
     }
   }
+  // 挑战独立世界已无人使用 → 回收世界 id 供复用
+  freeReplayWorld(ch.worldId);
 }
 
 /** 服务器退出：全部挑战销毁 */

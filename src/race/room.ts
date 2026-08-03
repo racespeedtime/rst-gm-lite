@@ -40,6 +40,22 @@ const RACE_MAP_ICON_TYPE_NEXT = 56;
 /** 比赛房间独立世界起始 id（避开公共大世界 0 与战局 1..n） */
 const RACE_WORLD_BASE = 5000;
 let nextRaceWorldId = RACE_WORLD_BASE;
+/**
+ * 已销毁房间释放的比赛世界 id（复用防无界增长）：
+ * 房间创建/销毁非常频繁（每人一房、结束即销毁），若只递增不复用，长期运行
+ * 约 1000 个房间后 worldId 会追上回放世界基准 6000（REPLAY_WORLD_BASE），
+ * 造成比赛与回放/挑战世界互相可见（跨世界实体穿模）。销毁时回收、创建时先取。
+ */
+const freedRaceWorlds: number[] = [];
+
+function allocRaceWorld(): number {
+  return freedRaceWorlds.pop() ?? nextRaceWorldId++;
+}
+
+function freeRaceWorld(worldId: number): void {
+  // 只回收本模块分配的 id（防误收外部世界；RACE_WORLD_BASE 之上都属本模块）
+  if (worldId >= RACE_WORLD_BASE) freedRaceWorlds.push(worldId);
+}
 
 /** 比赛房间状态 */
 type RaceRoomState = "WAITING" | "COUNTDOWN" | "RACING" | "FINISHED";
@@ -367,7 +383,7 @@ export async function createRaceRoom(player: Player, raceId: string | null): Pro
     raceName: race.name,
     authorName: race.sysUser?.username ?? "未知",
     laps: Math.max(1, race.laps ?? 1),
-    worldId: nextRaceWorldId++,
+    worldId: allocRaceWorld(),
     ownerId: player.id,
     ownerUserId: getAuthState(player.id)?.userId ?? "",
     state: "WAITING",
@@ -505,6 +521,9 @@ export async function restartRace(player: Player): Promise<void> {
     mp.lap = 0;
     mp.startTime = 0;
     mp.finished = false;
+    // 比赛中止重开：停止上一段的比赛自动录制（对齐 leaveRace/endRoom 落盘），
+    // 下一场开赛（beginRace）会重新开始录制，避免两场成绩混进同一段回放
+    raceRecordingStop(m.id);
     await positionPlayerAtStart(m, room);
   }
   if (wasRunning) {
@@ -1120,6 +1139,7 @@ function endRoom(room: RaceRoom): void {
   }
   destroyRaceTds(room);
   room.members.clear();
+  freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id（供后续房间复用）
   rooms.delete(room.id);
 }
 
@@ -1128,6 +1148,7 @@ function checkRoomState(room: RaceRoom): void {
     if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
     if (room.endTimer) clearTimeoutSafe(room.endTimer);
     destroyRaceTds(room);
+    freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id
     rooms.delete(room.id);
   }
 }
@@ -1199,6 +1220,7 @@ function tickRooms(): void {
       }
       destroyRaceTds(room);
       room.members.clear();
+      freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id
       rooms.delete(room.id);
       continue;
     }

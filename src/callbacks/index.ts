@@ -122,6 +122,10 @@ async function handlePlayerConnect(player: Player) {
       // 注册（prevWorld 战局仍存在则加回，否则回公共大世界）——不能再调
       // onPlayerAuthenticated，否则会把玩家塞回 publicWorld 造成双注册/注册错乱
       initChatState(player.id);
+      // 重连是全新连接：removeBuilding（房屋建筑移除）与物件显隐是 per-player
+      // 的，断线后原建筑/物件显隐状态已重置，须与登录路径一致重新应用
+      setHouseObjectsVisibleForPlayer(player, loginSetting?.showObject ?? true);
+      applyHouseRemovedBuildings(player);
       // 解除连接时的观战模式，恢复可见（比赛世界）
       player.toggleSpectating(false);
       if (auth.isSuperAdmin) {

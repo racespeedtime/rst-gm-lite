@@ -21,6 +21,9 @@ export class SessionManager {
   /** 战局 id 与 world id 分配器 */
   private nextSessionId = 1;
   private nextWorldId = 1;
+  /** 已解散战局回收的 world id（复用防无界增长：战局频繁创建/解散，
+   *  长期运行后 worldId 会涨过 5000 与比赛世界（RACE_WORLD_BASE）撞车） */
+  private freedWorldIds: number[] = [];
   /** 缓存出生点，用于加入战局时的传送 */
   private spawnPoints: { x: number; y: number; z: number; angle: number }[] | null = null;
 
@@ -116,6 +119,7 @@ export class SessionManager {
         // 且 findOwnedSession 命中旧空局导致房主永远无法创建新战局
         if (session.members.size === 0) {
           this.privateSessions.delete(sid);
+          this.freedWorldIds.push(session.worldId); // 回收战局 world id 供复用
         }
       }
     }
@@ -182,7 +186,8 @@ export class SessionManager {
     }
     const session = new Session({
       id: this.nextSessionId++,
-      worldId: this.nextWorldId++,
+      // 优先复用已解散战局释放的 world id；无则分配新 id（防无界增长撞比赛世界）
+      worldId: this.freedWorldIds.pop() ?? this.nextWorldId++,
       name: name || `${player.getName().name} 的战局`,
       ownerUserId: this.getOwnerUserId(player),
       password,
@@ -304,6 +309,7 @@ export class SessionManager {
     if (current.members.size === 0) {
       // 没其他人 → 解散战局
       this.privateSessions.delete(current.id);
+      this.freedWorldIds.push(current.worldId); // 回收战局 world id 供复用
       logger.info(`[session] 战局「${current.name}」已解散（成员全部离开）`);
       return;
     }
