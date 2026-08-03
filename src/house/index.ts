@@ -2,6 +2,7 @@ import { Dialog, DialogStylesEnum, Dynamic3DTextLabel, DynamicArea, DynamicObjec
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
+import { registerObjectCollision } from "@/core/collision";
 
 import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
 
@@ -140,6 +141,8 @@ export async function loadAllHouseObjects(): Promise<void> {
             // 相机无碰撞：镜头可穿透物体（避免被房屋模型遮挡视野）
             obj.setNoCameraCollision();
             objs.push(obj);
+            // 注册进 colandreas 碰撞网格：传送/出生定位可命中它（落在屋顶而非卡进屋里）
+            registerObjectCollision(args.modelId, args.x, args.y, args.z, args.rx, args.ry, args.rz);
             // 登记到该房屋的 obj 索引表（材质绑定目标）
             if (m.houseId) {
               let map = objByHouse.get(m.houseId);

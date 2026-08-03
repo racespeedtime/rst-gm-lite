@@ -5,6 +5,11 @@ import { isInsideMap } from "@/utils/map";
 /** colandreas 是否已成功初始化（插件缺失时为 false，不影响其他功能） */
 let colandreasReady = false;
 
+/** colandreas 是否可用（其他模块注册碰撞前判断） */
+export function isColandreasReady(): boolean {
+  return colandreasReady;
+}
+
 /**
  * 初始化 colandreas（插件可能未安装/未加载，失败仅记录日志不崩溃）。
  * 必须在 GameMode.onInit 内调用。
