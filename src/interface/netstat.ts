@@ -194,9 +194,14 @@ export function updateNetstat(state: NetstatState, player: Player): void {
   tds[2].setString(`${bytesRec.toFixed(2)}KB/s ${Math.round(msgRec)}pkt/s`);
 
   const ping = player.getPing();
-  // tds[7] 是 chit 图标、tds[8] 是 "0ms" 数字：变色应作用在数字上
+  // tds[7] 是 chit 图标、tds[8] 是 "0ms" 数字：变色应作用在数字上。
+  // 必须 show：e9f2a84 曾删掉此处的 show，ping TD 仅靠 createNetstat 的一次性
+  // show 撑——玩家重生/隐藏 GUI 开关往返后 TD 显示状态可能丢失，setString 只
+  // 改文本不显示 → ping 消失（loss 行一直保留 show 所以正常）。补回并保持
+  // 与 loss 一致的每帧 show（幂等，不影响其它 TD）
   tds[8].setColor(ping <= 80 ? GREEN : ping <= 130 ? YELLOW : RED);
   tds[8].setString(`${ping}ms`);
+  tds[8].show(player);
 
   // loss 取整对齐原版 %.0f（四舍五入）；分级：<1 白 / 1-5 黄 / >5 红（黄档为增强）
   const loss = Math.round(NetStats.getPacketLossPercent(player));

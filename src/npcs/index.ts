@@ -38,11 +38,9 @@ import { logger } from "@/logger";
 interface DrifterDef {
   /** NPC 名（open.mp 唯一，也是 .rec 播放名匹配依据） */
   readonly id: string;
-  /** 中文显示名（3D 标签 / 选车面板） */
-  readonly name: string;
   /** npcmodes/recordings/ 下的 .rec 文件名（不含扩展名） */
   readonly rec: string;
-  /** 路线说明（中文） */
+  /** 路线说明（中文，随 rec 文件对照） */
   readonly route: string;
   /** 车型 */
   readonly model: number;
@@ -54,16 +52,17 @@ interface DrifterDef {
   readonly skin: number;
 }
 
-/** 8 个 NPC：车型/颜色/初始位对齐原版 npc.inc，路线名对齐 /selectnpc 对话框 */
+/** 8 个 NPC：车型/颜色/初始位对齐原版 npc.inc，路线名对齐 /selectnpc 对话框；
+ *  展示名统一用 .rec 文件名（LXD/Drift/…），不用中文名 */
 const DRIFTERS: readonly DrifterDef[] = [
-  { id: "DrifterLDZ",  name: "雷达站漂移",   rec: "LXD",        route: "雷达站往返",   model: 541, color: [6, 1],   pos: [-342.7927, 1540.4495, 75.1911], rot: 178.9945, skin: 115 },
-  { id: "DrifterSF",   name: "SF 双环漂移",  rec: "Drift",      route: "SF 双环线",     model: 562, color: [7, 1],   pos: [1, 1, 5],  rot: 0, skin: 115 },
-  { id: "DrifterMadd", name: "LS 山区漂移",  rec: "RunInMadd",  route: "LS 山区",       model: 411, color: [6, 1],   pos: [3, 3, 5],  rot: 0, skin: 115 },
-  { id: "DrifterLS",   name: "LS 市区漂移",  rec: "LSEyeOut",   route: "LS 市区",       model: 411, color: [118, 1], pos: [5, 5, 5],  rot: 0, skin: 115 },
-  { id: "DrifterTD",   name: "SF 试驾漂移",  rec: "TestDrive",  route: "SF 市区",       model: 411, color: [66, 1],  pos: [7, 7, 5],  rot: 0, skin: 115 },
-  { id: "DrifterOff",  name: "城市交界越野", rec: "OffControl", route: "城市交界越野",  model: 411, color: [65, 1],  pos: [9, 9, 5],  rot: 0, skin: 115 },
-  { id: "DrifterFM",   name: "综合漂移",     rec: "FollowMe",   route: "综合线 1",      model: 411, color: [68, 1],  pos: [15, 9, 5], rot: 0, skin: 115 },
-  { id: "DrifterFM2",  name: "综合漂移 2",   rec: "FollowMe2",  route: "综合线 2",      model: 411, color: [70, 1],  pos: [18, 9, 5], rot: 0, skin: 115 },
+  { id: "DrifterLDZ",  rec: "LXD",        route: "雷达站往返",   model: 541, color: [6, 1],   pos: [-342.7927, 1540.4495, 75.1911], rot: 178.9945, skin: 115 },
+  { id: "DrifterSF",   rec: "Drift",      route: "SF 双环线",     model: 562, color: [7, 1],   pos: [1, 1, 5],  rot: 0, skin: 115 },
+  { id: "DrifterMadd", rec: "RunInMadd",  route: "LS 山区",       model: 411, color: [6, 1],   pos: [3, 3, 5],  rot: 0, skin: 115 },
+  { id: "DrifterLS",   rec: "LSEyeOut",   route: "LS 市区",       model: 411, color: [118, 1], pos: [5, 5, 5],  rot: 0, skin: 115 },
+  { id: "DrifterTD",   rec: "TestDrive",  route: "SF 市区",       model: 411, color: [66, 1],  pos: [7, 7, 5],  rot: 0, skin: 115 },
+  { id: "DrifterOff",  rec: "OffControl", route: "城市交界越野",  model: 411, color: [65, 1],  pos: [9, 9, 5],  rot: 0, skin: 115 },
+  { id: "DrifterFM",   rec: "FollowMe",   route: "综合线 1",      model: 411, color: [68, 1],  pos: [15, 9, 5], rot: 0, skin: 115 },
+  { id: "DrifterFM2",  rec: "FollowMe2",  route: "综合线 2",      model: 411, color: [70, 1],  pos: [18, 9, 5], rot: 0, skin: 115 },
 ];
 
 /** 单个 NPC 的运行态 */
@@ -143,11 +142,11 @@ function createDrifter(def: DrifterDef): void {
     npc.putInVehicle(vehicle, 0); // 司机位
     npc.setInvulnerable(true); // 防伤害
 
-    // NPC 无 nametag：车顶绑 3D 标签显示"身份 + 路线"（随车移动）。
+    // NPC 无 nametag：车顶绑 3D 标签显示"车手（rec 文件名）+ 路线"（随车移动）。
     // attachedVehicle 的 x/y/z 为相对车辆原点（车底中心）的偏移：跑车车顶约
     // z+1.3~1.5，z=1.5 贴近车顶上方；之前 2.2 悬在车顶近 1 米显得脱离车身
     label = new Dynamic3DTextLabel({
-      text: `{33FF33}漂移车手 ${def.name}\n{FFFFFF}路线：${def.route}`,
+      text: `{33FF33}漂移车手 ${def.rec}\n{FFFFFF}路线：${def.route}`,
       color: 0x33aa33aa,
       x: 0,
       y: 0,
@@ -170,7 +169,7 @@ function createDrifter(def: DrifterDef): void {
     ent.vehicle = vehicle;
     ent.label = label;
     entities.set(def.id, ent);
-    logger.info(`[npcs] ${def.id} 已加载（${def.rec}.rec / ${def.name}）`);
+    logger.info(`[npcs] ${def.id} 已加载（${def.rec}.rec / ${def.rec}）`);
   } catch (e) {
     // 半成品清理（NPC 创建成功但后续失败时防止泄漏）
     try {
@@ -236,12 +235,12 @@ function rideDrifter(player: Player, def: DrifterDef): void {
   }
   const ent = entities.get(def.id);
   if (!ent || !ent.npc?.isValid() || !ent.vehicle?.isValid()) {
-    player.sendClientMessage(COLOR_ERROR, `[漂移] ${def.name} 尚未就绪，请稍后再试`);
+    player.sendClientMessage(COLOR_ERROR, `[漂移] ${def.rec} 尚未就绪，请稍后再试`);
     return;
   }
   // 已在目标车上 → 提示（避免重复上车/反复切换抖动）
   if (ent.passengerSlots.includes(player)) {
-    player.sendClientMessage(COLOR_ERROR, `[漂移] 你已在 ${def.name} 的车上`);
+    player.sendClientMessage(COLOR_ERROR, `[漂移] 你已在 ${def.rec} 的车上`);
     return;
   }
   // 切换：先释放玩家在其它 NPC 车上的座位（坐在旧车上直接换到新车，
@@ -249,7 +248,7 @@ function rideDrifter(player: Player, def: DrifterDef): void {
   removePassenger(player);
   const slot = ent.passengerSlots.indexOf(null);
   if (slot === -1) {
-    player.sendClientMessage(COLOR_ERROR, `[漂移] ${def.name} 的车已满员`);
+    player.sendClientMessage(COLOR_ERROR, `[漂移] ${def.rec} 的车已满员`);
     return;
   }
   // 座位号 = 槽位 + 1（0 号司机位被 NPC 占用）
@@ -257,7 +256,7 @@ function rideDrifter(player: Player, def: DrifterDef): void {
   ent.passengerSlots[slot] = player;
   player.sendClientMessage(
     COLOR_SUCCESS,
-    `[漂移] 已上车：${def.name}（路线：${def.route}），NPC 开车，按 F 下车`,
+    `[漂移] 已上车：${def.rec}（路线：${def.route}），NPC 开车，按 F 下车`,
   );
 }
 
@@ -275,7 +274,7 @@ async function openDrifterMenu(player: Player): Promise<void> {
         : free > 0
           ? ""
           : " {FF0000}满员";
-    return `{FFD700}${i + 1}. ${d.name}{FFFFFF}（${d.route}）${state}`;
+    return `{FFD700}${i + 1}. ${d.rec}{FFFFFF}（${d.route}）${state}`;
   }).join("\n");
   const res = await showDialog(
     player,
