@@ -143,6 +143,12 @@ async function vehicleTick(player: Player): Promise<void> {
       nitroCount.set(player.id, n);
     }
   }
+  // nitro（hold 模式）冷却递减：SPRINT 补氮气后置 15 占位，这里每秒 -1，
+  // 15 秒后归零才允许再次补充——否则占位永远不清零，hold 氮气一次上车只能用一次
+  if (setting.nitroType === "hold") {
+    const n = nitroCount.get(player.id) ?? 0;
+    if (n > 0) nitroCount.set(player.id, n - 1);
+  }
 }
 
 /** 初始化车辆自动系统（timer 由 GameMode.onExit 统一清理） */

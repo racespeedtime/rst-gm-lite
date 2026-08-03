@@ -6,6 +6,7 @@ import { isSuperAdmin } from "@/admin/op";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
 import { spawnRaceVehicleAt, getDefaultRaceModel } from "./vehicle";
+import { cleanupScriptVehicle } from "./scripts";
 
 import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
 
@@ -26,6 +27,9 @@ export function isEditing(playerId: number): boolean {
 
 export function exitEdit(playerId: number): void {
   editStates.delete(playerId);
+  // 清理编辑/测试用车（scriptVehicles）：防测试车留在世界成为幽灵车。
+  // 进编辑时 destroyPlayerVehicle 已销毁玩家爱车，退出后玩家需重新刷车
+  cleanupScriptVehicle(playerId);
 }
 
 /** 计算赛道总长度（相邻 CP 欧氏距离累加）；支持传入事务客户端 */
@@ -130,8 +134,12 @@ async function showEditMenu(player: Player): Promise<void> {
       button2: "取消",
     }),
   );
-  if (!res || res.response !== 1) {
-    exitEdit(player.id);
+  if (!res) return;
+  if (res.response !== 1) {
+    // 取消：保留编辑态（对齐全局 MenuBack 惯例——取消返回上一层，
+    // 不退出编辑；误触取消不丢编辑进度）。提示如何主动退出
+    player.sendClientMessage(COLOR_RACE, "编辑模式保持，选「退出编辑」或 /redit quit 退出");
+    await showEditMenu(player);
     return;
   }
   switch (res.listItem) {
@@ -449,8 +457,9 @@ async function editCpSize(player: Player, cp: { id: string }): Promise<void> {
   );
   if (!res || res.response !== 1) return;
   const size = Number(res.inputText.trim());
-  if (!Number.isFinite(size) || size <= 0) {
-    player.sendClientMessage(COLOR_ERROR, "尺寸需为正数");
+  // 上限 100：防止超大检测半径（RaceCheckpoint 无法渲染、且影响判断）
+  if (!Number.isFinite(size) || size <= 0 || size > 100) {
+    player.sendClientMessage(COLOR_ERROR, "尺寸需在 1-100 之间");
     return;
   }
   await prisma.raceCp.update({ where: { id: cp.id }, data: { size } });
@@ -621,6 +630,8 @@ async function editRaceInfo(player: Player): Promise<void> {
 async function testRace(player: Player): Promise<void> {
   const state = editStates.get(player.id);
   if (!state) return;
+  // 清理上一次的测试车（scriptVehicles 登记会被覆盖但旧车不销毁 → 防每次测试泄漏一辆）
+  cleanupScriptVehicle(player.id);
   const first = await prisma.raceCp.findFirst({
     where: { raceId: state.raceId },
     orderBy: { index: "asc" },
