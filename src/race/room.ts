@@ -30,6 +30,8 @@ import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR, COLOR_WHITE } from "@/utils/col
 
 /** 第一名完成后的结束倒计时（秒） */
 const END_GRACE_MS = 20_000;
+/** UUID 格式（/r s 按 id 查询前校验，避免非法字符串触发 uuid 类型错误） */
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 /** 比赛房间独立世界起始 id（避开公共大世界 0 与战局 1..n） */
 const RACE_WORLD_BASE = 5000;
 let nextRaceWorldId = RACE_WORLD_BASE;
@@ -997,9 +999,18 @@ async function startRaceFlow(player: Player, query: string): Promise<void> {
     player.sendClientMessage(COLOR_RACE, "用法: /r s 赛道名称 或 /r s 赛道ID");
     return;
   }
-  const race = await prisma.race.findFirst({
-    where: { isEnabled: true, deletedAt: null, OR: [{ name: query }, { id: query }] },
-  });
+  // 先按名字查（同名字符串，参数安全）；查不到且 query 形如 uuid 才按 id 查——
+  // 不能直接用 OR: [{name},{id}]：id 是 uuid 列，非 uuid 字符串会让 PostgreSQL
+  // 参数类型检查直接报错（invalid input syntax for type uuid），即使用户输入的是赛道名
+  const race =
+    (await prisma.race.findFirst({
+      where: { isEnabled: true, deletedAt: null, name: query },
+    })) ??
+    (UUID_RE.test(query)
+      ? await prisma.race.findFirst({
+          where: { isEnabled: true, deletedAt: null, id: query },
+        })
+      : null);
   if (!race) {
     player.sendClientMessage(COLOR_ERROR, "未找到该赛道");
     return;
