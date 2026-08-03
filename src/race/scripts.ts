@@ -1,7 +1,7 @@
-import { Player, PlayerStateEnum, Vehicle } from "@infernus/core";
+import { Player, Vehicle } from "@infernus/core";
 import { logger } from "@/logger";
 import { isValidVehicleModel } from "@/vehicles/catalog";
-import { destroyPlayerVehicle } from "@/vehicles";
+import { destroyPlayerVehicle, getOwnedVehicle, registerOwnedVehicle } from "@/vehicles";
 
 import { COLOR_RACE, COLOR_ERROR } from "@/utils/colors";
 
@@ -178,13 +178,28 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
     }
     case "cveh": {
       const model = Number(args[0]);
-      if (!isValidVehicleModel(model)) return err("cveh 车辆ID需 400-611"), true;
+      if (!isValidVehicleModel(model)) {
+        err("cveh 车辆ID需 400-611");
+        return true;
+      }
       const pos = player.getPos();
-      // 对齐原版 cveh（HRace.inc:561）：换车前先取当前车辆速度，换车后无条件恢复。
-      // 顺序：读速度须在销毁旧脚本车前（veh 还指向旧车，避免对已销毁车辆取值）。
+      // 对齐原版 cveh（HRace.inc:561 → SpawnVehicle，gamemode:2065）：换车后
+      // 新车成为玩家自己的车（原版 BuyID = CreateVehicle(新车)）。因此：
+      // 1. 换车前取当前车速度，换车后无条件恢复（原版 GetVehicleVelocity/SetVehicleVelocity）
+      // 2. 旧脚本车（比赛默认车等）销毁清登记，防残留
+      // 3. 旧爱车实体销毁（原版 DestroyVehicle(旧BuyID)，玩家换车即弃旧车）
+      // 4. 新车登记为玩家爱车（registerOwnedVehicle）——离开/结束比赛时保留，
+      //    不再作为"脚本车"被统一清理
       const oldScriptVeh = scriptVehicles.get(player.id);
-      const oldVelo = veh ? { x: veh.getVelocity().x, y: veh.getVelocity().y, z: veh.getVelocity().z } : null;
-      cleanupScriptVehicle(player.id);
+      const oldVelo = veh
+        ? { x: veh.getVelocity().x, y: veh.getVelocity().y, z: veh.getVelocity().z }
+        : null;
+      if (oldScriptVeh) {
+        cleanupScriptVehicle(player.id);
+      }
+      if (getOwnedVehicle(player.id)) {
+        destroyPlayerVehicle(player.id);
+      }
       const v = new Vehicle({
         modelId: model,
         x: pos.x,
@@ -195,7 +210,6 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
         respawnDelay: 0,
       });
       v.create();
-      scriptVehicles.set(player.id, v);
       v.setVirtualWorld(player.getVirtualWorld());
       v.linkToInterior(player.getInterior());
       v.putPlayerIn(player, 0);
@@ -203,12 +217,8 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       if (oldVelo) {
         v.setVelocity(oldVelo.x, oldVelo.y, oldVelo.z);
       }
-      // 旧车若是玩家的爱车（playerVehs 登记），用 destroyPlayerVehicle 一并清理
-      // playerVehs/标签引用，否则 /c wode 会对已销毁的车 setPos 抛异常。
-      // （旧车是脚本车时已由 cleanupScriptVehicle 销毁，且 oldScriptVeh === veh 跳过）
-      if (veh && oldScriptVeh !== veh && player.getState() === PlayerStateEnum.DRIVER) {
-        destroyPlayerVehicle(player.id);
-      }
+      // 新车成为玩家爱车（对齐原版 BuyID = 新车）；离开/结束比赛时随玩家保留
+      registerOwnedVehicle(player.id, v);
       break;
     }
     case "msg": {

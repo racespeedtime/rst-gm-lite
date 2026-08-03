@@ -30,6 +30,11 @@ export function getOwnedVehicle(playerId: number): Vehicle | undefined {
   return playerVehs.get(playerId);
 }
 
+/** 把车辆实体登记为玩家当前爱车（cveh 换车后新车成为玩家车，对齐原版 BuyID = 新车） */
+export function registerOwnedVehicle(playerId: number, vehicle: Vehicle): void {
+  playerVehs.set(playerId, vehicle);
+}
+
 /** 销毁玩家的当前车辆（同时清理挂载其上的装扮挂件与 3D 标签） */
 export function destroyPlayerVehicle(playerId: number): void {
   const veh = playerVehs.get(playerId);

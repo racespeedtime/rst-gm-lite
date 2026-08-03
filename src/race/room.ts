@@ -153,12 +153,18 @@ function broadcastToRoom(room: RaceRoom, msg: string): void {
 
 /**
  * 恢复玩家离开比赛后的环境：切回原世界 + 按个人设置恢复时间天气。
+ * 车辆：玩家坐着的车切回；若玩家已下车，其爱车（playerVehs）也一并切回原世界
+ * （防爱车遗留在比赛独立世界成为幽灵车，对齐原版 Race_Game_Quit 的车世界恢复）。
  */
 function restorePlayerAfterRace(player: Player, prevWorld: number): void {
   if (!player.isConnected()) return;
   player.setVirtualWorld(prevWorld);
   if (player.isInAnyVehicle()) {
     player.getVehicle()!.setVirtualWorld(prevWorld);
+  }
+  const owned = getOwnedVehicle(player.id);
+  if (owned && owned.isValid() && owned !== player.getVehicle()) {
+    owned.setVirtualWorld(prevWorld);
   }
   // 按个人设置恢复时间天气（CP 脚本改过的 time/weather 在此重置）
   void applyWorldEnv(player);
