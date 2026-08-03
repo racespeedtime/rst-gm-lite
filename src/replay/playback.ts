@@ -1,4 +1,4 @@
-import { Npc, Player, Vehicle } from "@infernus/core";
+import { Npc, Player, TextDraw, Vehicle } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -14,6 +14,10 @@ import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/co
  * - 回放文件整读入内存（Buffer 帧切片，O(1) seek）
  * - 60fps tick：按播放时间（方向×倍速推进）→ 相邻帧插值 → npc.setVehiclePos/
  *   setVehicleRot/setVelocity 驱动 NPC 车辆
+ * - 帧带"完整状态"：车型变化（cveh 换车）→ 重建车辆；时间/天气/血量随帧应用。
+ *   CP 脚本是离散事件，NPC 不触发 onPlayerReachCp——seek/回退时"恢复状态而非
+ *   重放事件"，天然无事件顺序问题。观战者的比赛 TD（C P/TIME/BEST）也从帧状态
+ *   渲染（事件无关），NPC 的 TextDraw 状态观战者完整可见。
  * - 控制：播放/暂停/快进/后退/倍速/seek（时间线变动，前后一致性由帧序插值保证）
  * - 多分身：同一数据错峰起始（每 ghost 独立 playTime，控制同步作用于全部）
  * - 观看：发起人自动 startObserveVehicle(ghost 车)（复用观战系统）
@@ -33,6 +37,8 @@ interface Ghost {
   /** 该分身的播放时间（毫秒，从文件起点；错峰起始） */
   playTime: number;
   staggerMs: number;
+  /** 当前车辆模型（帧车型变化时重建） */
+  model: number;
 }
 
 export interface ReplaySession {
@@ -48,6 +54,15 @@ export interface ReplaySession {
   speed: number; // 倍速 0.5~4
   timer?: NodeJS.Timeout;
   autoObserve: boolean;
+  /** 观战者（发起人 + /rp watch 的人）的比赛信息 TD：playerId → 4 行 TD */
+  tds: Map<number, { cp: TextDraw; time: TextDraw; best: TextDraw; rank: TextDraw }>;
+  /** 上次渲染的 TD 内容（去重，防每帧 setString 重绘） */
+  lastCpText: string;
+  lastTimeText: string;
+  /** 观察者视角时间/天气（随帧状态应用；变化检测防每帧调用） */
+  lastHour: number;
+  lastMinute: number;
+  lastWeather: number;
 }
 
 const sessions = new Map<number, ReplaySession>(); // ownerId -> session
@@ -59,6 +74,56 @@ export function getReplaySession(playerId: number): ReplaySession | undefined {
 /** 正在播放回放的玩家数（菜单可显示） */
 export function isPlayingReplay(playerId: number): boolean {
   return sessions.has(playerId);
+}
+
+/** 比赛信息 TD 样式（对齐原版 CreatePRaceTextDraw，与比赛房间一致） */
+function replayTdBase(player: Player, y: number, text: string): TextDraw {
+  return new TextDraw({ player, x: 500, y, text })
+    .create()
+    .setFont(2)
+    .setLetterSize(0.238, 1.19)
+    .setAlignment(1)
+    .setColor(0xffffffff)
+    .setOutline(0)
+    .setShadow(1)
+    .setProportional(true);
+}
+
+/** 毫秒 → mm:ss.cc（对齐原版 ms2time 后 msg[2]/10） */
+function fmtRaceTime(ms: number): string {
+  const m = Math.floor(ms / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  const cs = Math.floor((ms % 1000) / 10);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(cs).padStart(2, "0")}`;
+}
+
+/** 给观战者创建比赛信息 TD（回放事件无关，从帧状态渲染） */
+function ensureObserverTds(session: ReplaySession, player: Player): void {
+  if (session.tds.has(player.id)) return;
+  const header = session.data.header;
+  const best = header.bestMs >= 0 ? `BEST / ${fmtRaceTime(header.bestMs)}` : "BEST / --:--:--";
+  const tds = {
+    cp: replayTdBase(player, 118, `C  P / ~p~1~w~/~y~${header.totalCp || 1}`),
+    time: replayTdBase(player, 136, "TIME / 00:00:00"),
+    best: replayTdBase(player, 154, best),
+    rank: replayTdBase(player, 172, "RANK / --"),
+  };
+  Object.values(tds).forEach((t) => t.show(player));
+  session.tds.set(player.id, tds);
+}
+
+/** 销毁观战者 TD（会话销毁/退出回放） */
+function destroyObserverTds(session: ReplaySession, playerId: number): void {
+  const tds = session.tds.get(playerId);
+  if (!tds) return;
+  for (const td of Object.values(tds)) {
+    try {
+      if (td.isValid()) td.destroy();
+    } catch {
+      /* 已销毁 */
+    }
+  }
+  session.tds.delete(playerId);
 }
 
 /** SA 车辆四元数 → 欧拉角（度）。与 getRotationQuat/setVehicleRot 同引擎约定。 */
@@ -75,8 +140,27 @@ function quatToEuler(q: { x: number; y: number; z: number; w: number }): { rx: n
   };
 }
 
+/** 采样帧解出的可渲染状态（位置/旋转/速度 + 完整离散状态） */
+interface SampledState {
+  x: number;
+  y: number;
+  z: number;
+  rx: number;
+  ry: number;
+  rz: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  vehicleModel: number;
+  cpProgress: number;
+  hour: number;
+  minute: number;
+  weather: number;
+  vehicleHealth: number;
+}
+
 /** 按播放时间取插值帧（帧序保证前后一致性；超出范围 clamp 到边界帧） */
-function sampleAt(data: ReplayData, playTime: number): { x: number; y: number; z: number; rx: number; ry: number; rz: number; vx: number; vy: number; vz: number } | null {
+function sampleAt(data: ReplayData, playTime: number): SampledState | null {
   const { header, frames } = data;
   if (header.frameCount === 0) return null;
   const interval = Math.max(1, header.frameIntervalMs);
@@ -85,31 +169,79 @@ function sampleAt(data: ReplayData, playTime: number): { x: number; y: number; z
   const maxTime = lastIdx * interval;
   const t = Math.min(maxTime, Math.max(0, playTime));
   const idx = Math.floor(t / interval);
-  const toEuler = (f: ReplayFrame): { rx: number; ry: number; rz: number } =>
-    quatToEuler({ x: f.qx, y: f.qy, z: f.qz, w: f.qw });
+  const pick = (f: ReplayFrame): SampledState => {
+    const e = quatToEuler({ x: f.qx, y: f.qy, z: f.qz, w: f.qw });
+    return {
+      x: f.x,
+      y: f.y,
+      z: f.z,
+      rx: e.rx,
+      ry: e.ry,
+      rz: e.rz,
+      vx: f.vx,
+      vy: f.vy,
+      vz: f.vz,
+      vehicleModel: f.vehicleModel,
+      cpProgress: f.cpProgress,
+      hour: f.hour,
+      minute: f.minute,
+      weather: f.weather,
+      vehicleHealth: f.vehicleHealth,
+    };
+  };
   if (idx >= lastIdx) {
     const f = decodeFrame(frames, lastIdx);
     if (!f) return null;
-    const e = toEuler(f);
-    return { x: f.x, y: f.y, z: f.z, rx: e.rx, ry: e.ry, rz: e.rz, vx: f.vx, vy: f.vy, vz: f.vz };
+    return pick(f);
   }
   const a = decodeFrame(frames, idx);
   const b = decodeFrame(frames, idx + 1);
   if (!a || !b) return null;
   const frac = (t - idx * interval) / interval;
-  const f = lerpFrame(a, b, frac);
-  const e = toEuler(f);
-  return { x: f.x, y: f.y, z: f.z, rx: e.rx, ry: e.ry, rz: e.rz, vx: f.vx, vy: f.vy, vz: f.vz };
+  return pick(lerpFrame(a, b, frac));
 }
 
-/** 渲染单个 ghost 到当前帧 */
+/** 按帧状态重建车辆（cveh 换车等车型变化） */
+function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number): void {
+  if (model === ghost.model) return;
+  const oldModel = ghost.model;
+  ghost.model = model;
+  try {
+    const pos = ghost.vehicle.getPos();
+    // 换车型：销毁旧车、建新车、NPC 立即上车（位置延续）
+    ghost.vehicle.destroy();
+    const v = new Vehicle({
+      modelId: model,
+      x: pos.x,
+      y: pos.y,
+      z: pos.z,
+      zAngle: 0,
+      color: [-1, -1],
+      respawnDelay: 0,
+    });
+    v.create();
+    v.setVirtualWorld(session.worldId);
+    v.linkToInterior(0);
+    v.setHealth(1000);
+    ghost.npc.setVirtualWorld(session.worldId);
+    ghost.npc.putInVehicle(v, 0);
+    ghost.vehicle = v;
+  } catch (e) {
+    logger.warn(`[replay] 换车型失败 ${oldModel} -> ${model}`, e);
+    ghost.model = oldModel;
+  }
+}
+
+/** 渲染单个 ghost 到当前帧（位置/旋转/速度 + 车型/血量；时间天气随帧给观察者） */
 function renderGhost(session: ReplaySession, ghost: Ghost): void {
   const s = sampleAt(session.data, ghost.playTime);
   if (!s) return;
   try {
+    ensureGhostVehicle(session, ghost, s.vehicleModel);
     ghost.npc.setVehiclePos(s.x, s.y, s.z, true);
     ghost.npc.setVehicleRot(s.rx, s.ry, s.rz, true);
     ghost.npc.setVelocity(s.vx, s.vy, s.vz);
+    ghost.vehicle.setHealth(s.vehicleHealth);
   } catch {
     // NPC/车辆失效（异常销毁由清理兜底）
   }
@@ -126,6 +258,46 @@ function tickSession(session: ReplaySession): void {
     g.playTime = Math.min(maxTime, Math.max(0, g.playTime + dt));
   }
   for (const g of session.ghosts) renderGhost(session, g);
+  syncObserverTds(session);
+}
+
+/** 观战者比赛信息 TD + 时间/天气：从"第一个 ghost 的当前帧状态"渲染（事件无关）。
+ * CP 进度在帧里（录制时过 CP 采样写入）→ seek/回退 TD 自动一致。
+ * 内容无变化时跳过（省 60Hz 无用调用）。 */
+function syncObserverTds(session: ReplaySession): void {
+  if (session.tds.size === 0 || session.ghosts.length === 0) return;
+  const s = sampleAt(session.data, session.ghosts[0].playTime);
+  if (!s) return;
+  const idx = Math.floor(session.ghosts[0].playTime / Math.max(1, session.data.header.frameIntervalMs));
+  const timeMs = idx * session.data.header.frameIntervalMs;
+  const cpText = `C  P / ~p~${s.cpProgress}~w~/~y~${session.data.header.totalCp || 1}`;
+  const timeText = `TIME / ${fmtRaceTime(timeMs)}`;
+  if (cpText !== session.lastCpText || timeText !== session.lastTimeText) {
+    session.lastCpText = cpText;
+    session.lastTimeText = timeText;
+    for (const tds of session.tds.values()) {
+      tds.cp.setString(cpText);
+      tds.time.setString(timeText);
+    }
+  }
+  // 观察者视角时间/天气随帧应用（CP 脚本 time/weather 的效果"状态化"重放；
+  // NPC 玩家无 setTime/setWeather，作用于观察者视角）
+  if (
+    s.hour !== session.lastHour ||
+    s.minute !== session.lastMinute ||
+    s.weather !== session.lastWeather
+  ) {
+    session.lastHour = s.hour;
+    session.lastMinute = s.minute;
+    session.lastWeather = s.weather;
+    for (const pid of session.tds.keys()) {
+      const p = Player.getInstance(pid);
+      if (p && p.isConnected()) {
+        p.setTime(s.hour, s.minute);
+        p.setWeather(s.weather);
+      }
+    }
+  }
 }
 
 /**
@@ -180,7 +352,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
       npc.setVirtualWorld(worldId);
       npc.putInVehicle(vehicle, 0);
       npc.setInvulnerable(true);
-      ghosts.push({ npc, vehicle, playTime: i * staggerMs, staggerMs });
+      ghosts.push({ npc, vehicle, playTime: i * staggerMs, staggerMs, model: data.header.vehicleModelId });
     }
   } catch (e) {
     logger.error(`[replay] 创建回放实体失败`, e);
@@ -208,6 +380,12 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     direction: 1,
     speed: 1,
     autoObserve: true,
+    tds: new Map(),
+    lastCpText: "",
+    lastTimeText: "",
+    lastHour: -1,
+    lastMinute: -1,
+    lastWeather: -128,
   };
   sessions.set(player.id, session);
   session.timer = setIntervalSafe(() => tickSession(session), TICK_MS);
@@ -218,6 +396,9 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
   // 自动观战第一个 ghost（复用观战系统：切世界/spectateVehicle/退出恢复）
   try {
     startObserveVehicle(player, ghosts[0].vehicle);
+    // 观战者比赛信息 TD（事件无关，从帧状态渲染）——NPC 回放的 TextDraw 状态可见
+    ensureObserverTds(session, player);
+    syncObserverTds(session);
   } catch {
     /* 观战失败不影响播放 */
   }
@@ -280,6 +461,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       const target = Math.min(max, Math.max(0, ms));
       for (const g of session.ghosts) g.playTime = target;
       for (const g of session.ghosts) renderGhost(session, g);
+      syncObserverTds(session); // seek 后 TD 状态与时间线一致
       player.sendClientMessage(COLOR_RACE, `已跳转到 ${(target / 1000).toFixed(1)}s`);
       break;
     }
@@ -287,6 +469,8 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       // 观看当前回放（退出观战后可重新进入）
       if (!session.autoObserve) {
         startObserveVehicle(player, session.ghosts[0].vehicle);
+        ensureObserverTds(session, player);
+        syncObserverTds(session);
         session.autoObserve = true;
         player.sendClientMessage(COLOR_ORANGE, "已切换为观看回放视角");
       }
@@ -314,7 +498,7 @@ function parseTimeArg(arg: string): number | null {
   return Number.isFinite(n) && n >= 0 ? n * 1000 : null;
 }
 
-/** 停止并销毁回放会话（ghost NPC/车辆 + 观察者退出观战） */
+/** 停止并销毁回放会话（ghost NPC/车辆 + 观察者退出观战 + TD 清理） */
 export function stopReplaySession(playerId: number): void {
   const session = sessions.get(playerId);
   if (!session) return;
@@ -327,6 +511,9 @@ export function stopReplaySession(playerId: number): void {
     } catch {
       /* 已销毁/失效 */
     }
+  }
+  for (const pid of [...session.tds.keys()]) {
+    destroyObserverTds(session, pid);
   }
   const owner = Player.getInstance(playerId);
   if (owner && owner.isConnected() && isObserving(playerId)) {

@@ -17,6 +17,7 @@ import { isEditing } from "./editor";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import { raceRecordingStart, raceRecordingStop } from "@/replay";
+import { noteCpProgress } from "@/replay/recorder";
 import { startObservePlayer, stopObserve, isObserving, cleanupObserve, getObserverIdsOf } from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
@@ -671,6 +672,9 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   room.lastCpAt.set(player.id, now);
 
   pr.cpIndex++;
+
+  // 回放录制：过 CP 时把进度写进录制会话（回放帧带 CP 进度，C P TD 与 seek 一致）
+  noteCpProgress(player.id, Math.min(pr.cpIndex + 1, room.cps.length), room.cps.length);
 
   // 更新 CP 进度 TD（对齐原版过 CP 时 "C  P / ~p~进度~w~/~y~总数"；完成时同样先刷满）
   // 玩家自身 + 观战他的观察者（对齐原版 OnPlayerEnterRaceCheckpoint 对观战者的 CP TD 同步）

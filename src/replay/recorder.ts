@@ -5,7 +5,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
-import { encodeHeader, encodeFrame, HEADER_BYTES, type ReplayFrame, type ReplayHeader } from "./format";
+import { encodeHeader, encodeFrame, HEADER_BYTES, FRAME_BYTES, type ReplayFrame, type ReplayHeader } from "./format";
 import { saveRecordingFile } from "./storage";
 
 /**
@@ -38,6 +38,12 @@ export interface RecordingSession {
   /** 最近一次采样帧（兜底 + 提速） */
   last: ReplayFrame | null;
   lastSampleAt: number;
+  /** 当前已完成的 CP 数（room 过 CP 时 noteCpProgress 更新，采样写帧） */
+  cpProgress: number;
+  /** 赛道 CP 总数（回放 C P TD 分母；非比赛录制 0） */
+  totalCp: number;
+  /** 录制者该赛道个人最佳毫秒（回放 BEST TD；无 -1） */
+  bestMs: number;
 }
 
 const sessions = new Map<number, RecordingSession>();
@@ -53,6 +59,14 @@ export function getRecording(playerId: number): RecordingSession | undefined {
   return sessions.get(playerId);
 }
 
+/** 记录已完成的 CP 数（room 过 CP 时调用，采样写帧——回放 C P TD 与 seek 恢复用） */
+export function noteCpProgress(playerId: number, cpDone: number, totalCp: number): void {
+  const s = sessions.get(playerId);
+  if (!s) return;
+  s.cpProgress = cpDone;
+  s.totalCp = totalCp;
+}
+
 /** 采样一次（RakNet 驱动） */
 function sample(session: RecordingSession, frame: ReplayFrame): void {
   session.frames.push(frame);
@@ -60,14 +74,17 @@ function sample(session: RecordingSession, frame: ReplayFrame): void {
   session.lastSampleAt = Date.now();
 }
 
-/** 从车辆实体采集当前帧 */
-function captureVehicleFrame(player: Player): ReplayFrame | null {
+/** 从车辆实体采集当前帧（位置/四元数/速度/车型/时间天气/血量） */
+function captureVehicleFrame(player: Player, session?: RecordingSession): ReplayFrame | null {
   const veh = getOwnedVehicle(player.id);
   if (!veh || !veh.isValid()) return null;
   const pos = veh.getPos();
   const q = veh.getRotationQuat();
   const vel = veh.getVelocity();
   if (!q.ret) return null;
+  const tm = player.getTime();
+  const hour = tm.ret ? tm.hour : 12;
+  const minute = tm.ret ? tm.minute : 0;
   return {
     x: pos.x,
     y: pos.y,
@@ -79,6 +96,12 @@ function captureVehicleFrame(player: Player): ReplayFrame | null {
     vx: vel.x,
     vy: vel.y,
     vz: vel.z,
+    vehicleModel: veh.getModel(),
+    cpProgress: session?.cpProgress ?? 0,
+    hour,
+    minute,
+    weather: player.getWeather(),
+    vehicleHealth: veh.getHealth().health,
   };
 }
 
@@ -111,6 +134,20 @@ export async function startRecording(
     player.sendClientMessage("#ff5555", "车辆状态读取失败，请重试");
     return false;
   }
+  // 比赛录制：带该赛道个人最佳（回放 BEST TD 用）——异步查询，不阻塞开始
+  let bestMs = -1;
+  if (opts.type === "race" && opts.raceId && auth) {
+    try {
+      const best = await prisma.raceRecord.findFirst({
+        where: { raceId: opts.raceId, userId: auth.userId, deletedAt: null },
+        orderBy: { record: "asc" },
+        select: { record: true },
+      });
+      bestMs = best?.record ?? -1;
+    } catch {
+      bestMs = -1;
+    }
+  }
   const session: RecordingSession = {
     playerId: player.id,
     type: opts.type,
@@ -131,6 +168,9 @@ export async function startRecording(
     frames: [],
     last: null,
     lastSampleAt: 0,
+    cpProgress: 0,
+    totalCp: 0,
+    bestMs,
   };
   sessions.set(player.id, session);
   return true;
@@ -152,7 +192,7 @@ export async function stopRecording(
   // 兜底：最后采样太旧（RakNet 中断/玩家下车）→ 补一帧当前车辆状态，保证结尾有帧
   const now = Date.now();
   if (player && player.isConnected() && now - session.lastSampleAt > 2000) {
-    const f = captureVehicleFrame(player);
+    const f = captureVehicleFrame(player, session);
     if (f) sample(session, f);
   }
   if (session.frames.length < 2) {
@@ -180,13 +220,15 @@ export async function stopRecording(
     vz: session.vz,
     frameCount: session.frames.length,
     durationMs,
+    totalCp: session.totalCp ?? 0,
+    bestMs: session.bestMs ?? -1,
   };
 
   // 组装文件 Buffer：定长头 + 定长帧（一次性分配，避免多次 Buffer 拼接）
-  const buf = Buffer.allocUnsafe(HEADER_BYTES + session.frames.length * 40);
+  const buf = Buffer.allocUnsafe(HEADER_BYTES + session.frames.length * FRAME_BYTES);
   encodeHeader(header).copy(buf, 0);
   session.frames.forEach((f, i) => {
-    encodeFrame(f).copy(buf, HEADER_BYTES + i * 40);
+    encodeFrame(f).copy(buf, HEADER_BYTES + i * FRAME_BYTES);
   });
 
   const fileName = `${playerId}_${session.startAt}.rec`;
@@ -238,7 +280,7 @@ function fallbackSample(): void {
     if (Date.now() - session.lastSampleAt < 2000) continue; // 有 RakNet 采样则跳过
     const player = Player.getInstance(session.playerId);
     if (!player || !player.isConnected()) continue;
-    const f = captureVehicleFrame(player);
+    const f = captureVehicleFrame(player, session);
     if (f) sample(session, f);
   }
 }
@@ -255,6 +297,11 @@ export function initRecorder(): void {
           const p = sync.position;
           const v = sync.velocity;
           const q = sync.quaternion;
+          // 离散状态（车型/时间/天气/CP进度）在采样时从实体与会话读取——
+          // 帧要带"完整状态"，seek/回退才能恢复那一帧的观感
+          const player = Player.getInstance(playerId);
+          const veh = getOwnedVehicle(playerId);
+          const tm = player ? player.getTime() : { ret: false as const, hour: 12, minute: 0 };
           sample(session, {
             x: p[0],
             y: p[1],
@@ -266,6 +313,12 @@ export function initRecorder(): void {
             vx: v[0],
             vy: v[1],
             vz: v[2],
+            vehicleModel: veh && veh.isValid() ? veh.getModel() : session.vehicleModelId,
+            cpProgress: session.cpProgress,
+            hour: tm.ret ? tm.hour : 12,
+            minute: tm.ret ? tm.minute : 0,
+            weather: player ? player.getWeather() : 0,
+            vehicleHealth: veh && veh.isValid() ? veh.getHealth().health : 1000,
           });
         }
       }
