@@ -1,6 +1,6 @@
 import { Player } from "@infernus/core";
 import { prisma } from "@/prisma";
-import { getAuthState } from "@/auth/auth";
+import { getAuthState, hasSuperAdminRole } from "@/auth/auth";
 import { logger } from "@/logger";
 
 /**
@@ -125,14 +125,7 @@ function kickOnlineForBan(
   }
 }
 
-/** 判断用户是否为超管（查角色表，供封禁自我保护） */
-async function isUserSuperAdmin(userId: string): Promise<boolean> {
-  const roles = await prisma.sysUserRole.findMany({
-    where: { sysUserId: userId },
-    include: { sysRole: true },
-  });
-  return roles.some((r) => r.sysRole.code === "SUPER_ADMIN");
-}
+/** 判断用户是否为超管（查角色表，供封禁自我保护；复用 auth 模块的通用实现） */
 
 /** OP 封禁：/ban <用户名> <时长分钟> <原因>；时长 0 = 永久。封禁后即时踢出在线玩家 */
 export async function banUser(
@@ -152,7 +145,7 @@ export async function banUser(
     op.sendClientMessage("#ff5555", "不能封禁自己");
     return;
   }
-  if (await isUserSuperAdmin(user.id)) {
+  if (await hasSuperAdminRole(user.id)) {
     op.sendClientMessage("#ff5555", `不能封禁管理员 ${username}`);
     return;
   }

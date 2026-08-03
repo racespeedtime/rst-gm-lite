@@ -300,9 +300,8 @@ export function initSpawnSystem(): void {
 export async function openSpawnSettingsFlow(player: Player): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
-  const setting = await prisma.sysUserSetting.findUnique({
-    where: { userId: auth.userId },
-  });
+  // 走设置缓存（与各个性化菜单同一数据源）
+  const setting = await getSetting(player);
   const current = setting?.spawnMode === "LAST_POSITION" ? "LAST_POSITION" : "RANDOM";
   const info = [
     `1. 随机出生点${current === "RANDOM" ? "（当前）" : ""}`,

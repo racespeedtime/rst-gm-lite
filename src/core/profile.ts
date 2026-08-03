@@ -1,6 +1,6 @@
 import { Dialog, DialogStylesEnum, Player, PlayerEvent, PlayerStateEnum } from "@infernus/core";
 import { prisma } from "@/prisma";
-import { getAuthState } from "@/auth/auth";
+import { getAuthState, hasSuperAdminRole } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { pickOption } from "@/personalize/settings";
@@ -52,15 +52,6 @@ function formatTotalSeconds(seconds: number): string {
 }
 
 /** 毫秒 → mm:ss.SSS（比赛成绩展示，对齐 formatTime） */
-/** 判断用户是否为超管（查角色表，支持查看不在线用户） */
-async function isUserSuperAdmin(userId: string): Promise<boolean> {
-  const roles = await prisma.sysUserRole.findMany({
-    where: { sysUserId: userId },
-    include: { sysRole: true },
-  });
-  return roles.some((r) => r.sysRole.code === "SUPER_ADMIN");
-}
-
 /** 汇总某用户的信息统计（一次聚合查询，零迁移） */
 async function collectProfileStats(userId: string): Promise<ProfileStats | null> {
   const [user, sessions, raceRecords, lastSession] = await Promise.all([
@@ -107,7 +98,7 @@ async function collectProfileStats(userId: string): Promise<ProfileStats | null>
 
   return {
     username: user.username,
-    isAdmin: await isUserSuperAdmin(userId),
+    isAdmin: await hasSuperAdminRole(userId),
     registeredAt: user.createdAt,
     skinId: user.sysUserSetting?.skinId ?? 0,
     totalDuration: historicalSeconds + liveSeconds,

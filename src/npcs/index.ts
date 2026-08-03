@@ -298,12 +298,15 @@ export function initDrifterNpcs(): void {
     return next();
   });
 
-  // 玩家从乘客/司机状态下车 → 释放座位（否则座位被永久占用）
-  PlayerEvent.onStateChange(({ player, newState, oldState, next }) => {
+  // 玩家离开乘客/司机状态 → 释放座位（否则座位被永久占用）。
+  // 不能只看 newState===ONFOOT：玩家在 NPC 车里死亡（PASSENGER→WASTED）或
+  // 直接换到另一辆车（PASSENGER→PASSENGER/DRIVER）都不会经过 ONFOOT——
+  // 只要旧状态是乘客/司机就释放（removePassenger 幂等，未登记的玩家自动跳过）
+  PlayerEvent.onStateChange(({ player, oldState, next }) => {
     if (player.isNpc()) return next();
     if (
-      newState === PlayerStateEnum.ONFOOT &&
-      (oldState === PlayerStateEnum.PASSENGER || oldState === PlayerStateEnum.DRIVER)
+      oldState === PlayerStateEnum.PASSENGER ||
+      oldState === PlayerStateEnum.DRIVER
     ) {
       removePassenger(player);
     }

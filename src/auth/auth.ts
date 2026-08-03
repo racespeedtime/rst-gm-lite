@@ -100,8 +100,9 @@ function isValidPassword(pwd: string): boolean {
   return pwd.length >= MIN_PASSWORD_LEN && pwd.length <= MAX_PASSWORD_LEN;
 }
 
-/** 判断用户是否拥有超级管理员角色 */
-async function hasSuperAdminRole(userId: string): Promise<boolean> {
+/** 判断用户是否拥有超级管理员角色（查角色表，支持不在线用户；登录流程与
+ *  封禁自我保护/个人信息等模块共用，避免各处重复实现） */
+export async function hasSuperAdminRole(userId: string): Promise<boolean> {
   const roles = await prisma.sysUserRole.findMany({
     where: { sysUserId: userId },
     include: { sysRole: true },
