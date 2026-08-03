@@ -328,6 +328,14 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
 
 /** 60fps 播放推进 */
 function tickSession(session: ReplaySession): void {
+  // 发起人已离开会话世界（换世界/退出观战回 prevWorld）→ 自动停止：
+  // ghost 留在无人世界继续播是资源浪费且用户困惑（"我的回放呢"）
+  const owner = Player.getInstance(session.ownerId);
+  if (owner && owner.isConnected() && owner.getVirtualWorld() !== session.worldId) {
+    owner.sendClientMessage(COLOR_ORANGE, "已离开回放世界，回放已停止");
+    stopReplaySession(session.ownerId);
+    return;
+  }
   if (!session.playing || session.paused) return;
   const dt = TICK_MS * session.speed * session.direction;
   const lastIdx = session.data.header.frameCount - 1;
