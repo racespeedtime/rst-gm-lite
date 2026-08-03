@@ -7,6 +7,7 @@ import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import { encodeHeader, encodeFrame, HEADER_BYTES, FRAME_BYTES, REPLAY_TYPE_GHOST, REPLAY_TYPE_RACE, type ReplayFrame, type ReplayHeader } from "./format";
 import { saveRecordingFile, deleteRecordingFile } from "./storage";
+import { COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
 
 /**
  * 录制会话（自定义二进制录制，非原生 .rec）：
@@ -80,6 +81,14 @@ export function noteCpProgress(playerId: number, cpDone: number, totalCp: number
 
 /** 录制时长硬上限（1 小时）：防玩家挂机无限录制拖垮内存/磁盘（帧数组常驻内存） */
 const MAX_RECORD_MS = 60 * 60 * 1000;
+/** 标称采样间隔（播放推进基准；与 DriverSync 30Hz 对齐） */
+const SAMPLE_INTERVAL_MS = 33;
+/** 离散状态缓存刷新间隔（sync 帧间少读 native） */
+const DISCRETE_REFRESH_MS = 2000;
+/** 兜底采样判定：距上次采样超过该间隔才补帧（有 RakNet 采样则跳过） */
+const FALLBACK_GAP_MS = 2000;
+/** 兜底采样定时器间隔（RakNet 中断时补帧） */
+const FALLBACK_INTERVAL_MS = 500;
 
 /**
  * 录制边界检查（每次采样前调用）：
@@ -98,7 +107,7 @@ function checkRecordingBoundary(session: RecordingSession, player: Player): bool
         : null;
   if (reason) {
     session.autoStopTriggered = true;
-    player.sendClientMessage("#ffa500", `[回放] ${reason}，自动停止并保存`);
+    player.sendClientMessage(COLOR_ORANGE, `[回放] ${reason}，自动停止并保存`);
     void stopRecording(session.playerId, { quiet: true });
     return true;
   }
@@ -115,12 +124,13 @@ function sample(session: RecordingSession, frame: ReplayFrame): void {
 /**
  * 刷新离散状态缓存（时间/天气/车型/血量）：
  * 30Hz sync 帧连续到来时若每帧都读 6-7 个 native（getPlayer/getTime/getWeather/
- * getVehicle/getModel/getHealth）开销大。缓存节流：只在上次刷新 ≥2s 前才重读，
- * 帧间用缓存（状态变化延迟最多 2s 写帧，CP 进度由 noteCpProgress 事件驱动不受影响）。
+ * getVehicle/getModel/getHealth）开销大。缓存节流：只在上次刷新 ≥DISCRETE_REFRESH_MS
+ * 前才重读，帧间用缓存（状态变化延迟最多该间隔写帧，CP 进度由 noteCpProgress
+ * 事件驱动不受影响）。
  */
 function refreshDiscreteCache(session: RecordingSession, player: Player): void {
   const now = Date.now();
-  if (now - lastCached < 2000) return;
+  if (now - lastCached < DISCRETE_REFRESH_MS) return;
   lastCached = now;
   const veh = getOwnedVehicle(session.playerId);
   const tm = player.getTime();
@@ -173,23 +183,23 @@ export async function startRecording(
 ): Promise<boolean> {
   const auth = getAuthState(player.id);
   if (!auth) {
-    player.sendClientMessage("#ff5555", "请先登录");
+    player.sendClientMessage(COLOR_ERROR, "请先登录");
     return false;
   }
   if (sessions.has(player.id)) {
-    player.sendClientMessage("#ff5555", "你已在录制中");
+    player.sendClientMessage(COLOR_ERROR, "你已在录制中");
     return false;
   }
   const veh = getOwnedVehicle(player.id);
   if (!veh || !veh.isValid()) {
-    player.sendClientMessage("#ff5555", "需要先刷车（/c 车辆ID）才能录制");
+    player.sendClientMessage(COLOR_ERROR, "需要先刷车（/c 车辆ID）才能录制");
     return false;
   }
   const pos = veh.getPos();
   const q = veh.getRotationQuat();
   const vel = veh.getVelocity();
   if (!q.ret) {
-    player.sendClientMessage("#ff5555", "车辆状态读取失败，请重试");
+    player.sendClientMessage(COLOR_ERROR, "车辆状态读取失败，请重试");
     return false;
   }
   // 同步注册会话（先 set 再异步补 bestMs）——消除竞态：beginRace 里
@@ -255,22 +265,22 @@ export async function stopRecording(
   const player = Player.getInstance(playerId);
   // 兜底：最后采样太旧（RakNet 中断/玩家下车）→ 补一帧当前车辆状态，保证结尾有帧
   const now = Date.now();
-  if (player && player.isConnected() && now - session.lastSampleAt > 2000) {
+  if (player && player.isConnected() && now - session.lastSampleAt > FALLBACK_GAP_MS) {
     const f = captureVehicleFrame(player, session);
     if (f) sample(session, f);
   }
   if (session.frames.length < 2) {
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage("#ff5555", "录制内容过短，已取消");
+      player.sendClientMessage(COLOR_ERROR, "录制内容过短，已取消");
     }
     return null;
   }
 
   // 时长按帧数×标称采样间隔（播放时逐帧推进，保持一致）；实际帧间不均以插值平滑
-  const durationMs = session.frames.length * 33;
+  const durationMs = session.frames.length * SAMPLE_INTERVAL_MS;
   const header: ReplayHeader = {
     type: session.type === "race" ? REPLAY_TYPE_RACE : REPLAY_TYPE_GHOST,
-    frameIntervalMs: 33, // 标称采样间隔（播放推进基准；实际帧间不均以帧序插值）
+    frameIntervalMs: SAMPLE_INTERVAL_MS, // 标称采样间隔（播放推进基准；实际帧间不均以帧序插值）
     vehicleModelId: session.vehicleModelId,
     startX: session.startX,
     startY: session.startY,
@@ -299,7 +309,7 @@ export async function stopRecording(
   const fileName = `${playerId}_${session.startAt}.rec`;
   if (!saveRecordingFile(fileName, buf)) {
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage("#ff5555", "回放保存失败（磁盘错误）");
+      player.sendClientMessage(COLOR_ERROR, "回放保存失败（磁盘错误）");
     }
     return null;
   }
@@ -323,7 +333,7 @@ export async function stopRecording(
       },
     });
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage("#55ff55", `录制完成：${(durationMs / 1000).toFixed(1)}s / ${session.frames.length} 帧`);
+      player.sendClientMessage(COLOR_SUCCESS, `录制完成：${(durationMs / 1000).toFixed(1)}s / ${session.frames.length} 帧`);
     }
     return { id: created.id, fileName };
   } catch (e) {
@@ -332,7 +342,7 @@ export async function stopRecording(
     // 启动时另有孤儿扫描兜底历史残留）
     deleteRecordingFile(fileName);
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage("#ff5555", "回放元数据保存失败，已删除录像");
+      player.sendClientMessage(COLOR_ERROR, "回放元数据保存失败，已删除录像");
     }
     return null;
   }
@@ -348,7 +358,7 @@ export async function forceStopRecording(playerId: number): Promise<void> {
 /** 兜底采样定时器（每 500ms）：RakNet 中断时补帧，防播放卡顿 */
 function fallbackSample(): void {
   for (const session of sessions.values()) {
-    if (Date.now() - session.lastSampleAt < 2000) continue; // 有 RakNet 采样则跳过
+    if (Date.now() - session.lastSampleAt < FALLBACK_GAP_MS) continue; // 有 RakNet 采样则跳过
     const player = Player.getInstance(session.playerId);
     if (!player || !player.isConnected()) continue;
     if (checkRecordingBoundary(session, player)) continue; // 已自动停止
@@ -403,7 +413,7 @@ export function initRecorder(): void {
   } catch (e) {
     logger.warn(`[replay] RakNet 拦截不可用，录制将依赖兜底采样`, e);
   }
-  fallbackTimer = setIntervalSafe(fallbackSample, 500);
+  fallbackTimer = setIntervalSafe(fallbackSample, FALLBACK_INTERVAL_MS);
 }
 
 /** 停止录制系统（onExit/清理）：全部强制落盘 + 停定时器 */
