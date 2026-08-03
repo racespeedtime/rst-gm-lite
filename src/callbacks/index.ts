@@ -45,6 +45,7 @@ import { initQuickCommands } from "@/personalize/quickActions";
 import { initHelpCommand, sendWelcomeMessage } from "@/core/help";
 import { initColandreas } from "@/core/colandreas";
 import { initElevators } from "@/elevator";
+import { initDrifterNpcs } from "@/npcs";
 import { initReplay, cleanupReplay, shutdownReplay } from "@/replay";
 import {
   applyWorldEnv,
@@ -247,6 +248,9 @@ initOpCommands();
 // 必须注册在 initPanel 之前：电梯与万能面板共用 Y 键，电梯优先消费其检测区内的按键
 //（轿厢内选层/楼层呼叫），未在检测区内的 Y 键继续放行给面板。
 initElevators();
+
+// 漂移 NPC 系统（8 个 Drifter NPC 沿 .rec 路线循环漂移 + /drift 随行）
+initDrifterNpcs();
 
 // 万能面板快捷键（Y 键）
 initPanel();

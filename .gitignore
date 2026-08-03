@@ -2,7 +2,11 @@
 node_modules
 dist
 components
-npcmodes
+npcmodes/*
+# NPC 路线录制（游戏内容资源，需入库；其余 npcmodes 运行时文件仍忽略）
+!npcmodes/recordings/
+npcmodes/recordings/*
+!npcmodes/recordings/*.rec
 filterscripts
 plugins
 qawno
