@@ -12,7 +12,11 @@ const INFINITE_MONEY = 99_999_999;
 /** 给玩家补足无限金钱（登录/进改装店时调用） */
 export function giveInfinityMoney(player: Player): void {
   try {
-    player.giveMoney(INFINITE_MONEY);
+    // 封顶补给：已有足额不重复累加（giveMoney 累加会超 open.mp Int32 上限变负）
+    if (player.getMoney() < INFINITE_MONEY) {
+      player.resetMoney();
+      player.giveMoney(INFINITE_MONEY);
+    }
   } catch (e) {
     logger.warn(`[money] 补发金钱失败 ${player.id}`, e);
   }

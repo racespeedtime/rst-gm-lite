@@ -81,6 +81,8 @@ export async function spawnPlayer(player: Player): Promise<void> {
   // SA-MP 风格签名：team, skin, x, y, z, rotation, 三把武器（0=无）
   player.setSpawnInfo(0, skin, x, y, z, angle, 0, 0, 0, 0, 0, 0);
   player.spawn();
+  // 标记登录首次出生：onSpawn 跳过 respawnBySetting（避免 RANDOM 二次随机定位）
+  loginSpawned.add(player.id);
   // 解除连接时进入的观战模式（认证/大厅期间隐藏），正式出生后恢复可见
   player.toggleSpectating(false);
 }
@@ -125,6 +127,14 @@ async function saveAllOnlinePositions(): Promise<void> {
   }
 }
 
+/** 登录首次出生标记：spawnPlayer 已用 setSpawnInfo 定位，onSpawn 不再二次定位 */
+const loginSpawned = new Set<number>();
+
+/** 断线清理登录出生标记（防 playerId 复用残留跳过重生定位） */
+export function cleanupLoginSpawned(playerId: number): void {
+  loginSpawned.delete(playerId);
+}
+
 /**
  * 大世界后续重生按设置自动定位（对齐原版 OnPlayerSpawn → SetPlayerPos_Birth）：
  * - spawnMode=LAST_POSITION 且最后位置有效 → 回到最后保存的位置
@@ -164,11 +174,12 @@ export function initSpawnSystem(): void {
     void saveAllOnlinePositions();
   }, SAVE_INTERVAL_MS);
 
-  // 每次出生/重生（含死亡重生、/kill、登录首次出生）都按 spawnMode 自动定位。
-  // 登录首次出生由 spawnPlayer 的 setSpawnInfo 定位，此处结果一致（同数据源），
-  // 后续重生不再用 open.mp 默认位置。
+  // 每次出生/重生（含死亡重生、/kill）按 spawnMode 自动定位。
+  // 登录首次出生由 spawnPlayer 的 setSpawnInfo 定位——跳过本逻辑，
+  // 否则 RANDOM 会再随机一次，出现两个不同出生点。
   PlayerEvent.onSpawn(({ player, next }) => {
     if (player.isNpc()) return next();
+    if (loginSpawned.delete(player.id)) return next(); // 登录首次出生已定位
     void respawnBySetting(player);
     return next();
   });

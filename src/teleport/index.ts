@@ -8,7 +8,7 @@ import { isInRace } from "@/race/room";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
-import { setIntervalSafe, setTimeoutSafe } from "@/core/timers";
+import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 
 import { COLOR_INFO, COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
 const TP_TIMEOUT_MS = 18_000;
@@ -41,6 +41,8 @@ function initTp(playerId: number): void {
 /** 玩家断线清理 */
 export function cleanupTeleport(playerId: number): void {
   tempPos.delete(playerId);
+  // 清理传送冻结定时器（防句柄残留）
+  cleanupTeleportFreeze(playerId);
   // 清理双方请求
   const from = tpFromId.get(playerId);
   if (from != null) {
@@ -80,10 +82,14 @@ export function teleportTo(
   freezeAfterTeleport(player);
 }
 
+/** 传送冻结定时器句柄（playerId → timeout，防重复传送时旧解冻提前打断） */
+const freezeTimers = new Map<number, NodeJS.Timeout>();
+
 /**
  * 传送后短暂冻结玩家（车内不冻结——车有物理，冻结车辆反而不自然）。
  * 对齐原版 DynUpdateStart：TogglePlayerControllable(false) + "Objects Loading"
  * 提示 + 2 秒后解冻。GameText 不支持中文，保持原版英文文案。
+ * 重复传送（2 秒内再传）：刷新定时器，保证解冻以最后一次传送为准。
  */
 function freezeAfterTeleport(player: Player): void {
   if (player.isNpc() || !player.isConnected()) return;
@@ -93,8 +99,12 @@ function freezeAfterTeleport(player: Player): void {
   } catch {
     return; // 冻结失败（玩家已失效等）直接跳过
   }
+  // 刷新：取消上一次解冻定时器，防旧定时器在二次冻结期间提前解冻
+  const prev = freezeTimers.get(player.id);
+  if (prev) clearTimeoutSafe(prev);
   new GameText("~g~Objects~n~~r~Loading", TELEPORT_FREEZE_MS, 6).forPlayer(player);
-  setTimeoutSafe(() => {
+  const timer = setTimeoutSafe(() => {
+    freezeTimers.delete(player.id);
     if (player.isConnected()) {
       try {
         player.toggleControllable(true);
@@ -103,6 +113,14 @@ function freezeAfterTeleport(player: Player): void {
       }
     }
   }, TELEPORT_FREEZE_MS);
+  freezeTimers.set(player.id, timer);
+}
+
+/** 断线清理：解冻定时器随连接销毁，句柄从登记表移除 */
+export function cleanupTeleportFreeze(playerId: number): void {
+  const t = freezeTimers.get(playerId);
+  if (t) clearTimeoutSafe(t);
+  freezeTimers.delete(playerId);
 }
 
 /** 玩家是否接受传送（设置校验） */

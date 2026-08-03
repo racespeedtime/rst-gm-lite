@@ -2,7 +2,7 @@ import { Player, Vehicle } from "@infernus/core";
 import { destroyPlayerVehicle } from "@/vehicles";
 import { syncNoCollisionState } from "@/core/vehicleAuto";
 import { getSetting } from "@/personalize/settings";
-import { getFirstCvehModel } from "./scripts";
+import { getFirstCvehModel, registerScriptVehicle } from "./scripts";
 
 /**
  * 比赛用车工具（供 race/room 与 race/editor 共用，独立模块避免两者循环依赖）。
@@ -38,6 +38,7 @@ export function getDefaultRaceModel(cps: { scripts: string[] }[]): number {
 /**
  * 在指定位置刷出比赛用车并放入玩家（一人一车：先销毁现有车辆，带氮气）。
  * 用于赛道创建/测试与开赛时无车玩家的默认发车。
+ * 车辆登记进脚本车辆生命周期表：离开比赛/结束/断线时统一销毁，防泄漏。
  */
 export function spawnRaceVehicleAt(
   player: Player,
@@ -50,6 +51,7 @@ export function spawnRaceVehicleAt(
   destroyPlayerVehicle(player.id);
   const veh = new Vehicle({ modelId, x, y, z, zAngle: angle, color: [-1, -1], respawnDelay: 0 });
   veh.create();
+  registerScriptVehicle(player.id, veh);
   veh.setVirtualWorld(player.getVirtualWorld());
   veh.linkToInterior(player.getInterior());
   veh.addComponent(1010); // 氮气

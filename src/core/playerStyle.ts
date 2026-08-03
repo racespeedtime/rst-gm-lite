@@ -18,12 +18,14 @@ const chatStyle = new Map<number, { prefix: string; suffix: string; playerColor:
  * 读取聊天显示名（同步）：
  * 名字本体包玩家颜色（对齐原版 GetPlayerColor >>> 8 用于聊天名），
  * prefix/suffix 前后缀独立保留（用户自定义颜色码不受影响）。
+ * 注意：SA-MP 聊天颜色码只支持 6 位（RRGGBB），8 位带 alpha 的
+ * playerColor（#rrggbbaa）截断为前 6 位，否则 {rrggbbaa} 会原样显示在名字里。
  */
 export function getChatDisplayName(playerId: number, baseName: string): string {
   const s = chatStyle.get(playerId);
   if (!s) return baseName;
-  const color = s.playerColor || "#ffffff";
-  return `${s.prefix}{${color.replace("#", "")}}${baseName}{FFFFFF}${s.suffix}`;
+  const color = (s.playerColor || "#ffffff").replace("#", "").slice(0, 6);
+  return `${s.prefix}{${color}}${baseName}{FFFFFF}${s.suffix}`;
 }
 
 /** 玩家是否隐藏了自己的 NameTag（同步，供登录时同步给新玩家用） */

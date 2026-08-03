@@ -20,8 +20,11 @@ import type { MenuBack } from "@/core/panel";
 export const MAX_PLAYER_ATTIRE = 10;
 export const MAX_VEHICLE_ATTIRE = 15;
 
-/** 玩家已应用的装扮对象（用于清理） */
+/** 玩家已应用的人物装扮对象（applyPlayerPreset 管理，清理用） */
 const appliedPlayerObjs = new Map<number, DynamicObject[]>();
+/** 玩家已应用的车辆挂件对象（applyVehiclePreset 管理，清理用）——与人物装扮分开，
+ *  否则应用人物预设会误删当前爱车的挂件（反之亦然） */
+const appliedVehicleObjs = new Map<number, DynamicObject[]>();
 
 /**
  * 应用人物预设：按 preset_item 顺序 setAttachedObject（bone 附着）。
@@ -78,11 +81,11 @@ export async function applyVehiclePreset(
   presetId: string | null,
   playerId: number,
 ): Promise<DynamicObject[]> {
-  // 清理旧挂件
-  for (const obj of appliedPlayerObjs.get(playerId) ?? []) {
+  // 清理旧挂件（仅车辆挂件，不动人物装扮）
+  for (const obj of appliedVehicleObjs.get(playerId) ?? []) {
     if (obj.isValid()) obj.destroy();
   }
-  appliedPlayerObjs.delete(playerId);
+  appliedVehicleObjs.delete(playerId);
   if (!presetId) return [];
   // 爱车装扮显示开关：关闭时只应用颜色/改装件，不挂动态挂件（挂件才是"装扮"）
   const owner = Player.getInstance(playerId);
@@ -134,16 +137,20 @@ export async function applyVehiclePreset(
     }
     slot++;
   }
-  appliedPlayerObjs.set(playerId, objs);
+  appliedVehicleObjs.set(playerId, objs);
   return objs;
 }
 
-/** 清理玩家全部装扮对象（断线/重生时） */
+/** 清理玩家全部装扮对象（断线/重生时，人物 + 车辆挂件都清） */
 export function cleanupAttire(playerId: number): void {
   for (const obj of appliedPlayerObjs.get(playerId) ?? []) {
     if (obj.isValid()) obj.destroy();
   }
   appliedPlayerObjs.delete(playerId);
+  for (const obj of appliedVehicleObjs.get(playerId) ?? []) {
+    if (obj.isValid()) obj.destroy();
+  }
+  appliedVehicleObjs.delete(playerId);
 }
 
 /**

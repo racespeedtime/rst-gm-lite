@@ -11,7 +11,6 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { cleanupAttire, applyVehiclePreset } from "@/attire";
-import { nextSortIndex } from "@/utils/sort";
 import { isInRace } from "@/race/room";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
@@ -205,39 +204,44 @@ export function initVehicleCommands(): void {
     const modelId = vehicle.getModel();
     void (async () => {
       try {
-        const uv = await prisma.userVehicle.findUnique({
-          where: { userId_modelId: { userId: auth.userId, modelId } },
-        });
-        // 目标预设：爱车默认预设；无则懒创建并设为默认
-        let presetId = uv?.defaultPresetId ?? null;
-        if (!presetId) {
-          const presets = await prisma.vehiclePreset.findMany({
-            where: { userId: auth.userId, modelId, deletedAt: null },
-            select: { index: true },
-          });
-          const created = await prisma.vehiclePreset.create({
-            data: {
-              userId: auth.userId,
-              modelId,
-              index: nextSortIndex(presets),
-              name: null,
-            },
-          });
-          presetId = created.id;
-          await prisma.userVehicle.update({
+        // 事务内"取默认预设（无则建）→ 追加改件"原子完成：并发 onMod
+        // （同帧装多个件）不会重复创建预设触发 @@unique([userId,modelId,index]) 冲突
+        await prisma.$transaction(async (tx) => {
+          const uv = await tx.userVehicle.findUnique({
             where: { userId_modelId: { userId: auth.userId, modelId } },
-            data: { defaultPresetId: created.id },
           });
-        }
-        const preset = await prisma.vehiclePreset.findUnique({ where: { id: presetId } });
-        const list = (preset?.modComponents ? preset.modComponents.split(" ") : []).filter(Boolean);
-        if (!list.includes(String(componentId))) {
-          list.push(String(componentId));
-          await prisma.vehiclePreset.update({
-            where: { id: presetId },
-            data: { modComponents: list.join(" ") },
-          });
-        }
+          // 目标预设：爱车默认预设；无则懒创建并设为默认（index = 组内 max+1）
+          let presetId = uv?.defaultPresetId ?? null;
+          if (!presetId) {
+            const maxIdx = await tx.vehiclePreset.findFirst({
+              where: { userId: auth.userId, modelId, deletedAt: null },
+              orderBy: { index: "desc" },
+              select: { index: true },
+            });
+            const created = await tx.vehiclePreset.create({
+              data: {
+                userId: auth.userId,
+                modelId,
+                index: (maxIdx?.index ?? -1) + 1,
+                name: null,
+              },
+            });
+            presetId = created.id;
+            await tx.userVehicle.update({
+              where: { userId_modelId: { userId: auth.userId, modelId } },
+              data: { defaultPresetId: created.id },
+            });
+          }
+          const preset = await tx.vehiclePreset.findUnique({ where: { id: presetId } });
+          const list = (preset?.modComponents ? preset.modComponents.split(" ") : []).filter(Boolean);
+          if (!list.includes(String(componentId))) {
+            list.push(String(componentId));
+            await tx.vehiclePreset.update({
+              where: { id: presetId },
+              data: { modComponents: list.join(" ") },
+            });
+          }
+        });
       } catch (e) {
         logger.error(`[veh] ${player.getName().name} 存储改装件失败 model=${modelId}`, e);
       }

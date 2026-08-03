@@ -1,6 +1,7 @@
 import { Player, PlayerStateEnum, Vehicle } from "@infernus/core";
 import { logger } from "@/logger";
 import { isValidVehicleModel } from "@/vehicles/catalog";
+import { destroyPlayerVehicle } from "@/vehicles";
 
 import { COLOR_RACE, COLOR_ERROR } from "@/utils/colors";
 
@@ -31,6 +32,14 @@ export function cleanupScriptVehicle(playerId: number): void {
     v.destroy();
   }
   scriptVehicles.delete(playerId);
+}
+
+/**
+ * 登记玩家名下需随比赛生命周期清理的车辆（脚本车 + 比赛默认发车）。
+ * 加入比赛/开赛时发的默认车也登记进来，离开/结束时统一销毁，防泄漏。
+ */
+export function registerScriptVehicle(playerId: number, vehicle: Vehicle): void {
+  scriptVehicles.set(playerId, vehicle);
 }
 
 /**
@@ -192,11 +201,13 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       v.setVirtualWorld(player.getVirtualWorld());
       v.linkToInterior(player.getInterior());
       v.putPlayerIn(player, 0);
-      // 司机在旧车里才搬移速度并销毁旧车；旧车是脚本车时已由 cleanupScriptVehicle 销毁
+      // 司机在旧车里才搬移速度并销毁旧车；旧车是脚本车时已由 cleanupScriptVehicle 销毁。
+      // 旧车若是玩家的爱车（playerVehs 登记），用 destroyPlayerVehicle 一并清理
+      // playerVehs/标签引用，否则 /c wode 会对已销毁的车 setPos 抛异常。
       if (veh && oldScriptVeh !== veh && player.getState() === PlayerStateEnum.DRIVER) {
         const vv = veh.getVelocity();
         v.setVelocity(vv.x, vv.y, vv.z);
-        veh.destroy();
+        destroyPlayerVehicle(player.id);
       }
       break;
     }

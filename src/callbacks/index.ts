@@ -11,7 +11,7 @@ import { initRateLimit, cleanupRateLimit } from "@/core/ratelimit";
 import { sessionManager } from "@/sessions/manager";
 import { getSetting, invalidateSettingCache } from "@/personalize/settings";
 import { cleanupChat, initChat, initChatState } from "@/chat";
-import { initSpawnSystem, savePlayerPosition } from "@/core/spawn";
+import { initSpawnSystem, savePlayerPosition, cleanupLoginSpawned } from "@/core/spawn";
 import { runLobby } from "@/personalize/lobby";
 import { cleanupGui, initGui } from "@/interface/gui";
 import { initVehicleCommands, onPlayerDisconnectVehicle, startVehicleSaveTimer } from "@/vehicles";
@@ -110,8 +110,9 @@ async function handlePlayerConnect(player: Player) {
     applyStyleToNewPlayer(player);
     // 掉线重连：若断线窗口未过期则恢复原比赛房间（跳过大厅/出生流程）
     if (await tryReconnectRace(player)) {
-      // 重连路径绕过了下方常规注册：补上战局成员登记 + 聊天范围，避免重连玩家不在任何战局
-      sessionManager.onPlayerAuthenticated(player);
+      // 重连路径：战局归属已由 tryReconnectRace 内的 rejoinPlayerSessionByWorld
+      // 注册（prevWorld 战局仍存在则加回，否则回公共大世界）——不能再调
+      // onPlayerAuthenticated，否则会把玩家塞回 publicWorld 造成双注册/注册错乱
       initChatState(player.id);
       // 地图图标（per-player SetPlayerMapIcon，重连是全新连接需重新设置）
       applyMapIconsToPlayer(player);
@@ -182,6 +183,8 @@ PlayerEvent.onDisconnect(({ player, next }) => {
   onPlayerDisconnectVehicle(player);
   // 传送：清理 tpa 状态
   cleanupTeleport(player.id);
+  // 清理登录首次出生标记（防 playerId 复用残留跳过重生定位）
+  cleanupLoginSpawned(player.id);
   // 装扮：清理挂载对象
   cleanupAttire(player.id);
   // 比赛：退出比赛房间/编辑模式
