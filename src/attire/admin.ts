@@ -69,22 +69,91 @@ async function createAttire(player: Player, back: MenuBack): Promise<void> {
   if (typeRes.response !== 1) return back();
   const type = typeRes.listItem === 0 ? "PLAYER" : typeRes.listItem === 1 ? "VEHICLE" : "COMMON";
 
-  const modelRes = await showDialog(
+  // 模型选择：3D 浏览选模型（推荐）或手动输入 模型ID 骨骼ID
+  const pick = await showDialog(
     player,
     new Dialog({
-      style: DialogStylesEnum.INPUT,
-      caption: "模型与骨骼",
-      info: "输入 模型ID 骨骼ID（空格分隔，车辆装扮骨骼可填0）：",
+      style: DialogStylesEnum.LIST,
+      caption: "选择模型方式",
+      info: "1. 3D 浏览选模型（推荐）\n2. 输入 模型ID 骨骼ID",
       button1: "确定",
       button2: "取消",
     }),
   );
-  if (!modelRes) return;
-  if (modelRes.response !== 1) return back();
-  const [modelId, boneId] = modelRes.inputText.trim().split(/\s+/).map(Number);
-  if (!Number.isInteger(modelId) || modelId <= 0) {
-    player.sendClientMessage(COLOR_ERROR, "模型ID无效");
-    return back();
+  if (!pick) return;
+  if (pick.response !== 1) return back();
+  let modelId: number;
+  let boneId = 0;
+  if (pick.listItem === 0) {
+    // e-selection 3D 选模型（任意物件/人物模型预览，返回 modelId）
+    const { ModelSelectionMenu } = await import("@infernus/e-selection");
+    const menu = new ModelSelectionMenu({
+      player,
+      models: [
+        // 常用装扮模型速选（枪/道具/配件类，可随时手动输入其他）
+        1229, 1230, 1231, 1232, 1233, 1234, 1235, 1236, 1237, 1238, 1239, 1240, 1241, 1242, 1243,
+        1244, 1245, 1246, 1247, 1248, 1249, 1250, 1251, 1252, 1253, 1254, 1255, 1256, 1257, 1258,
+        1259, 1260, 1261, 1262, 1263, 1264, 1265, 1266, 1267, 1268, 1269, 1270, 1271, 1272, 1273,
+        1274, 1275, 1276, 1277, 1278, 1279, 1280, 1281, 1282, 1283, 1284, 1285, 1286, 1287, 1288,
+        1289, 1290, 1291, 1292, 1293, 1294, 1295, 1296, 1297, 1298, 1299, 1300, 1301, 1302, 1303,
+        1304, 1305, 1306, 1307, 1308, 1309, 1310, 1311, 1312, 1313, 1314, 1315, 1316, 1317, 1318,
+        1319, 1320, 1321, 1322, 1323, 1324, 1325, 1326, 1327, 1328, 1329, 1330, 1331, 1332, 1333,
+        1334, 1335, 1336, 1337, 1338, 1339, 1340, 1341, 1342, 1343, 1344, 1345, 1346, 1347, 1348,
+        1349, 1350, 1351, 1352, 1353, 1354, 1355, 1356, 1357, 1358, 1359, 1360, 1361, 1362, 1363,
+        1364, 1365, 1366, 1367, 1368, 1369, 1370, 1371, 1372, 1373, 1374, 1375, 1376, 1377, 1378,
+        1379, 1380, 1381, 1382, 1383, 1384, 1385, 1386, 1387, 1388, 1389, 1390, 1391, 1392, 1393,
+        1394, 1395, 1396, 1397, 1398, 1399, 1400,
+      ].map((id) => ({ modelId: id, modelText: `Model ${id}` })),
+      headerText: "Select Model",
+      maxItemPerPage: 6,
+      bannerColor: "#333",
+      menuBgColor: "#222",
+      menuTextColor: "#fff",
+      itemBgColor: "#444",
+      itemTextColor: "#0f0",
+    });
+    const model = await menu.show();
+    if (!model) return back();
+    modelId = model.modelId;
+    // 3D 选择只选模型，骨骼仍需输入（默认 1 脊柱）
+    const boneRes = await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.INPUT,
+        caption: "骨骼ID",
+        info: "输入骨骼ID（1-18，车辆装扮可填 0）：",
+        button1: "确定",
+        button2: "取消",
+      }),
+    );
+    if (!boneRes) return;
+    if (boneRes.response !== 1) return back();
+    const b = Number(boneRes.inputText.trim());
+    if (!Number.isInteger(b) || b < 0 || b > 18) {
+      player.sendClientMessage(COLOR_ERROR, "骨骼ID需为 0-18 的整数");
+      return back();
+    }
+    boneId = b;
+  } else {
+    const modelRes = await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.INPUT,
+        caption: "模型与骨骼",
+        info: "输入 模型ID 骨骼ID（空格分隔，车辆装扮骨骼可填0）：",
+        button1: "确定",
+        button2: "取消",
+      }),
+    );
+    if (!modelRes) return;
+    if (modelRes.response !== 1) return back();
+    const [m, bk] = modelRes.inputText.trim().split(/\s+/).map(Number);
+    if (!Number.isInteger(m) || m <= 0) {
+      player.sendClientMessage(COLOR_ERROR, "模型ID无效");
+      return back();
+    }
+    modelId = m;
+    boneId = Number.isInteger(bk) && bk > 0 ? bk : 0;
   }
   const offsetRes = await showDialog(
     player,

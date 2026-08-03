@@ -12,6 +12,7 @@ import {
 import { applyInvincibleState } from "@/core/invincible";
 import { applyPlayerStyle } from "@/core/playerStyle";
 import { applyPlayerPreset } from "@/attire";
+import { showSkinPicker, applySkin } from "./skinPicker";
 import { parseIntInRange } from "@/utils/parse";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
@@ -69,25 +70,33 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     return again();
   }
   if (index === 2) {
+    // 皮肤模型：3D 选肤（推荐）或手动输入 ID（74 假 CJ 禁用）
+    const pick = await pickOption(player, "皮肤模型", [
+      "3D 选肤（浏览模型）",
+      "输入皮肤ID",
+    ]);
+    if (pick < 0) return again();
+    if (pick === 0) {
+      await showSkinPicker(player);
+      return again();
+    }
     const res = await showDialog(
       player,
       new Dialog({
         style: DialogStylesEnum.INPUT,
         caption: "切换皮肤模型",
-        info: `输入皮肤模型ID（0-311，当前：${setting.skinId}）：`,
+        info: `输入皮肤模型ID（0-311，74 禁用，当前：${setting.skinId}）：`,
         button1: "确定",
         button2: "取消",
       }),
     );
-    if (!res || res.response !== 1) return again(); // 取消子对话框 → 回菜单
+    if (!res || res.response !== 1) return again();
     const skin = parseIntInRange(res.inputText, 0, 311);
     if (skin == null) {
       player.sendClientMessage(COLOR_ERROR, "皮肤ID需为 0-311 的整数");
       return again();
     }
-    await updateSetting(player, { skinId: skin });
-    player.setSkin(skin);
-    notifySaved(player, `皮肤已切换为：${skin}`);
+    await applySkin(player, skin); // 统一校验（74 禁用）
     return again();
   }
   if (index === 3) {

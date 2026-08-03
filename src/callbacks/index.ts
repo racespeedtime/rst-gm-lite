@@ -44,6 +44,7 @@ import {
   syncNoCollisionState,
 } from "@/core/vehicleAuto";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
+import { initSkinCommands } from "@/personalize/skinPicker";
 import { initColandreas } from "@/core/colandreas";
 import {
   applyWorldEnv,
@@ -326,6 +327,9 @@ initObserve();
 
 // 点击玩家 → 查看其信息汇总
 initPlayerInfo();
+
+// 皮肤命令（/skin 3D 选肤 / /skin ID）
+initSkinCommands();
 
 // 无敌模式：伤害回血 + raknet 子弹包拦截
 initInvincible();
