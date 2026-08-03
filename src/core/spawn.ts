@@ -137,6 +137,44 @@ export function cleanupLoginSpawned(playerId: number): void {
 }
 
 /**
+ * 按设置计算重生位置（LAST_POSITION / RANDOM，含 colandreas Z 修正）。
+ * 供死亡重生预计算 spawnInfo 与 onSpawn 兜底定位共用；无出生点配置返回 null。
+ */
+async function computeSpawnPos(setting: {
+  spawnMode?: string | null;
+  lastX?: unknown;
+  lastY?: unknown;
+  lastZ?: unknown;
+  lastAngle?: unknown;
+} | null | undefined): Promise<{ x: number; y: number; z: number; angle: number } | null> {
+  const hasLast =
+    setting?.spawnMode === "LAST_POSITION" &&
+    setting.lastX != null &&
+    setting.lastY != null &&
+    setting.lastZ != null &&
+    isInsideMap(Number(setting.lastX), Number(setting.lastY), Number(setting.lastZ));
+  if (hasLast) {
+    const x = Number(setting.lastX);
+    const y = Number(setting.lastY);
+    // 最后位置也用 colandreas 修正 Z（防卡建筑/悬空）
+    return {
+      x,
+      y,
+      z: getSafeGroundZ(x, y, Number(setting.lastZ)),
+      angle: setting.lastAngle != null ? Number(setting.lastAngle) : 0,
+    };
+  }
+  const point = await getRandomSpawnPoint();
+  if (!point) return null; // 无出生点配置，保持默认
+  return {
+    x: point.x,
+    y: point.y,
+    z: getSafeGroundZ(point.x, point.y, point.z),
+    angle: point.angle,
+  };
+}
+
+/**
  * 大世界后续重生按设置自动定位（对齐原版 OnPlayerSpawn → SetPlayerPos_Birth）：
  * - spawnMode=LAST_POSITION 且最后位置有效 → 回到最后保存的位置
  * - 否则（RANDOM 或上次位置超范围被忽略）→ 随机出生点
@@ -153,25 +191,11 @@ async function respawnBySetting(player: Player): Promise<void> {
   if (setting?.skinId != null && player.getSkin() !== setting.skinId) {
     player.setSkin(setting.skinId);
   }
-  const hasLast =
-    setting?.spawnMode === "LAST_POSITION" &&
-    setting.lastX != null &&
-    setting.lastY != null &&
-    setting.lastZ != null &&
-    isInsideMap(Number(setting.lastX), Number(setting.lastY), Number(setting.lastZ));
   if (!player.isConnected()) return;
-  if (hasLast) {
-    const x = Number(setting.lastX);
-    const y = Number(setting.lastY);
-    // 最后位置也用 colandreas 修正 Z（防卡建筑/悬空）
-    player.setPos(x, y, getSafeGroundZ(x, y, Number(setting.lastZ)));
-    if (setting.lastAngle != null) player.setFacingAngle(Number(setting.lastAngle));
-    return;
-  }
-  const point = await getRandomSpawnPoint();
-  if (!point || !player.isConnected()) return; // 无出生点配置，保持默认
-  player.setPos(point.x, point.y, getSafeGroundZ(point.x, point.y, point.z));
-  player.setFacingAngle(point.angle);
+  const pos = await computeSpawnPos(setting);
+  if (!pos || !player.isConnected()) return; // 无出生点配置，保持默认
+  player.setPos(pos.x, pos.y, pos.z);
+  player.setFacingAngle(pos.angle);
 }
 
 /** 初始化出生系统：定时保存在线位置 + 大世界重生按设置自动定位（timer 由 GameMode.onExit 统一清理） */
@@ -200,6 +224,49 @@ export function initSpawnSystem(): void {
     }
     // 非观战（正式出生后 / 死亡重生 / 退出观战 / 重连恢复）：放行
     return true;
+  });
+
+  // 死亡重生预计算 spawn info：玩家死亡 → 提前按设置算好重生位置 + 皮肤并
+  // setSpawnInfo。死亡重生时客户端用 setSpawnInfo 的 class 数据重生——若数据
+  // 还是登录时的旧位置/旧皮肤，open.mp 可能 fallback 到 class 选择界面，
+  // 提前更新可避免，且重生位置/皮肤直接正确（onSpawn 的 respawnBySetting
+  // 仍兜底 setPos，防预计算失败/中途改设置）。
+  // 比赛中/编辑模式的重生由各自系统处理（比赛 onDeath 已 setSpawnInfo + spawn）。
+  PlayerEvent.onDeath(({ player, next }) => {
+    if (player.isNpc()) return next();
+    if (isInRace(player.id) || isEditing(player.id)) return next();
+    void (async () => {
+      const auth = getAuthState(player.id);
+      if (!auth) return;
+      const setting = await getSetting(player); // 设置缓存，避免每次死亡查库
+      if (!player.isConnected()) return;
+      const pos = await computeSpawnPos(setting);
+      if (!pos || !player.isConnected()) return; // 无出生点配置，保持默认
+      player.setSpawnInfo(
+        0,
+        setting?.skinId ?? player.getSkin(),
+        pos.x,
+        pos.y,
+        pos.z,
+        pos.angle,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+      );
+    })();
+    return next();
+  });
+
+  // 阻止进入 class 选择界面：服务器未 AddPlayerClass（无 class 系统），
+  // 死亡后玩家按 F4 / 意外进入 class 选择会被拒绝并提示。死亡重生走
+  // RequestSpawn（上面闸门放行），不受此影响。
+  PlayerEvent.onRequestClass(({ player, next }) => {
+    if (player.isNpc()) return next();
+    player.sendClientMessage(COLOR_SUCCESS, "当前模式不支持 class 选择，死亡后会自动重生");
+    return false;
   });
 
   // 每次出生/重生（含死亡重生、/kill）按 spawnMode 自动定位。
