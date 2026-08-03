@@ -3,6 +3,9 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getSafeGroundZ } from "@/core/colandreas";
+import { isInRace } from "@/race/room";
+import { isEditing } from "@/race/editor";
+import { isPlayerLocked } from "@/core/interaction";
 import { Session, SESSION_COLOR, PUBLIC_SESSION_ID, PUBLIC_WORLD_ID } from "./session";
 
 /** 公共大世界人数上限（不限制） */
@@ -109,6 +112,11 @@ export class SessionManager {
         if (notify) {
           session.broadcast(`[战局] ${player.getName().name} 离开了战局`);
         }
+        // 空战局回收：房主离开/被踢后 0 人战局立即删除，防 privateSessions 无界增长，
+        // 且 findOwnedSession 命中旧空局导致房主永远无法创建新战局
+        if (session.members.size === 0) {
+          this.privateSessions.delete(sid);
+        }
       }
     }
     this.playerSessions.delete(player.id);
@@ -141,25 +149,24 @@ export class SessionManager {
     player: Player,
     session: Session,
     password?: string,
-    /** 加入提示不发给加入者本人（房主创建/回到自己的战局时用，避免"自己加入了"的重复提示） */
-    silentSelf = false,
   ): Promise<{ ok: boolean; reason?: string }> {
     if (session.isFull) return { ok: false, reason: "战局已满" };
     if (session.password && session.password !== password) {
       return { ok: false, reason: "战局密码错误" };
+    }
+    // 目标正在比赛/编辑中：加入战局会把玩家拉出比赛世界（悬空比赛状态 + 幽灵世界）
+    if (isInRace(player.id) || isEditing(player.id)) {
+      return { ok: false, reason: "目标正在比赛/编辑中，无法加入战局" };
     }
     // 无论当前在哪（公共大世界或私人战局），统一先离开
     this.leaveCurrentSession(player, true);
     session.members.set(player.id, player);
     this.playerSessions.set(player.id, session.id);
     await this.teleportTo(player, session.worldId);
-    // 加入提示：默认全员可见；silentSelf 时不发给本人（本人由"创建成功/已回到"提示覆盖）
+    // 加入提示：默认全员可见但排除本人（本人由成功提示覆盖）；silentSelf 时同样排除
     const name = player.getName().name;
-    if (silentSelf) {
-      session.broadcastOthers(`[战局] ${name} 加入了战局`, player);
-    } else {
-      session.broadcast(`[战局] ${name} 加入了战局`);
-    }
+    session.broadcastOthers(`[战局] ${name} 加入了战局`, player);
+    player.sendClientMessage(SESSION_COLOR, `你已加入战局「${session.name}」`);
     return { ok: true };
   }
 
@@ -169,7 +176,7 @@ export class SessionManager {
     const mine = this.findOwnedSession(player);
     if (mine) {
       // 回到已有战局：静默加入（自己不看"加入了"），其他成员仍可见
-      await this.joinSession(player, mine, undefined, true);
+      await this.joinSession(player, mine);
       player.sendClientMessage(SESSION_COLOR, `已回到你的战局「${mine.name}」`);
       return mine;
     }
@@ -182,7 +189,7 @@ export class SessionManager {
     });
     this.privateSessions.set(session.id, session);
     // 静默加入：房主不需要"加入了战局"提示（下面"创建成功，你是房主"已覆盖）
-    await this.joinSession(player, session, undefined, true);
+    await this.joinSession(player, session);
     player.sendClientMessage(SESSION_COLOR, `战局「${session.name}」创建成功，你是房主`);
     return session;
   }
@@ -202,6 +209,10 @@ export class SessionManager {
     }
     if (target.id === owner.id) return { ok: false, reason: "不能踢自己" };
     if (!session.has(target)) return { ok: false, reason: "目标不在战局内" };
+    // 目标在比赛/编辑中：踢出会拉出比赛世界（悬空比赛状态 + 幽灵世界），拒绝
+    if (isInRace(target.id) || isEditing(target.id)) {
+      return { ok: false, reason: "目标正在比赛/编辑中，无法移出" };
+    }
     session.broadcast(`[战局] ${target.getName().name} 被房主移出了战局`);
     // 被踢者回到公共大世界
     this.leaveCurrentSession(target, false);
@@ -220,6 +231,14 @@ export class SessionManager {
     }
     if (session.isFull) return { ok: false, reason: "战局已满" };
     if (session.has(target)) return { ok: false, reason: "对方已在战局内" };
+    // 目标正在比赛/编辑中：拉出会破坏比赛状态
+    if (isInRace(target.id) || isEditing(target.id)) {
+      return { ok: false, reason: "对方正在比赛/编辑中" };
+    }
+    // 目标在别的流程（面板/对话框）中：邀请框会覆盖其当前对话框造成状态错乱
+    if (isPlayerLocked(target.id)) {
+      return { ok: false, reason: "对方正在操作中，稍后再试" };
+    }
     // 弹确认对话框给目标玩家
     try {
       const res = await new Dialog({
