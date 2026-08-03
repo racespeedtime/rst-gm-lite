@@ -1,12 +1,13 @@
-import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
+import { Dialog, DialogStylesEnum, Player, PlayerEvent } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import { invalidateSettingCache } from "@/personalize/settings";
+import { invalidateSettingCache, getSetting } from "@/personalize/settings";
 import { showDialog } from "@/utils/dialog";
 import { setIntervalSafe } from "@/core/timers";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { isInRace } from "@/race/room";
+import { isEditing } from "@/race/editor";
 import { isInsideMap } from "@/utils/map";
 import { COLOR_SUCCESS } from "@/utils/colors";
 
@@ -124,11 +125,53 @@ async function saveAllOnlinePositions(): Promise<void> {
   }
 }
 
-/** 初始化出生系统：定时保存在线位置（timer 由 GameMode.onExit 统一清理） */
+/**
+ * 大世界后续重生按设置自动定位（对齐原版 OnPlayerSpawn → SetPlayerPos_Birth）：
+ * - spawnMode=LAST_POSITION 且最后位置有效 → 回到最后保存的位置
+ * - 否则（RANDOM 或上次位置超范围被忽略）→ 随机出生点
+ * 比赛中/编辑模式的重生由各自系统处理，不在此覆盖。
+ * 用 setPos 直接定位（onSpawn 里不能再 spawn，避免递归触发）。
+ */
+async function respawnBySetting(player: Player): Promise<void> {
+  if (isInRace(player.id) || isEditing(player.id)) return;
+  const auth = getAuthState(player.id);
+  if (!auth) return;
+  const setting = await getSetting(player); // 设置缓存，避免每次重生查库
+  const hasLast =
+    setting?.spawnMode === "LAST_POSITION" &&
+    setting.lastX != null &&
+    setting.lastY != null &&
+    setting.lastZ != null &&
+    isInsideMap(Number(setting.lastX), Number(setting.lastY), Number(setting.lastZ));
+  if (!player.isConnected()) return;
+  if (hasLast) {
+    const x = Number(setting.lastX);
+    const y = Number(setting.lastY);
+    // 最后位置也用 colandreas 修正 Z（防卡建筑/悬空）
+    player.setPos(x, y, getSafeGroundZ(x, y, Number(setting.lastZ)));
+    if (setting.lastAngle != null) player.setFacingAngle(Number(setting.lastAngle));
+    return;
+  }
+  const point = await getRandomSpawnPoint();
+  if (!point || !player.isConnected()) return; // 无出生点配置，保持默认
+  player.setPos(point.x, point.y, getSafeGroundZ(point.x, point.y, point.z));
+  player.setFacingAngle(point.angle);
+}
+
+/** 初始化出生系统：定时保存在线位置 + 大世界重生按设置自动定位（timer 由 GameMode.onExit 统一清理） */
 export function initSpawnSystem(): void {
   setIntervalSafe(() => {
     void saveAllOnlinePositions();
   }, SAVE_INTERVAL_MS);
+
+  // 每次出生/重生（含死亡重生、/kill、登录首次出生）都按 spawnMode 自动定位。
+  // 登录首次出生由 spawnPlayer 的 setSpawnInfo 定位，此处结果一致（同数据源），
+  // 后续重生不再用 open.mp 默认位置。
+  PlayerEvent.onSpawn(({ player, next }) => {
+    if (player.isNpc()) return next();
+    void respawnBySetting(player);
+    return next();
+  });
 }
 
 /** 万能面板入口：配置出生方式（随机 / 上次位置） */
