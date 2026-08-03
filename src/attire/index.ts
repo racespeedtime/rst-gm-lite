@@ -35,6 +35,9 @@ const playerSlotMap = new Map<number, Map<number, string>>();
 /** 车辆挂件编辑映射：playerId -> (presetItemId -> DynamicObject)。实时编辑（obj.edit）
  *  需要拿到该挂件实体 */
 const vehicleObjMap = new Map<number, Map<string, DynamicObject>>();
+/** 玩家当前应用的人物预设（playerId -> presetId，null=清空）。
+ *  死亡重生/重连时重新应用（对齐原版 OnPlayerSpawn → SpawnAttire：open.mp 重生会清挂件） */
+const appliedPresetByPlayer = new Map<number, string | null>();
 /** 实时编辑中的状态（open.mp 一次只编辑一个对象，per-player 串行） */
 interface AttireEditState {
   presetId: string;
@@ -91,6 +94,28 @@ export async function applyPlayerPreset(player: Player, presetId: string | null)
     slot++;
   }
   playerSlotMap.set(player.id, slotMap);
+  // 记录当前应用的预设（死亡重生/重连时重新应用）
+  appliedPresetByPlayer.set(player.id, presetId);
+}
+
+/**
+ * 重新应用玩家当前的人物预设（死亡重生/重连后挂件被 open.mp 清除）。
+ * - 进程内有记录（本次会话应用过，如装扮菜单"应用此预设"）→ 恢复该预设
+ * - 无记录（重连是全新连接/登录未设默认）→ 回数据库默认预设（无则清空）
+ * 编辑模式由调用方（onSpawn）排除。
+ */
+export async function reapplyCurrentPlayerPreset(player: Player): Promise<void> {
+  if (player.isNpc() || !player.isConnected()) return;
+  if (!getAuthState(player.id)) return;
+  let presetId = appliedPresetByPlayer.get(player.id);
+  if (presetId === undefined) {
+    const setting = await prisma.sysUserSetting.findUnique({
+      where: { userId: getAuthState(player.id)!.userId },
+    });
+    presetId = setting?.defaultPlayerPresetId ?? null;
+  }
+  if (!player.isConnected()) return;
+  await applyPlayerPreset(player, presetId);
 }
 
 /**
@@ -178,6 +203,7 @@ export function cleanupAttire(playerId: number): void {
   appliedVehicleObjs.delete(playerId);
   playerSlotMap.delete(playerId);
   vehicleObjMap.delete(playerId);
+  appliedPresetByPlayer.delete(playerId);
   playerEditing.delete(playerId);
   vehicleEditing.delete(playerId);
 }

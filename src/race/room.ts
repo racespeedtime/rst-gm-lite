@@ -937,6 +937,7 @@ function tickRooms(): void {
       broadcastToRoom(room, "[赛车] 比赛房间因长时间未开始已解散");
       for (const m of room.members.values()) {
         playerRaces.delete(m.id);
+        cleanupScriptVehicle(m.id); // 等待期玩家可能在起点的比赛车上，解散一并清
       }
       destroyRaceTds(room);
       room.members.clear();
@@ -1258,6 +1259,11 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       showNextCheckpoint(player, room.cps, slot?.cpIndex ?? -1);
       // 重新强制无碰撞（重连是全新连接，碰撞状态已重置）
       applyRaceNoCollision(player, true);
+      // 无车兜底（断线前坐默认比赛车，重连时已被清理）：用默认比赛车型刷爱车
+      // （有该模型爱车则复用外观，没有则自动创建成爱车——与 joinRoom/beginRace 一致）
+      if (!player.isInAnyVehicle() && !getOwnedVehicle(player.id)) {
+        void spawnVehicle(player, getDefaultRaceModel(room.cps), true);
+      }
     }
     broadcastToRoom(room, `[赛车] ${player.getName().name} 已重连比赛！`);
     player.sendClientMessage(

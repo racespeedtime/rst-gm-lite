@@ -8,6 +8,7 @@ import { setIntervalSafe } from "@/core/timers";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { isInRace } from "@/race/room";
 import { isEditing } from "@/race/editor";
+import { reapplyCurrentPlayerPreset } from "@/attire";
 import { isInsideMap } from "@/utils/map";
 import { COLOR_SUCCESS } from "@/utils/colors";
 
@@ -80,11 +81,11 @@ export async function spawnPlayer(player: Player): Promise<void> {
   const skin = setting?.skinId ?? 0;
   // SA-MP 风格签名：team, skin, x, y, z, rotation, 三把武器（0=无）
   player.setSpawnInfo(0, skin, x, y, z, angle, 0, 0, 0, 0, 0, 0);
-  player.spawn();
-  // 标记登录首次出生：onSpawn 跳过 respawnBySetting（避免 RANDOM 二次随机定位）
-  loginSpawned.add(player.id);
   // 解除连接时进入的观战模式（认证/大厅期间隐藏），正式出生后恢复可见
   player.toggleSpectating(false);
+  // player.spawn();
+  // 标记登录首次出生：onSpawn 跳过 respawnBySetting（避免 RANDOM 二次随机定位）
+  loginSpawned.add(player.id);
 }
 
 /** 保存玩家当前在线位置（超出地图范围不保存；比赛中在独立世界，跳过防污染） */
@@ -218,6 +219,12 @@ export function initSpawnSystem(): void {
     }
     // 正常死亡重生：按 spawnMode 自动定位（随机/上次位置）
     void respawnBySetting(player);
+    // 死亡重生后挂件会被 open.mp 清除：重新应用当前人物预设（对齐原版
+    // OnPlayerSpawn → SpawnAttire）。编辑模式除外（编辑时是对象编辑/挂件操作，
+    // 重应用会打断）。
+    if (!isEditing(player.id)) {
+      void reapplyCurrentPlayerPreset(player);
+    }
     return next();
   });
 }

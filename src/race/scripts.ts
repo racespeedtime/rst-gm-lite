@@ -25,10 +25,17 @@ export interface CpScriptContext {
 /** 脚本创建（cveh 函数）的车辆，按玩家跟踪以便离开比赛/断线时销毁 */
 const scriptVehicles = new Map<number, Vehicle>();
 
-/** 清理玩家脚本创建的车辆（断线/离开比赛时调用） */
+/** 清理玩家脚本创建的车辆（断线/离开比赛时调用）。
+ *  若该车辆已是玩家的爱车（cveh 换车后登记），跳过——爱车由
+ *  onPlayerDisconnectVehicle / 玩家持有管理，避免对已销毁车辆调用 destroy
+ *  抛 "Cannot destroy before create" */
 export function cleanupScriptVehicle(playerId: number): void {
   const v = scriptVehicles.get(playerId);
   if (v && v.isValid()) {
+    if (getOwnedVehicle(playerId) === v) {
+      scriptVehicles.delete(playerId);
+      return;
+    }
     v.destroy();
   }
   scriptVehicles.delete(playerId);

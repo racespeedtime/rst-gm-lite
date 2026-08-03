@@ -190,7 +190,10 @@ PlayerEvent.onDisconnect(({ player, next }) => {
   }
   // 注意顺序：战局处理需要认证状态（房主判断），须在清理 auth 之前执行
   sessionManager.handlePlayerDisconnect(player);
-  // 断开前最后保存一次在线位置（失败由定时保存兜底）
+  // 断开前最后保存一次在线位置（失败由定时保存兜底）。
+  // 必须在 cleanupRacePlayer 之前：此时玩家还在比赛中（比赛世界），
+  // savePlayerPosition 内部按 isInRace 跳过比赛污染；若先清比赛状态，
+  // 会误把比赛世界坐标存成 LAST_POSITION
   void savePlayerPosition(player).catch((e) =>
     logger.error(`[spawn] 断线保存位置失败 ${player.getName().name}`, e),
   );
