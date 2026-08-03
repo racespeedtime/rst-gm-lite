@@ -31,6 +31,7 @@ import { initObserve, cleanupObserve } from "@/core/observe";
 import { initPlayerInfo } from "@/core/profile";
 import { initInvincible, applyInvincibleState, cleanupInvincible } from "@/core/invincible";
 import { initArmor } from "@/core/armor";
+import { initMoneySystem, giveInfinityMoney } from "@/core/money";
 import {
   initVehicleAuto,
   cleanupVehicleAuto,
@@ -93,6 +94,8 @@ async function handlePlayerConnect(player: Player) {
     }
     // 登录成功：停止登录音乐 + 回到第三人称视角
     stopLoginCamera(player);
+    // 无限金钱（对齐原版登录 GivePlayerMoney(99999999)）
+    giveInfinityMoney(player);
     // 读取玩家设置（登录后统一取一次，供各系统应用；设置缓存保证最新）
     const loginSetting = await getSetting(player);
     // 应用无敌模式状态（按玩家设置，开启则满血）——普通登录与重连两条路径共用
@@ -232,9 +235,12 @@ initSpawnSystem();
 // GUI 系统（速度表 / 网络信息，每 200ms 刷新，timer 由 GameMode.onExit 统一清理）
 initGui();
 
-// 爱车系统（刷车命令 + 位置定时保存）
+// 爱车系统（刷车命令 + 位置定时保存 + 改装店 mod 存储）
 initVehicleCommands();
 startVehicleSaveTimer();
+
+// 无限金钱（登录发钱 + 进改装店补给）
+initMoneySystem();
 
 // 传送系统（/s /l /tpa 等 + 未知命令兜底 / // 传送点）
 initTeleport();

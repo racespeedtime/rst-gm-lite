@@ -5,6 +5,7 @@ import {
   Player,
   PlayerEvent,
   Vehicle,
+  VehicleEvent,
 } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
@@ -109,6 +110,13 @@ export async function spawnVehicle(player: Player, modelId: number): Promise<boo
     veh.addComponent(1010); // 氮气
     // 应用完整预设外观（颜色/paintjob/改装件 + 挂件），默认预设挂件也自动生效
     await applyVehiclePreset(veh, uv.defaultPresetId, player.id);
+    // 重新应用改装店改件（onVehicleMod 存储的 mod_components，重刷车不丢失）
+    if (uv.modComponents) {
+      for (const c of uv.modComponents.split(" ")) {
+        const id = Number(c);
+        if (Number.isInteger(id) && id > 0) veh.addComponent(id);
+      }
+    }
     // 爱车 description 绑定 3D 文本（有描述才挂，跟随车辆移动）
     // 注意：附着车辆时 x/y/z 是相对车辆的偏移（对齐原版 CreateDynamic3DTextLabel
     // 附车时传 0,0,0），传绝对坐标会导致标签出现在世界原点/错位
@@ -189,6 +197,35 @@ export function onPlayerDisconnectVehicle(player: Player): void {
  * /c lock 锁车 · /c chepai 文字 · /c kick 踢乘客
  */
 export function initVehicleCommands(): void {
+  // 改装店装件存储：OnVehicleMod 在改装店装上 mod 时触发 → 存到该玩家的
+  // UserVehicle.mod_components（仅自己的车），重刷车时重新应用
+  VehicleEvent.onMod(({ player, vehicle, componentId, next }) => {
+    if (player.isNpc()) return next();
+    // 仅自己的爱车：改装店能开进别人的车，但 mod 归属按车主存储
+    if (getOwnedVehicle(player.id) !== vehicle) return next();
+    const auth = getAuthState(player.id);
+    if (!auth) return next();
+    const modelId = vehicle.getModel();
+    void (async () => {
+      try {
+        const uv = await prisma.userVehicle.findUnique({
+          where: { userId_modelId: { userId: auth.userId, modelId } },
+        });
+        const list = (uv?.modComponents ? uv.modComponents.split(" ") : []).filter(Boolean);
+        if (!list.includes(String(componentId))) {
+          list.push(String(componentId));
+          await prisma.userVehicle.update({
+            where: { userId_modelId: { userId: auth.userId, modelId } },
+            data: { modComponents: list.join(" ") },
+          });
+        }
+      } catch (e) {
+        logger.error(`[veh] ${player.getName().name} 存储改装件失败 model=${modelId}`, e);
+      }
+    })();
+    return next();
+  });
+
   PlayerEvent.onCommandText(["c", "veh"], ({ player, subcommand, next }) => {
     const arg = subcommand[0];
     if (arg === "list") {
