@@ -3,7 +3,10 @@ import { NetStats, Player, TextDraw } from "@infernus/core";
 const WHITE = 0xffffffff;
 const YELLOW = 0xffd700ff;
 const RED = 0xff0000ff;
-const GREEN = 0xff00ff00; // 对齐同文件 0xRRGGBBAA 风格（原十进制 16711935 等价）
+// SA-MP TextDraw 颜色是 0xRRGGBBAA（字节序），GREEN 应为 R=00,G=FF,B=00,A=FF。
+// 原值 16711935 = 0x00FF00FF（不透明绿）；曾有"等价重构"写成 0xff00ff00
+// = A=0 全透明 → ping≤80（绿色档）时数字不可见，只有 ping 消失。
+const GREEN = 0x00ff00ff;
 
 /** 网络信息 GUI 状态（用于计算速率） */
 export interface NetstatState {

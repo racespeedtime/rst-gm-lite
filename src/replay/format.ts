@@ -257,16 +257,37 @@ export function decodeFrame(buf: Buffer, index: number, frameBytes: number): Rep
   };
 }
 
-/** 帧间线性插值（t∈[0,1]；离散状态字段取最近帧不做插值） */
+/** 四元数归一化：线性插值两个单位四元数得到的中间值长度 <1（仅 t=0/1 时为单位），
+ *  直接喂进欧拉换算（假设单位四元数）会算出错误朝向 → 回放轨迹车头乱摆。
+ *  插值后必须归一化（slerp 更严谨，归一化已足够消除视觉抖动）。 */
+function normalizeQuat(q: {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}): { x: number; y: number; z: number; w: number } {
+  const n = Math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+  if (n === 0 || !Number.isFinite(n)) return { x: 0, y: 0, z: 0, w: 1 }; // 非法 → 单位四元数
+  return { x: q.x / n, y: q.y / n, z: q.z / n, w: q.w / n };
+}
+
+/** 帧间线性插值（t∈[0,1]；离散状态字段取最近帧不做插值）。
+ *  位置/速度直接插值；四元数插值后归一化（否则中间帧非单位四元数，欧拉换算乱）。 */
 export function lerpFrame(a: ReplayFrame, b: ReplayFrame, t: number): ReplayFrame {
+  const q = normalizeQuat({
+    x: a.qx + (b.qx - a.qx) * t,
+    y: a.qy + (b.qy - a.qy) * t,
+    z: a.qz + (b.qz - a.qz) * t,
+    w: a.qw + (b.qw - a.qw) * t,
+  });
   return {
     x: a.x + (b.x - a.x) * t,
     y: a.y + (b.y - a.y) * t,
     z: a.z + (b.z - a.z) * t,
-    qx: a.qx + (b.qx - a.qx) * t,
-    qy: a.qy + (b.qy - a.qy) * t,
-    qz: a.qz + (b.qz - a.qz) * t,
-    qw: a.qw + (b.qw - a.qw) * t,
+    qx: q.x,
+    qy: q.y,
+    qz: q.z,
+    qw: q.w,
     vx: a.vx + (b.vx - a.vx) * t,
     vy: a.vy + (b.vy - a.vy) * t,
     vz: a.vz + (b.vz - a.vz) * t,
