@@ -7,6 +7,7 @@ import {
   PlayerEvent,
   PlayerStateEnum,
   Vehicle,
+  VehicleEvent,
 } from "@infernus/core";
 import { getSetting } from "@/personalize/settings";
 import { getOwnedVehicle } from "@/vehicles";
@@ -170,6 +171,20 @@ export function initVehicleAuto(): void {
     if (driver && driver.isConnected() && !driver.isNpc() && autoFixSet.has(driver.id)) {
       if (isOwnVehicle(driver, veh)) {
         return false; // 对齐原版：阻止这次射击对车辆造成的伤害（直接返回，不调用 next 避免语义干扰）
+      }
+    }
+    return next();
+  });
+
+  // autoFix 即时修复：车辆损坏状态更新（受击/碰撞/爆炸瞬间触发）→ 立即修复。
+  // 对齐原版 OnVehicleDamageStatusUpdate + AutoFix 的 RepairVehicle；
+  // 与 onWeaponShot 互补——子弹拦截是阻止伤害结算，这里是伤害已发生（碰撞/爆炸等）时立刻修回，
+  // 不等每秒 tick 兜底。事件 player 为车内玩家，用 getLastDriver 兜底。
+  VehicleEvent.onDamageStatusUpdate(({ vehicle, player, next }) => {
+    const driver = vehicle.getLastDriver() ?? player;
+    if (driver && driver.isConnected() && !driver.isNpc() && autoFixSet.has(driver.id)) {
+      if (isOwnVehicle(driver, vehicle)) {
+        vehicle.repair();
       }
     }
     return next();
