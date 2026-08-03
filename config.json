@@ -45,7 +45,7 @@
     "vehicle_respawn_time": 10000,
     "weather": 10
   },
-  "language": "",
+  "language": "Chinese",
   "logging": {
     "enable": true,
     "file": "log.txt",
@@ -63,7 +63,7 @@
   "logo": "",
   "max_bots": 0,
   "max_players": 50,
-  "name": "open.mp server",
+  "name": "[RST] 轻量化竞技 · 自由大世界 · 赛车",
   "network": {
     "acks_limit": 3000,
     "aiming_sync_rate": 30,
@@ -92,8 +92,13 @@
   },
   "password": "",
   "pawn": {
-    "legacy_plugins": ["streamer", "samp-node"],
-    "main_scripts": ["polyfill_raknet 1"],
+    "legacy_plugins": [
+      "streamer",
+      "samp-node"
+    ],
+    "main_scripts": [
+      "polyfill_raknet 1"
+    ],
     "side_scripts": []
   },
   "rcon": {
