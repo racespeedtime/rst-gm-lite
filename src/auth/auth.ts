@@ -10,7 +10,7 @@ const MAX_NAME_LEN = 24;
 const MAX_PASSWORD_LEN = 32;
 const MIN_PASSWORD_LEN = 4;
 
-import { COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
+import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 
 /** 单个玩家认证状态（内存态） */
 export interface AuthState {
@@ -47,10 +47,15 @@ export function getOnlineSessionIds(): string[] {
   return [...ids];
 }
 
-/** 查找某 userId 当前在线的玩家 id（用于同账号多开检测） */
+/** 查找某 userId 当前在线的玩家 id（用于同账号多开检测）。
+ * 同时扫 authStates（已认证）与 pendingSessions（认证中途，key 即 playerId）——
+ * 否则两个同昵称连接同时处于密码对话框时，后完成者查不到先完成者而双双登入 */
 export function findOnlinePlayerIdByUserId(userId: string): number | null {
   for (const [pid, auth] of authStates) {
     if (auth.userId === userId) return pid;
+  }
+  for (const [pid, pending] of pendingSessions) {
+    if (pending.userId === userId) return pid;
   }
   return null;
 }
@@ -195,6 +200,8 @@ async function doLogin(player: Player, userId: string, name: string): Promise<st
     );
     if (!res) return null;
     if (res.response !== 1) {
+      // UX-1：按"离开"/ESC 关闭 → 明确提示，防误触被踢被当成服务器故障
+      player.sendClientMessage(COLOR_WHITE, "已取消登录，再见");
       return null;
     }
     const pwd = res.inputText;

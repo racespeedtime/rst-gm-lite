@@ -1,5 +1,6 @@
 import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
-import { getSetting, updateSetting, pickOption, notifySaved, COLOR_ERROR } from "./settings";
+import { getSetting, updateSetting, pickOption, notifySaved } from "./settings";
+import { COLOR_ERROR } from "@/utils/colors";
 import { showDialog } from "@/utils/dialog";
 import type { MenuBack } from "@/core/panel";
 

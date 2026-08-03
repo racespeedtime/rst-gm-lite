@@ -2,10 +2,11 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { showDialog } from "@/utils/dialog";
-import { COLOR_SUCCESS, COLOR_ERROR } from "@/utils/colors";
+import { COLOR_SUCCESS } from "@/utils/colors";
 import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUserSetting";
 
-export { COLOR_SUCCESS, COLOR_ERROR };
+// 注：各 personalize 模块统一从 @/utils/colors 导入颜色（不再从这里 re-export，
+// 避免双导入风格；历史 import { COLOR_SUCCESS } from "./settings" 已清理）
 
 /**
  * 设置进程内缓存：GUI 200ms 轮询等高频读走缓存，避免每 tick 查库。

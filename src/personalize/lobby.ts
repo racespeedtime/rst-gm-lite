@@ -17,13 +17,20 @@ export async function runLobby(player: Player): Promise<void> {
   const currentSpawn = setting?.spawnMode === "LAST_POSITION" ? "LAST_POSITION" : "RANDOM";
   const currentEnter = setting?.enterWorldMode === "OWN_SESSION" ? "OWN_SESSION" : "PUBLIC";
 
-  // 出生方式 × 进入世界方式 4 组合（一次选完，当前值标注）
-  const options = [
-    `随机出生点 · 公共大世界${currentSpawn === "RANDOM" && currentEnter === "PUBLIC" ? "（当前）" : ""}`,
-    `随机出生点 · 自身战局${currentSpawn === "RANDOM" && currentEnter === "OWN_SESSION" ? "（当前）" : ""}`,
-    `上次位置 · 公共大世界${currentSpawn === "LAST_POSITION" && currentEnter === "PUBLIC" ? "（当前）" : ""}`,
-    `上次位置 · 自身战局${currentSpawn === "LAST_POSITION" && currentEnter === "OWN_SESSION" ? "（当前）" : ""}`,
+  // 出生方式 × 进入世界方式 4 组合（一次选完，当前值标注）。
+  // 带数据驱动（避免依赖固定排列的魔法索引，增删组合不易错）
+  const combos: { spawn: "RANDOM" | "LAST_POSITION"; enter: "PUBLIC" | "OWN_SESSION" }[] = [
+    { spawn: "RANDOM", enter: "PUBLIC" },
+    { spawn: "RANDOM", enter: "OWN_SESSION" },
+    { spawn: "LAST_POSITION", enter: "PUBLIC" },
+    { spawn: "LAST_POSITION", enter: "OWN_SESSION" },
   ];
+  const options = combos.map((c) => {
+    const isCurrent = c.spawn === currentSpawn && c.enter === currentEnter;
+    return `${
+      c.spawn === "RANDOM" ? "随机出生点" : "上次位置"
+    } · ${c.enter === "PUBLIC" ? "公共大世界" : "自身战局"}${isCurrent ? "（当前）" : ""}`;
+  });
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
   const res = await showDialog(
     player,
@@ -39,10 +46,11 @@ export async function runLobby(player: Player): Promise<void> {
   let spawnMode = currentSpawn;
   let enterMode = currentEnter;
   if (res && res.response === 1) {
-    const idx = res.listItem;
-    // 0 随机+公共 / 1 随机+自身 / 2 上次+公共 / 3 上次+自身
-    spawnMode = idx >= 2 ? "LAST_POSITION" : "RANDOM";
-    enterMode = idx % 2 === 1 ? "OWN_SESSION" : "PUBLIC";
+    const chosen = combos[res.listItem];
+    if (chosen) {
+      spawnMode = chosen.spawn;
+      enterMode = chosen.enter;
+    }
   }
   // 写库（有变化才写；写库失败不致命：提示后按当前设置进入，避免把玩家踢出服务器）
   if (spawnMode !== currentSpawn || enterMode !== currentEnter) {

@@ -1,5 +1,6 @@
 import { Dialog, DialogStylesEnum, GameText, Player, PlayerEvent, Vehicle, WeaponEnum } from "@infernus/core";
-import { pickOption, notifySaved, COLOR_ERROR } from "./settings";
+import { pickOption, notifySaved } from "./settings";
+import { COLOR_ERROR } from "@/utils/colors";
 import { setTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve, isObserving } from "@/core/observe";
 import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";

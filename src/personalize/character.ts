@@ -7,8 +7,8 @@ import {
   pickOption,
   notifySaved,
   toggleText,
-  COLOR_ERROR,
 } from "./settings";
+import { COLOR_ERROR } from "@/utils/colors";
 import { applyInvincibleState } from "@/core/invincible";
 import { applyPlayerStyle } from "@/core/playerStyle";
 import { applyPlayerPreset } from "@/attire";

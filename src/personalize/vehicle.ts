@@ -7,8 +7,8 @@ import {
   pickOption,
   notifySaved,
   toggleText,
-  COLOR_ERROR,
 } from "./settings";
+import { COLOR_ERROR } from "@/utils/colors";
 import { syncVehicleAutoState, syncNoCollisionState } from "@/core/vehicleAuto";
 import { getOwnedVehicle } from "@/vehicles";
 import { applyVehiclePreset } from "@/attire";

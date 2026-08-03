@@ -1,6 +1,7 @@
 import { Player, PlayerEvent } from "@infernus/core";
 import { getAuthState } from "@/auth/auth";
-import { updateSetting, notifySaved, COLOR_ERROR } from "./settings";
+import { updateSetting, notifySaved } from "./settings";
+import { COLOR_ERROR } from "@/utils/colors";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 
 /**

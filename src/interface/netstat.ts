@@ -3,7 +3,7 @@ import { NetStats, Player, TextDraw } from "@infernus/core";
 const WHITE = 0xffffffff;
 const YELLOW = 0xffd700ff;
 const RED = 0xff0000ff;
-const GREEN = 16711935;
+const GREEN = 0xff00ff00; // 对齐同文件 0xRRGGBBAA 风格（原十进制 16711935 等价）
 
 /** 网络信息 GUI 状态（用于计算速率） */
 export interface NetstatState {

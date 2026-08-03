@@ -6,8 +6,8 @@ import {
   notifySaved,
   toggleText,
   toggleSetting,
-  COLOR_ERROR,
 } from "./settings";
+import { COLOR_ERROR } from "@/utils/colors";
 import { openSpawnSettingsFlow } from "@/core/spawn";
 import { setHouseObjectsVisibleForPlayer } from "@/house";
 import { applyWorldEnv } from "@/core/worldenv";

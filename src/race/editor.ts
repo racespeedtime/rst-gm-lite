@@ -370,9 +370,12 @@ async function reorderCp(player: Player): Promise<void> {
     await cpDetailMenu(player);
     return;
   }
-  await swapSortIndex(cps[idx], target, (id, index) =>
-    prisma.raceCp.update({ where: { id }, data: { index } }),
-  );
+  // G4：交换三步写包事务，防中途失败留下 index=-1 的临时行
+  await prisma.$transaction(async (tx) => {
+    await swapSortIndex(cps[idx], target, (id, index) =>
+      tx.raceCp.update({ where: { id }, data: { index } }),
+    );
+  });
   await recalcRaceLength(state.raceId);
   state.cpIndex = target.index; // 当前聚焦的 CP 跟随移动
   player.sendClientMessage(
@@ -593,9 +596,12 @@ async function reorderScript(
     await cpScriptMenu(player, cp);
     return;
   }
-  await swapSortIndex(target, neighbor, (id, index) =>
-    prisma.raceCpScript.update({ where: { id }, data: { index } }),
-  );
+  // G4：交换三步写包事务，防中途失败留下 index=-1 的临时行
+  await prisma.$transaction(async (tx) => {
+    await swapSortIndex(target, neighbor, (id, index) =>
+      tx.raceCpScript.update({ where: { id }, data: { index } }),
+    );
+  });
   player.sendClientMessage(COLOR_SUCCESS, `脚本已${res.listItem === 0 ? "上移" : "下移"}`);
   await cpScriptMenu(player, cp);
 }

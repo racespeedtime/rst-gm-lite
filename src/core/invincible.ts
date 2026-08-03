@@ -19,6 +19,9 @@ import { logger } from "@/logger";
  */
 
 const invincibleSet = new Set<number>();
+/** 无敌提示节流：攻击者-目标 3 秒内只提示一次（防自动武器扫射刷屏） */
+const GIVE_NOTIFY_MS = 3000;
+const lastGiveNotify = new Map<string, number>();
 
 /** 玩家是否无敌（同步读取，供伤害事件与 raknet 拦截用） */
 export function isInvincible(playerId: number): boolean {
@@ -50,6 +53,12 @@ export async function applyInvincibleState(player: Player): Promise<void> {
 /** 玩家断线清理（防 playerId 复用残留） */
 export function cleanupInvincible(playerId: number): void {
   invincibleSet.delete(playerId);
+  // 清掉该玩家的节流提示记录（key 含该 playerId，防 Map 累积）
+  for (const key of [...lastGiveNotify.keys()]) {
+    if (key.startsWith(`${playerId}:`) || key.endsWith(`:${playerId}`)) {
+      lastGiveNotify.delete(key);
+    }
+  }
 }
 
 /** 初始化无敌系统：伤害回血 + raknet 子弹包拦截 */
@@ -69,8 +78,14 @@ export function initInvincible(): void {
   // 玩家对他人造成伤害：目标无敌时本可在此拦截（open.mp 返回值不阻止伤害，仅作提示保留）
   PlayerEvent.onGiveDamage(({ player: attacker, damage: victim, next }) => {
     if (invincibleSet.has(victim.id)) {
-      // 提示攻击者目标无敌（视觉反馈，实际拦截由 raknet 层完成）
-      attacker.sendClientMessage("#ffd700", `[无敌] ${victim.getName().name} 处于无敌状态`);
+      // 提示攻击者目标无敌（视觉反馈，实际拦截由 raknet 层完成）。
+      // 节流：自动武器扫射会每帧触发 → 同一攻击者-目标 3 秒内只提示一次
+      const key = `${attacker.id}:${victim.id}`;
+      const now = Date.now();
+      if ((lastGiveNotify.get(key) ?? 0) < now - GIVE_NOTIFY_MS) {
+        lastGiveNotify.set(key, now);
+        attacker.sendClientMessage("#ffd700", `[无敌] ${victim.getName().name} 处于无敌状态`);
+      }
     }
     return next();
   });
