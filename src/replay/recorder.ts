@@ -108,6 +108,7 @@ function captureVehicleFrame(player: Player, session?: RecordingSession): Replay
 /**
  * 开始录制：需已认证 + 在车内（v1 仅车内采集）+ 未在录制。
  * 车内指"玩家的爱车实体"（车辆采集源），不要求 putPlayerIn。
+ * 挑战/回放中禁录由调用方（/rec start、面板）拦截（避免循环依赖）。
  */
 export async function startRecording(
   player: Player,

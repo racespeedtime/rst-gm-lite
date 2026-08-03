@@ -3,13 +3,15 @@ import { logger } from "@/logger";
 import { initReplayCommands } from "./commands";
 import { initRecorder, cleanupRecorder, forceStopRecording, isRecording, startRecording, stopRecording } from "./recorder";
 import { cleanupPlayback, destroyAllPlaybacks } from "./playback";
+import { initChallenge, destroyAllChallenges, challengeDisconnect } from "./challenge";
 import { ensureRecordingDir } from "./storage";
 
 /**
  * 回放系统总入口：
  * - GameMode.onInit 建录制目录
  * - initReplayCommands 注册命令；initRecorder 挂 RakNet 拦截 + 兜底采样
- * - onExit 销毁全部回放会话/NPC/车辆 + 录制强制落盘
+ * - initChallenge 注册影子挑战 CP 检测（与比赛共用 RaceCpEvent 入口）
+ * - onExit 销毁全部回放/挑战会话/NPC/车辆 + 录制强制落盘
  */
 
 /** 初始化回放系统（callbacks init 序列调用） */
@@ -17,15 +19,17 @@ export function initReplay(): void {
   ensureRecordingDir();
   initReplayCommands();
   initRecorder();
+  initChallenge();
   logger.info("[replay] 回放系统已初始化");
 }
 
-/** 玩家断线清理（callbacks onDisconnect 调用）：录制强制落盘 + 回放会话销毁 */
+/** 玩家断线清理（callbacks onDisconnect 调用）：录制强制落盘 + 回放/挑战会话销毁 */
 export function cleanupReplay(playerId: number): void {
   if (isRecording(playerId)) {
     void forceStopRecording(playerId);
   }
   cleanupPlayback(playerId);
+  challengeDisconnect(playerId);
 }
 
 /**
@@ -46,8 +50,9 @@ export function raceRecordingStop(playerId: number, meta?: { rank?: number | nul
   }
 }
 
-/** 服务器退出：全部回放销毁 + 录制落盘 */
+/** 服务器退出：全部回放/挑战销毁 + 录制落盘 */
 export function shutdownReplay(): void {
   destroyAllPlaybacks();
+  destroyAllChallenges();
   void cleanupRecorder();
 }

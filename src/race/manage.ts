@@ -12,6 +12,7 @@ import { swapSortIndex, nextSortIndex, compactSortIndex } from "@/utils/sort";
 import type { MenuBack } from "@/core/panel";
 import { createRaceRoom } from "./room";
 import { enterRaceEdit, canEditRace } from "./editor";
+import { startChallengeFromRace } from "@/replay/challenge";
 
 /** 面板入口：赛道管理（管理赛道为 OP 专属，非 OP 不显示该行） */
 export async function openRaceMenu(player: Player, back?: MenuBack): Promise<void> {
@@ -162,13 +163,13 @@ async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBac
   await raceDetailFlow(player, r.item.id, back);
 }
 
-/** 赛道详情：开始比赛/编辑/纪录/删除 */
+/** 赛道详情：开始比赛/影子挑战/编辑/纪录/删除 */
 async function raceDetailFlow(player: Player, raceId: string, back?: MenuBack): Promise<void> {
   const race = await prisma.race.findUnique({ where: { id: raceId } });
   if (!race) return;
   const mine = await canEditRace(player, raceId);
   const recs = await prisma.raceRecord.count({ where: { raceId, deletedAt: null } });
-  const options = ["开始比赛", "查看排行榜", ...(mine ? ["编辑赛道", "删除赛道（二次验证）"] : [])];
+  const options = ["开始比赛", "影子挑战", "查看排行榜", ...(mine ? ["编辑赛道", "删除赛道（二次验证）"] : [])];
   const res = await showDialog(
     player,
     new Dialog({
@@ -189,10 +190,15 @@ async function raceDetailFlow(player: Player, raceId: string, back?: MenuBack): 
     player.sendClientMessage(COLOR_RACE, "比赛房间已创建，按 Y 或输入 /r s 开始比赛（倒计时 5 秒后开跑）");
     return;
   } else if (idx === 1) {
+    // 影子挑战：选本人的该赛道比赛回放当影子，同步起跑对比
+    const ok = await startChallengeFromRace(player, raceId);
+    if (ok) return; // 进入挑战世界，不再回菜单
+    await raceDetailFlow(player, raceId, back);
+  } else if (idx === 2) {
     await leaderboardFlow(player, raceId, () => raceDetailFlow(player, raceId, back));
-  } else if (mine && idx === 2) {
-    await enterRaceEdit(player, raceId);
   } else if (mine && idx === 3) {
+    await enterRaceEdit(player, raceId);
+  } else if (mine && idx === 4) {
     await deleteRaceFlow(player, raceId, () => raceDetailFlow(player, raceId, back));
   }
 }

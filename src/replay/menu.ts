@@ -7,6 +7,8 @@ import { isSuperAdmin } from "@/admin/op";
 import { deleteRecordingFile } from "./storage";
 import { spawnReplay, controlReplay, getReplaySession } from "./playback";
 import { startRecording, stopRecording, isRecording } from "./recorder";
+import { isInChallenge } from "./challenge";
+import { isInRace } from "@/race/room";
 import type { MenuBack } from "@/core/panel";
 import { COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
 
@@ -164,6 +166,11 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
   } else if (res.listItem === 1) {
     if (isRecording(player.id)) {
       await stopRecording(player.id);
+    } else if (isInRace(player.id)) {
+      // 比赛中由比赛系统自动录制（race 类型），手动开始会与自动录制抢会话
+      player.sendClientMessage(COLOR_ERROR, "比赛中已自动录制（结束自动保存），无需手动开始");
+    } else if (isInChallenge(player.id) || getReplaySession(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "影子挑战/回放中不能录制");
     } else {
       await startRecording(player, { type: "ghost" });
     }

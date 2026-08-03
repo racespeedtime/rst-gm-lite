@@ -2,6 +2,7 @@ import { Dynamic3DTextLabel, Npc, Player, TextDraw, Vehicle } from "@infernus/co
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
+import { isInRace } from "@/race/room";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import { startObserveVehicle, stopObserve, isObserving } from "@/core/observe";
 import { parseReplayFile, decodeFrame, lerpFrame, type ReplayData, type ReplayFrame } from "./format";
@@ -25,9 +26,14 @@ import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/co
  * - 清理：/rp stop / 发起人断线 / onExit 全路径销毁
  */
 
-/** 回放世界起始 id（避开公共大世界 0、战局 1..n、比赛 5000+） */
+/** 回放世界起始 id（避开公共大世界 0、战局 1..n、比赛 5000+；挑战共用） */
 const REPLAY_WORLD_BASE = 6000;
 let nextReplayWorldId = REPLAY_WORLD_BASE;
+
+/** 分配回放/挑战独立世界 id */
+export function allocReplayWorld(): number {
+  return nextReplayWorldId++;
+}
 
 /** 播放推进帧间隔（60fps） */
 const TICK_MS = 16;
@@ -131,8 +137,8 @@ function destroyObserverTds(session: ReplaySession, playerId: number): void {
   session.tds.delete(playerId);
 }
 
-/** SA 车辆四元数 → 欧拉角（度）。与 getRotationQuat/setVehicleRot 同引擎约定。 */
-function quatToEuler(q: { x: number; y: number; z: number; w: number }): { rx: number; ry: number; rz: number } {
+/** SA 车辆四元数 → 欧拉角（度）。与 getRotationQuat/setVehicleRot 同引擎约定。（challenge 复用） */
+export function quatToEuler(q: { x: number; y: number; z: number; w: number }): { rx: number; ry: number; rz: number } {
   const { x, y, z, w } = q;
   const yaw = Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z));
   const sinp = Math.min(1, Math.max(-1, 2 * (w * y - z * x)));
@@ -146,7 +152,7 @@ function quatToEuler(q: { x: number; y: number; z: number; w: number }): { rx: n
 }
 
 /** 采样帧解出的可渲染状态（位置/旋转/速度 + 完整离散状态） */
-interface SampledState {
+export interface SampledState {
   x: number;
   y: number;
   z: number;
@@ -164,8 +170,8 @@ interface SampledState {
   vehicleHealth: number;
 }
 
-/** 按播放时间取插值帧（帧序保证前后一致性；超出范围 clamp 到边界帧） */
-function sampleAt(data: ReplayData, playTime: number): SampledState | null {
+/** 按播放时间取插值帧（帧序保证前后一致性；超出范围 clamp 到边界帧）。（challenge 复用） */
+export function sampleAt(data: ReplayData, playTime: number): SampledState | null {
   const { header, frames } = data;
   if (header.frameCount === 0) return null;
   const interval = Math.max(1, header.frameIntervalMs);
@@ -316,6 +322,10 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     player.sendClientMessage(COLOR_ERROR, "你已在播放回放中，先 /rp stop");
     return false;
   }
+  if (isInRace(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "比赛中不能播放回放（世界隔离）");
+    return false;
+  }
   const replay = await prisma.replay.findFirst({
     where: { id: replayId, deletedAt: null },
   });
@@ -333,7 +343,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
   }
 
   const count = Math.min(5, Math.max(1, opts?.npcCount ?? 1));
-  const worldId = nextReplayWorldId++;
+  const worldId = allocReplayWorld();
   const ghosts: Ghost[] = [];
   const duration = data.header.frameCount * data.header.frameIntervalMs;
   const staggerMs = count > 1 ? duration / count : 0;

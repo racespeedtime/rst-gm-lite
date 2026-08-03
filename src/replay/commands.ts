@@ -4,8 +4,9 @@ import { isPlayerLocked } from "@/core/interaction";
 import { isInRace } from "@/race/room";
 import { startRecording, stopRecording, isRecording } from "./recorder";
 import { controlReplay, getReplaySession } from "./playback";
+import { isInChallenge, cleanupChallenge } from "./challenge";
 import { openReplayMenu } from "./menu";
-import { COLOR_ERROR, COLOR_INFO } from "@/utils/colors";
+import { COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
 
 /**
  * 回放命令：
@@ -35,6 +36,10 @@ export function initReplayCommands(): void {
       // 比赛中自动录制由比赛系统触发，手动录制主要用于赛车系统外（漂移等）
       if (isInRace(player.id)) {
         player.sendClientMessage(COLOR_ERROR, "比赛中已自动录制，无需手动 /rec start");
+        return next();
+      }
+      if (isInChallenge(player.id) || getReplaySession(player.id)) {
+        player.sendClientMessage(COLOR_ERROR, "影子挑战/回放中不能录制");
         return next();
       }
       void (async () => {
@@ -94,5 +99,21 @@ export function initReplayCommands(): void {
         );
         return next();
     }
+  });
+
+  PlayerEvent.onCommandText("challenge", ({ player, subcommand, next }) => {
+    if (!guard(player, next)) return;
+    const arg = subcommand[0] ?? "help";
+    if (arg === "stop") {
+      if (!isInChallenge(player.id)) {
+        player.sendClientMessage(COLOR_ERROR, "你不在影子挑战中");
+        return next();
+      }
+      cleanupChallenge(player.id);
+      player.sendClientMessage(COLOR_SUCCESS, "影子挑战已退出");
+      return next();
+    }
+    player.sendClientMessage(COLOR_INFO, "用法: /challenge stop 退出影子挑战（入口在赛道详情）");
+    return next();
   });
 }
