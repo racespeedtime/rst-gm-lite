@@ -792,7 +792,11 @@ function checkRoomState(room: RaceRoom): void {
 /** 离开比赛 */
 export function leaveRace(player: Player): void {
   const pr = playerRaces.get(player.id);
-  if (!pr) return;
+  if (!pr) {
+    // 不在比赛中：明确提示，避免 /r l 零反馈
+    player.sendClientMessage(COLOR_RACE, "[赛车] 你不在比赛中");
+    return;
+  }
   const room = rooms.get(pr.roomId);
   if (room) {
     room.members.delete(player.id);
@@ -813,6 +817,8 @@ export function leaveRace(player: Player): void {
     }
     checkRoomState(room);
   }
+  // 离开者自己的反馈
+  player.sendClientMessage(COLOR_RACE, "[赛车] 你已离开比赛房间");
   RaceCheckpoint.disable(player);
   clearRaceMapIcons(player); // 离开：清比赛小地图图标
   playerRaces.delete(player.id);
