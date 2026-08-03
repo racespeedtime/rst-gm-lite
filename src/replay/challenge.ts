@@ -9,6 +9,7 @@ import {
   RaceCpEvent,
   Vehicle,
 } from "@infernus/core";
+import { InCarSync, IncomingBitStream } from "@infernus/raknet";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -18,7 +19,16 @@ import { getDefaultRaceModel } from "@/race/vehicle";
 import { setIntervalSafe, clearIntervalSafe, setTimeoutSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import type { ReplayData } from "./format";
-import { sampleAt, allocReplayWorld, freeReplayWorld, allocReplayNpc, loadReplayData, getReplaySession } from "./playback";
+import {
+  sampleAt,
+  allocReplayWorld,
+  freeReplayWorld,
+  allocReplayNpc,
+  loadReplayData,
+  getReplaySession,
+  registerReplayNpcForReplay,
+  unregisterReplayNpcForReplay,
+} from "./playback";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR } from "@/utils/colors";
 
@@ -34,6 +44,12 @@ interface ChallengeGhost {
   label: Dynamic3DTextLabel;
   /** 影子播放时间（毫秒，从 0 起跑，播完 clamp 在终点） */
   playTime: number;
+  /** NPC playerId（emulate 的发送者；缓存避免每帧 getPlayer） */
+  npcPlayerId: number;
+  /** 上次 emulate 发包时间（30Hz 节流） */
+  lastEmulateAt: number;
+  /** emulate/send 失败是否已警告过（一次性防刷屏） */
+  warnedEmulateFail: boolean;
 }
 
 export interface ChallengeSession {
@@ -75,6 +91,7 @@ export function cleanupChallenge(playerId: number): void {
   challenges.delete(playerId);
   if (ch.timer) clearIntervalSafe(ch.timer);
   try {
+    unregisterReplayNpcForReplay(ch.ghost.npcPlayerId); // 注销屏蔽（影子销毁后不再有 sync 包）
     ch.ghost.label.destroy();
     ch.ghost.npc.destroy();
     ch.ghost.vehicle.destroy();
@@ -101,18 +118,54 @@ export function destroyAllChallenges(): void {
 }
 
 /** 渲染影子到当前播放时间（帧序一致；播完 clamp 终点）
- * 速度：录制存多少赋多少（getVelocity 即真实速度），并同步车辆朝向 */
+ * emulate 驱动（与回放一致）：构造 DriverSync 包模拟影子 NPC 传入 + 发给
+ * 挑战者——客户端本地物理驱动，影子速度/朝向真实平滑。
+ * 30Hz 节流；血量由 emulate 的 vehicleHealth 处理。 */
 function renderGhost(ch: ChallengeSession): void {
   const s = sampleAt(ch.data, ch.ghost.playTime);
   if (!s) return;
   try {
-    ch.ghost.npc.setVehiclePos(s.x, s.y, s.z, true);
-    ch.ghost.npc.setVehicleRot(s.rx, s.ry, s.rz, true);
-    ch.ghost.npc.setVelocity(s.vx, s.vy, s.vz);
-    // 车辆实体朝向同步（rz=yaw）
-    ch.ghost.vehicle.setZAngle(s.rz);
-  } catch {
-    /* 实体失效由清理兜底 */
+    // 30Hz 发包节流
+    const now = Date.now();
+    if (now - ch.ghost.lastEmulateAt < 33) return;
+    ch.ghost.lastEmulateAt = now;
+    const bs = new IncomingBitStream();
+    try {
+      const sync = new InCarSync(bs);
+      sync.writeSync({
+        vehicleId: ch.ghost.vehicle.id,
+        lrKey: s.lrKey,
+        udKey: s.udKey,
+        keys: s.keys,
+        quaternion: [s.qx, s.qy, s.qz, s.qw],
+        position: [s.x, s.y, s.z],
+        velocity: [s.vx, s.vy, s.vz],
+        vehicleHealth: s.vehicleHealth,
+        playerHealth: 100,
+        armour: 0,
+        additionalKey: s.additionalKey,
+        weaponId: 0,
+        sirenState: s.sirenState,
+        landingGearState: s.landingGearState,
+        trailerId: s.trailerId,
+        trainSpeed: s.trainSpeed,
+      });
+      bs.emulateIncomingPacket(ch.ghost.npcPlayerId);
+      // 发给能看到影子 NPC 车辆 stream 的玩家（独立挑战世界只有挑战者）
+      // ——sendPacketToPlayerStream(players, player) 的第二参是 stream 目标
+      const shadow = Player.getInstance(ch.ghost.npcPlayerId);
+      if (shadow) {
+        bs.sendPacketToPlayerStream(Player.getInstances(), shadow);
+      }
+    } finally {
+      bs.delete();
+    }
+  } catch (e) {
+    // 一次性 warn 防刷屏；实体失效由清理兜底
+    if (!ch.ghost.warnedEmulateFail) {
+      ch.ghost.warnedEmulateFail = true;
+      logger.warn(`[replay] 挑战影子 emulate/send 失败（仅提示一次）`, e);
+    }
   }
 }
 
@@ -334,8 +387,12 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
       worldId,
       charset: DEFAULT_CHARSET,
     });
+    const shadowPlayer = npc.getPlayer();
     label.create();
-    ghost = { npc, vehicle, label, playTime: 0 };
+    // 登记影子 NPC：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
+    // 防的是 NPC 自身/残留 sync 与模拟广播冲突）
+    registerReplayNpcForReplay(shadowPlayer.id);
+    ghost = { npc, vehicle, label, playTime: 0, npcPlayerId: shadowPlayer.id, lastEmulateAt: 0, warnedEmulateFail: false };
   } catch (e) {
     logger.error(`[replay] 创建挑战影子失败`, e);
     player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足或创建失败");

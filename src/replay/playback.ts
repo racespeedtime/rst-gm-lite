@@ -48,6 +48,15 @@ function unregisterReplayNpc(playerId: number): void {
   replayNpcIds.delete(playerId);
 }
 
+/** 供 challenge 登记/注销其影子 NPC（复用同一屏蔽集合与清理逻辑） */
+export function registerReplayNpcForReplay(playerId: number): void {
+  registerReplayNpc(playerId);
+}
+
+export function unregisterReplayNpcForReplay(playerId: number): void {
+  unregisterReplayNpc(playerId);
+}
+
 /** 回放世界起始 id（避开公共大世界 0、战局 1..n、比赛 5000+；挑战共用） */
 const REPLAY_WORLD_BASE = 6000;
 let nextReplayWorldId = REPLAY_WORLD_BASE;
@@ -84,8 +93,6 @@ interface Ghost {
   staggerMs: number;
   /** 当前车辆模型（帧车型变化时重建） */
   model: number;
-  /** 上次注入的按键状态（变化检测，防每帧 setKeys） */
-  lastKeys: number;
   /** NPC playerId（emulate 的发送者；缓存避免每帧 getPlayer） */
   npcPlayerId: number;
   /** 上次 emulate 发包时间（30Hz 节流） */
@@ -245,49 +252,9 @@ function destroyObserverTds(session: ReplaySession, playerId: number): void {
   session.tds.delete(playerId);
 }
 
-/**
- * GTAQuat → 欧拉角（度），[0,360)。忠实移植 open.mp SDK 的 GTAQuat::ToEuler
- * （Server/.../SDK/include/gtaquat.hpp，IllidanS4 公式）：
- * - 录制端 GetVehicleRotationQuat 返回的就是 GTAQuat（w,x,y,z）约定
- * - NPC_SetVehicleRot 接收欧拉角 Vector3，内部经 GTAQuat(Vector3 度) 构造回四元数
- * - 所以回放必须用 GTAQuat::ToEuler 的精确逆运算，否则换算出的朝向是错的
- *   （glm 标准 ZYX 公式 ≠ GTAQuat 约定：本实现曾用通用公式导致车头乱摆）
- * 特殊约定：rx=asin(2*y*z−2*x*w)，ry/rz 均带负号，gimbal lock 分支，分量归一到 [0,360)
- */
-export function quatToEuler(q: {
-  x: number;
-  y: number;
-  z: number;
-  w: number;
-}): { rx: number; ry: number; rz: number } {
-  const EPSILON = 0.00000202655792236328125;
-  const clamp = (v: number): number => Math.max(-1, Math.min(1, v));
-  const deg = (r: number): number => (r * 180) / Math.PI;
-  const mod360 = (v: number): number => ((v % 360) + 360) % 360;
-  const atan2Deg = (y: number, x: number): number => deg(Math.atan2(y, x));
-
-  const { x, y, z, w } = q;
-  const temp = 2 * y * z - 2 * x * w;
-  let rx: number;
-  let ry: number;
-  let rz: number;
-  if (temp >= 1 - EPSILON) {
-    rx = 90;
-    ry = -atan2Deg(clamp(y), clamp(w));
-    rz = -atan2Deg(clamp(z), clamp(w));
-  } else if (-temp >= 1 - EPSILON) {
-    rx = -90;
-    ry = -atan2Deg(clamp(y), clamp(w));
-    rz = -atan2Deg(clamp(z), clamp(w));
-  } else {
-    rx = deg(Math.asin(clamp(temp)));
-    ry = -atan2Deg(clamp(x * z + y * w), clamp(0.5 - x * x - y * y));
-    rz = -atan2Deg(clamp(x * y + z * w), clamp(0.5 - x * x - z * z));
-  }
-  return { rx: mod360(rx), ry: mod360(ry), rz: mod360(rz) };
-}
-
-/** 采样帧解出的可渲染状态（位置/四元数/旋转/速度 + 完整离散状态） */
+/** 采样帧解出的可渲染状态（位置/四元数/速度 + 完整离散状态）。
+ *  emulate 驱动直接用四元数（写进 DriverSync 包），无需欧拉角换算
+ * （旧摆位驱动 setVehicleRot 需要欧拉的 quatToEuler 已随 challenge 换 emulate 一并移除） */
 export interface SampledState {
   x: number;
   y: number;
@@ -296,9 +263,6 @@ export interface SampledState {
   qy: number;
   qz: number;
   qw: number;
-  rx: number;
-  ry: number;
-  rz: number;
   vx: number;
   vy: number;
   vz: number;
@@ -329,7 +293,6 @@ export function sampleAt(data: ReplayData, playTime: number): SampledState | nul
   const t = Math.min(maxTime, Math.max(0, playTime));
   const idx = Math.floor(t / interval);
   const pick = (f: ReplayFrame): SampledState => {
-    const e = quatToEuler({ x: f.qx, y: f.qy, z: f.qz, w: f.qw });
     return {
       x: f.x,
       y: f.y,
@@ -338,9 +301,6 @@ export function sampleAt(data: ReplayData, playTime: number): SampledState | nul
       qy: f.qy,
       qz: f.qz,
       qw: f.qw,
-      rx: e.rx,
-      ry: e.ry,
-      rz: e.rz,
       vx: f.vx,
       vy: f.vy,
       vz: f.vz,
@@ -661,7 +621,6 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         playTime: i * staggerMs,
         staggerMs,
         model: data.header.vehicleModelId,
-        lastKeys: -1,
         npcPlayerId: npcPlayer.id,
         lastEmulateAt: 0,
         warnedEmulateFail: false,
