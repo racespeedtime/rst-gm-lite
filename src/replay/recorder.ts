@@ -294,9 +294,11 @@ export async function stopRecording(
   sessions.delete(playerId);
 
   const player = Player.getInstance(playerId);
-  // 兜底：最后采样太旧（RakNet 中断/玩家下车）→ 补一帧当前车辆状态，保证结尾有帧
-  const now = Date.now();
-  if (player && player.isConnected() && now - session.lastSampleAt > FALLBACK_GAP_MS) {
+  // 停止瞬间无条件补一帧当前车辆状态：保证尾帧 = 录制结束位置。
+  // 原条件（距上次采样 > 兜底间隔才补）会漏补——最后一段采样间隔较短时
+  // 尾帧停留在最后一次采样的旧位置，回放终点与结束位置不一致（ghost 停在
+  // 录制中途的位置）。停止帧是播放终点的锚点，必须无条件落盘。
+  if (player && player.isConnected()) {
     const f = captureVehicleFrame(player, session);
     if (f) sample(session, f);
   }
