@@ -183,21 +183,23 @@ export function createNetstat(player: Player): NetstatState {
 /** 刷新网络信息文本（速率 / ping 分级变色 / 丢包分级变色） */
 export function updateNetstat(state: NetstatState, player: Player): void {
   const { tds } = state;
-  // 字节数增量 /1024 → KB/s；消息数增量为计数，不换算（直接显示，避免 pkt/s 被 ÷1024 损坏）
+  // 与原版 updatePlayerNetWorkState 算法一致：差值 /1024 → KB/s（%.2f 两位小数），
+  // 消息数差值 → pkt/s（%i 整数，不换算）
   const bytesSent = (NetStats.getBytesSent(player) - state.lastBytesSent) / 1024;
   const msgSent = NetStats.getMessagesSent(player) - state.lastMessagesSent;
-  tds[0].setString(`${bytesSent.toFixed(1)}KB/s ${msgSent.toFixed(1)}pkt/s`);
+  tds[0].setString(`${bytesSent.toFixed(2)}KB/s ${Math.round(msgSent)}pkt/s`);
 
   const bytesRec = (NetStats.getBytesReceived(player) - state.lastBytesRec) / 1024;
   const msgRec = NetStats.getMessagesReceived(player) - state.lastMessagesRec;
-  tds[2].setString(`${bytesRec.toFixed(1)}KB/s ${msgRec.toFixed(1)}pkt/s`);
+  tds[2].setString(`${bytesRec.toFixed(2)}KB/s ${Math.round(msgRec)}pkt/s`);
 
   const ping = player.getPing();
   // tds[7] 是 chit 图标、tds[8] 是 "0ms" 数字：变色应作用在数字上
   tds[8].setColor(ping <= 80 ? GREEN : ping <= 130 ? YELLOW : RED);
   tds[8].setString(`${ping}ms`);
 
-  const loss = Math.floor(NetStats.getPacketLossPercent(player));
+  // loss 取整对齐原版 %.0f（四舍五入）；分级：<1 白 / 1-5 黄 / >5 红（黄档为增强）
+  const loss = Math.round(NetStats.getPacketLossPercent(player));
   tds[9].setString(`${loss}%`);
   tds[9].setColor(loss < 1 ? WHITE : loss <= 5 ? YELLOW : RED);
   tds[9].show(player);
