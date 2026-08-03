@@ -111,11 +111,28 @@ function ghostCpProgress(ch: ChallengeSession): number {
   return s ? Math.max(0, Math.min(ch.totalCp, s.cpProgress)) : 0;
 }
 
+/** 影子挑战超时宽限：影子播完后额外给玩家的时间（未完成自动结束，覆盖跑一半/挂机/没跑） */
+const CHALLENGE_GRACE_MS = 60_000;
+
 /** 60fps 推进影子（玩家自己动，影子按录制时间推进） */
 function tickChallenge(ch: ChallengeSession): void {
   if (ch.finished) return;
+  // 会话已被清理（中途 stop/掉线）→ 停掉定时器，防空转泄漏
+  if (!challenges.has(ch.playerId)) {
+    if (ch.timer) clearIntervalSafe(ch.timer);
+    return;
+  }
   ch.tickMs += 16;
   const dur = ch.data.header.frameCount * ch.data.header.frameIntervalMs;
+  // 影子播完 + 宽限后玩家未完成 → 自动结束（不需要 /challenge stop）
+  if (ch.tickMs > dur + CHALLENGE_GRACE_MS) {
+    const p = Player.getInstance(ch.playerId);
+    if (p && p.isConnected()) {
+      p.sendClientMessage(COLOR_RACE, "[影子] 影子已到达终点，挑战超时结束（可再次挑战）");
+    }
+    cleanupChallenge(ch.playerId);
+    return;
+  }
   ch.ghost.playTime = Math.min(dur, ch.ghost.playTime + 16);
   renderGhost(ch);
 }
@@ -158,7 +175,7 @@ async function finishChallenge(player: Player, ch: ChallengeSession): Promise<vo
       : diff >= 500
         ? "影子赢了"
         : "势均力敌！";
-  const res = await showDialog(
+  await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.MSGBOX,
@@ -173,8 +190,7 @@ async function finishChallenge(player: Player, ch: ChallengeSession): Promise<vo
       button1: "确定",
     }),
   );
-  void res;
-  // 结算后退出挑战（回放记录已完成）
+  // 结算后自动退出挑战（跑完自动结束；玩家可再选回放继续挑战）
   const owner = Player.getInstance(ch.playerId);
   if (owner && owner.isConnected()) {
     owner.sendClientMessage(COLOR_SUCCESS, "影子挑战结束，可再选回放继续挑战");
@@ -292,24 +308,6 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     tickMs: 0,
   };
   challenges.set(player.id, ch);
-  // 发车倒计时 3 秒（对齐比赛：~y~N + 音效 1056；倒计时期间 ghost 停在起点、不计玩家用时）。
-  // 倒计时结束才启动 ghost 推进定时器（登记制）
-  let cd = 3;
-  const countdown = (): void => {
-    if (cd <= 0) {
-      const go = new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
-      go.forPlayer(player);
-      player.playSound(1057);
-      ch.timer = setIntervalSafe(() => tickChallenge(ch), 16);
-      return;
-    }
-    const gt = new GameText(`~y~${cd}`, 850, 3);
-    gt.forPlayer(player);
-    player.playSound(1056);
-    cd--;
-    setTimeoutSafe(countdown, 1000);
-  };
-  countdown();
 
   // 玩家放入（有爱车则用（模型不符也直接用——挑战自由），无则刷标准车型）
   const owned = getOwnedVehicle(player.id);
@@ -337,7 +335,34 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
   // 第一个 CP 箭头（指向第二个）
   const nxt2 = ch.cps[1];
   RaceCheckpoint.set(player, 0, ch.cps[0].x, ch.cps[0].y, ch.cps[0].z, nxt2.x, nxt2.y, nxt2.z, ch.cps[0].size);
-  player.sendClientMessage(COLOR_SUCCESS, `影子挑战开始！目标 ${replay.raceName ?? "该赛道"}，追上影子 /challenge stop 退出`);
+  player.sendClientMessage(COLOR_SUCCESS, `影子挑战开始！目标 ${replay.raceName ?? "该赛道"}，跑完自动结算（中途 /challenge stop 可退出）`);
+
+  // 发车倒计时 3 秒（对齐比赛：~y~N + 音效 1056；倒计时期间 ghost 停在起点、不计玩家用时）。
+  // 倒计时结束才启动 ghost 推进定时器（登记制）。
+  // 挑战自动结束路径：跑完（过终点）结算 / 掉线清理 / 超时（影子播完 + 宽限未完成）。
+  let cd = 3;
+  const countdown = (): void => {
+    // 挑战已被清理（中途 stop/掉线）→ 停倒计时，不再启动 ghost 定时器（防泄漏）
+    if (!challenges.has(player.id)) return;
+    if (!player.isConnected()) {
+      cleanupChallenge(player.id);
+      return;
+    }
+    if (cd <= 0) {
+      if (!challenges.has(player.id)) return; // 双保险
+      const go = new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
+      go.forPlayer(player);
+      player.playSound(1057);
+      ch.timer = setIntervalSafe(() => tickChallenge(ch), 16);
+      return;
+    }
+    const gt = new GameText(`~y~${cd}`, 850, 3);
+    gt.forPlayer(player);
+    player.playSound(1056);
+    cd--;
+    setTimeoutSafe(countdown, 1000);
+  };
+  countdown();
   return true;
 }
 
