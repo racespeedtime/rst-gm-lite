@@ -33,6 +33,12 @@ import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR, COLOR_WHITE } from "@/utils/col
 const END_GRACE_MS = 20_000;
 /** UUID 格式（/r s 按 id 查询前校验，避免非法字符串触发 uuid 类型错误） */
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+/** 比赛小地图图标索引：下一个 CP / 下下个 CP（避开大世界 map_icon 的 0-69） */
+const RACE_MAP_ICON_NEXT = 70;
+const RACE_MAP_ICON_NEXT2 = 71;
+/** 比赛小地图图标类型：56 = 赛车 CP 预览图标（原版 RACE_MAP_ICON_TYPE），55 = 普通检查点 */
+const RACE_MAP_ICON_TYPE_NEXT = 56;
+const RACE_MAP_ICON_TYPE_NEXT2 = 55;
 /** 比赛房间独立世界起始 id（避开公共大世界 0 与战局 1..n） */
 const RACE_WORLD_BASE = 5000;
 let nextRaceWorldId = RACE_WORLD_BASE;
@@ -474,34 +480,40 @@ function createRaceTd(player: Player, room: RaceRoom): void {
   room.raceTextTds.set(player.id, td);
 }
 
-/** 显示下一个检查点箭头（红色=指向下一个CP，黄色=终点CP） */
+/**
+ * 显示下一个检查点箭头（红色=指向下一个CP，黄色=终点CP）。
+ * 同时更新小地图双图标：下一个 CP（赛车图标 56，对齐原版 RACE_MAP_ICON_TYPE）
+ * + 下下个 CP（普通检查点图标 55，若有）——小地图提前预示两个点。
+ */
 function showNextCheckpoint(player: Player, cps: RaceRoom["cps"], cpIndex: number): void {
-  const nxt = cps[cpIndex + 1];
+  // 下一个 CP（nxt）与下下个 CP（nxt2，若有）
+  let nxt = cps[cpIndex + 1];
+  let nxt2 = nxt ? cps[cpIndex + 2] : undefined;
   if (!nxt) {
-    // 当前是最后一个 CP（还差圈）→ 回到第一个 CP 红箭头
-    const first = cps[0];
-    const second = cps[1];
-    if (second) {
-      RaceCheckpoint.set(
-        player,
-        0,
-        first.x,
-        first.y,
-        first.z,
-        second.x,
-        second.y,
-        second.z,
-        first.size,
-      );
-    }
-    return;
+    // 当前是最后一个 CP（还差圈）→ 回到第一个 CP（nxt2 = 第二个）
+    nxt = cps[0];
+    nxt2 = cps[1];
   }
-  const nxt2 = cps[cpIndex + 2];
+  if (!nxt) return;
   if (nxt2) {
     RaceCheckpoint.set(player, 0, nxt.x, nxt.y, nxt.z, nxt2.x, nxt2.y, nxt2.z, nxt.size);
   } else {
     RaceCheckpoint.set(player, 1, nxt.x, nxt.y, nxt.z, nxt.x, nxt.y, nxt.z, nxt.size);
   }
+  // 小地图双图标（SetPlayerMapIcon 无 world 过滤，per-player 全局显示）
+  player.setMapIcon(RACE_MAP_ICON_NEXT, nxt.x, nxt.y, nxt.z, RACE_MAP_ICON_TYPE_NEXT, 0xffffffaa, 1);
+  if (nxt2) {
+    player.setMapIcon(RACE_MAP_ICON_NEXT2, nxt2.x, nxt2.y, nxt2.z, RACE_MAP_ICON_TYPE_NEXT2, 0xffffffaa, 1);
+  } else {
+    player.removeMapIcon(RACE_MAP_ICON_NEXT2); // 无下下个（终点）→ 只留一个图标
+  }
+}
+
+/** 清除比赛小地图图标（离开/结束/完成时，对齐原版 Race_HideCp 的 RemovePlayerMapIcon） */
+function clearRaceMapIcons(player: Player): void {
+  if (!player.isConnected()) return;
+  player.removeMapIcon(RACE_MAP_ICON_NEXT);
+  player.removeMapIcon(RACE_MAP_ICON_NEXT2);
 }
 
 /** 销毁房间所有计时 TD（防未创建/已失效的 TD destroy 抛异常） */
@@ -574,6 +586,7 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   if (!room) return;
   pr.finished = true;
   RaceCheckpoint.disable(player);
+  clearRaceMapIcons(player); // 完成：清比赛小地图图标
   const time = Date.now() - pr.startTime;
   room.results.push({ playerId: player.id, time });
   room.resultIndex.set(player.id, time);
@@ -723,6 +736,7 @@ function endRoom(room: RaceRoom): void {
 
   for (const m of room.members.values()) {
     RaceCheckpoint.disable(m);
+    clearRaceMapIcons(m); // 比赛结束：清每个成员的小地图图标
     // 脚本车辆（cveh）在比赛结束时统一清理，防残留比赛世界成为幽灵车
     cleanupScriptVehicle(m.id);
     const mp = playerRaces.get(m.id);
@@ -787,6 +801,7 @@ export function leaveRace(player: Player): void {
     checkRoomState(room);
   }
   RaceCheckpoint.disable(player);
+  clearRaceMapIcons(player); // 离开：清比赛小地图图标
   playerRaces.delete(player.id);
   // 脚本车辆（cveh）在离开比赛时销毁，防残留
   cleanupScriptVehicle(player.id);
