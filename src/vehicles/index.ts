@@ -11,6 +11,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { cleanupAttire, applyVehiclePreset } from "@/attire";
+import { nextSortIndex } from "@/utils/sort";
 import { isInRace } from "@/race/room";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
@@ -109,14 +110,8 @@ export async function spawnVehicle(player: Player, modelId: number): Promise<boo
     veh.linkToInterior(player.getInterior());
     veh.addComponent(1010); // 氮气
     // 应用完整预设外观（颜色/paintjob/改装件 + 挂件），默认预设挂件也自动生效
+    // （改装店装的 mod 已存进默认预设 mod_components，重刷车随预设一起应用）
     await applyVehiclePreset(veh, uv.defaultPresetId, player.id);
-    // 重新应用改装店改件（onVehicleMod 存储的 mod_components，重刷车不丢失）
-    if (uv.modComponents) {
-      for (const c of uv.modComponents.split(" ")) {
-        const id = Number(c);
-        if (Number.isInteger(id) && id > 0) veh.addComponent(id);
-      }
-    }
     // 爱车 description 绑定 3D 文本（有描述才挂，跟随车辆移动）
     // 注意：附着车辆时 x/y/z 是相对车辆的偏移（对齐原版 CreateDynamic3DTextLabel
     // 附车时传 0,0,0），传绝对坐标会导致标签出现在世界原点/错位
@@ -197,8 +192,10 @@ export function onPlayerDisconnectVehicle(player: Player): void {
  * /c lock 锁车 · /c chepai 文字 · /c kick 踢乘客
  */
 export function initVehicleCommands(): void {
-  // 改装店装件存储：OnVehicleMod 在改装店装上 mod 时触发 → 存到该玩家的
-  // UserVehicle.mod_components（仅自己的车），重刷车时重新应用
+  // 改装店装件存储：OnVehicleMod 在改装店装上 mod 时触发 → 存到该爱车的
+  // 当前默认预设（vehicle_preset.mod_components，仅自己的车）。
+  // 无默认预设时懒创建一个并设为默认（重刷车 applyVehiclePreset 应用预设
+  // 时自然带上改装件，无需额外存储）
   VehicleEvent.onMod(({ player, vehicle, componentId, next }) => {
     if (player.isNpc()) return next();
     // 仅自己的爱车：改装店能开进别人的车，但 mod 归属按车主存储
@@ -211,11 +208,33 @@ export function initVehicleCommands(): void {
         const uv = await prisma.userVehicle.findUnique({
           where: { userId_modelId: { userId: auth.userId, modelId } },
         });
-        const list = (uv?.modComponents ? uv.modComponents.split(" ") : []).filter(Boolean);
-        if (!list.includes(String(componentId))) {
-          list.push(String(componentId));
+        // 目标预设：爱车默认预设；无则懒创建并设为默认
+        let presetId = uv?.defaultPresetId ?? null;
+        if (!presetId) {
+          const presets = await prisma.vehiclePreset.findMany({
+            where: { userId: auth.userId, modelId, deletedAt: null },
+            select: { index: true },
+          });
+          const created = await prisma.vehiclePreset.create({
+            data: {
+              userId: auth.userId,
+              modelId,
+              index: nextSortIndex(presets),
+              name: null,
+            },
+          });
+          presetId = created.id;
           await prisma.userVehicle.update({
             where: { userId_modelId: { userId: auth.userId, modelId } },
+            data: { defaultPresetId: created.id },
+          });
+        }
+        const preset = await prisma.vehiclePreset.findUnique({ where: { id: presetId } });
+        const list = (preset?.modComponents ? preset.modComponents.split(" ") : []).filter(Boolean);
+        if (!list.includes(String(componentId))) {
+          list.push(String(componentId));
+          await prisma.vehiclePreset.update({
+            where: { id: presetId },
             data: { modComponents: list.join(" ") },
           });
         }

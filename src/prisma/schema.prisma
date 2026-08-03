@@ -365,7 +365,6 @@ model UserVehicle {
   isDefault       Boolean             @default(false) @map("is_default")
   description     String?             @db.VarChar(255)
   plateNumber     String?             @map("plate_number") @db.VarChar(255)
-  modComponents   String?             @map("mod_components") @db.VarChar(255)
   defaultPresetId String?             @map("default_preset_id") @db.Uuid
   createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz(6)
