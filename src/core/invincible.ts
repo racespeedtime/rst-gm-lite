@@ -59,6 +59,8 @@ export function initInvincible(): void {
   PlayerEvent.onTakeDamage(({ player, next }) => {
     if (invincibleSet.has(player.id)) {
       fullHealthAndArmor(player);
+      next();
+      return false;
     }
     return next();
   });
