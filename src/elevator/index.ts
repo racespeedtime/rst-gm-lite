@@ -587,12 +587,25 @@ export function initElevators(): void {
     return next();
   });
 
-  for (const cfg of ELEVATOR_CONFIGS) {
-    instances.set(cfg.id, createInstance(cfg));
-  }
-  // 热重载兜底：给已在线玩家补 removeBuilding
-  for (const p of Player.getInstances()) {
-    if (!p.isNpc()) applyRemoveBuildings(p);
-  }
-  logger.info(`[elevator] 已初始化 ${instances.size} 部电梯`);
+  // 电梯实体创建必须延后到 GameMode.onInit：CreateDynamicObject/CreateDynamic3DTextLabel/
+  // MoveDynamicObject 等 streamer 原生在服务器加载地图（Loaded Map）后才注册，
+  // 模块导入期直接创建会抛 "native function: CreateDynamicObject not found"——
+  // 房屋 obj 在 onInit 里创建即零失败，电梯若在模块作用域创建则刷屏报错。
+  // 事件注册（onKeyStateChange/onMoved/onExit 等）不调原生，留在模块导入期无碍。
+  GameMode.onInit(({ next }) => {
+    for (const cfg of ELEVATOR_CONFIGS) {
+      try {
+        instances.set(cfg.id, createInstance(cfg));
+      } catch (e) {
+        // 单部失败不阻断其余电梯（记录日志，onExit 兜底清理已创建的实例）
+        logger.error(`[elevator] 初始化 ${cfg.id} 失败`, e);
+      }
+    }
+    // 热重载兜底：给已在线玩家补 removeBuilding
+    for (const p of Player.getInstances()) {
+      if (!p.isNpc()) applyRemoveBuildings(p);
+    }
+    logger.info(`[elevator] 已初始化 ${instances.size} 部电梯`);
+    return next();
+  });
 }
