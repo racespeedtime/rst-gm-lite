@@ -183,9 +183,16 @@ function captureVehicleFrame(player: Player, session?: RecordingSession): Replay
     minute,
     weather: player.getWeather(),
     vehicleHealth: veh.getHealth().health,
-    // 兜底采样没有 DriverSync 包 → 无法拿到按键状态，0（无按键）；
+    // 兜底采样没有 DriverSync 包 → 无按键/无附加状态（0/false）；
     // 正常录制以 RakNet 帧为主，兜底仅补帧间隙
     keys: 0,
+    lrKey: 0,
+    udKey: 0,
+    additionalKey: 0,
+    landingGearState: false,
+    sirenState: false,
+    trailerId: 0,
+    trainSpeed: 0,
   };
 }
 
@@ -470,9 +477,17 @@ export function initRecorder(): void {
                 minute: session.cacheMinute,
                 weather: session.cacheWeather,
                 vehicleHealth: session.cacheHealth,
-                // DriverSync 按键状态（氮气=SPRINT 位）：回放按帧注入 NPC 按键，
-                // 让氮气/转向在对应时刻喷发/对应
+                // DriverSync 完整字段（emulate 回放原样写回）：
+                // keys=氮气/转向等按键位集；lrKey/udKey 方向；additionalKey 附加键；
+                // landingGearState 起落架；sirenState 警笛；trailerId 拖挂；trainSpeed 火车速度
                 keys: sync.keys,
+                lrKey: sync.lrKey,
+                udKey: sync.udKey,
+                additionalKey: sync.additionalKey,
+                landingGearState: !!sync.landingGearState,
+                sirenState: !!sync.sirenState,
+                trailerId: sync.trailerId ?? 0,
+                trainSpeed: sync.trainSpeed ?? 0,
               });
             }
           } catch (e) {

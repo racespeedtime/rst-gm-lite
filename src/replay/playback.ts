@@ -309,6 +309,13 @@ export interface SampledState {
   weather: number;
   vehicleHealth: number;
   keys: number;
+  lrKey: number;
+  udKey: number;
+  additionalKey: number;
+  landingGearState: boolean;
+  sirenState: boolean;
+  trailerId: number;
+  trainSpeed: number;
 }
 
 /** 按播放时间取插值帧（帧序保证前后一致性；超出范围 clamp 到边界帧）。（challenge 复用） */
@@ -344,6 +351,13 @@ export function sampleAt(data: ReplayData, playTime: number): SampledState | nul
       weather: f.weather,
       vehicleHealth: f.vehicleHealth,
       keys: f.keys,
+      lrKey: f.lrKey,
+      udKey: f.udKey,
+      additionalKey: f.additionalKey,
+      landingGearState: f.landingGearState,
+      sirenState: f.sirenState,
+      trailerId: f.trailerId,
+      trainSpeed: f.trainSpeed,
     };
   };
   if (idx >= lastIdx) {
@@ -392,11 +406,11 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
 
 /**
  * 渲染单个 ghost：构造 InCarSync（DriverSync）包 emulateIncomingPacket 模拟
- * 该 NPC 作为司机传入——服务器按真实司机处理车辆状态并广播给所有玩家，
- * 客户端物理驱动：位置/朝向由 sync 的 position/quaternion 广播，速度由
- * velocity（录制 SA 速度单位）广播 → 车速表/氮气按键（keys）全部真实平滑。
- * 不再用 setVehiclePos/setVehicleRot/setVelocity 硬摆位（会与广播冲突）。
- * 30Hz 节流（对齐 in_vehicle_sync_rate）；换车型（ensureGhostVehicle）仍保留。
+ * 该 NPC 作为司机传入——服务器按真实司机处理车辆状态；随后 bs.sendPacket
+ * 把该 DriverSync 包显式发给所有玩家（emulate 只进服务器处理、不会自动转发
+ * 给客户端，必须手动 send 才能让玩家看到/让客户端本地物理驱动）。
+ * 位置/朝向/速度/keys（氮气）/lrKey/udKey/起落架/警笛/拖挂/火车速度全部来自
+ * 录制帧，客户端物理驱动平滑。30Hz 节流（对齐 in_vehicle_sync_rate）。
  */
 function renderGhost(session: ReplaySession, ghost: Ghost): void {
   const s = sampleAt(session.data, ghost.playTime);
@@ -420,8 +434,8 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
       const sync = new InCarSync(bs);
       sync.writeSync({
         vehicleId: ghost.vehicle.id,
-        lrKey: 0,
-        udKey: 0,
+        lrKey: s.lrKey,
+        udKey: s.udKey,
         keys: s.keys, // SPRINT=氮气，客户端据此在对应时刻喷氮
         quaternion: [s.qx, s.qy, s.qz, s.qw],
         position: [s.x, s.y, s.z],
@@ -429,14 +443,20 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
         vehicleHealth: s.vehicleHealth,
         playerHealth: 100,
         armour: 0,
-        additionalKey: 0,
+        additionalKey: s.additionalKey,
         weaponId: 0,
-        sirenState: false,
-        landingGearState: false,
-        trailerId: 0,
-        trainSpeed: 0,
+        sirenState: s.sirenState,
+        landingGearState: s.landingGearState,
+        trailerId: s.trailerId,
+        trainSpeed: s.trainSpeed,
       });
+      // emulate 进服务器（按真实司机处理车辆状态），再显式 send 发给所有
+      // 玩家——玩家客户端本地物理驱动（车速表/氮气真实）。排除 NPC 自己
+      const npcPlayer = Player.getInstance(ghost.npcPlayerId);
       bs.emulateIncomingPacket(ghost.npcPlayerId);
+      if (npcPlayer) {
+        bs.sendPacketToPlayerStream(Player.getInstances(), npcPlayer);
+      }
     } finally {
       bs.delete(); // 释放 BitStream 原生句柄
     }

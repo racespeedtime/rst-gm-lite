@@ -39,14 +39,15 @@ export function initReplay(): void {
   // DriverSync 传入（emulate 的包不会进 onIncomingPacket 回调），但 NPC 自身/
   // 残留状态（putInVehicle/setVehiclePos immediate 等）可能发真实 sync，
   // 会与模拟广播冲突（位置/速度打架）——直接丢弃不交给游戏处理。
+  // Pawn.RakNet 修复版约定：return false(0) = 舍弃该包（不交给游戏/后续 handler）。
   // IPacket 是 samp.on 事件注册（与 PlayerEvent 同构），模块导入期注册即有效。
   try {
     IPacket(PacketIdList.DriverSync, ({ playerId, next }) => {
-      if (isReplayNpc(playerId)) return true; // 丢弃（不转发给游戏）
+      if (isReplayNpc(playerId)) return false; // 舍弃（不转发给游戏）
       return next();
     });
     IPacket(PacketIdList.OnFootSync, ({ playerId, next }) => {
-      if (isReplayNpc(playerId)) return true;
+      if (isReplayNpc(playerId)) return false;
       return next();
     });
   } catch (e) {

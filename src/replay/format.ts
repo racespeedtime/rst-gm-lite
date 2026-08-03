@@ -29,8 +29,11 @@ const MAGIC = "RSTREP01";
  * - v3 引入 header 自描述 frameBytes
  * - v4 帧尾部追加 keys(u16)——DriverSync 按键状态（氮气=SPRINT 位），
  *   回放时按帧注入 NPC 按键让氮气在对应时刻喷发。旧 v3/v2 文件照读（keys=0）
+ * - v5 再追加 lrKey/udKey/additionalKey/landingGearState/sirenState/
+ *   trailerId/trainSpeed——DriverSync 完整字段（emulate 回放需要原样写回），
+ *   旧 v4/v3/v2 文件照读（这些字段取 0/false）
  */
-export const FORMAT_VERSION = 4;
+export const FORMAT_VERSION = 5;
 
 /** 录制类型（recorder 写 header 用） */
 export const REPLAY_TYPE_GHOST = 0;
@@ -40,13 +43,15 @@ export const REPLAY_TYPE_RACE = 1;
 const FRAME_BYTES_V2 = 55;
 /** v4：帧 57B = v2 帧 + keys2（DriverSync 按键状态） */
 const FRAME_BYTES_V4 = FRAME_BYTES_V2 + 2;
+/** v5：帧 68B = v4 帧 + lrKey1 + udKey1 + additionalKey1 + landingGear1 + siren1 + trailerId2 + trainSpeed4 */
+const FRAME_BYTES_V5 = FRAME_BYTES_V4 + 11;
 /** v2：头 72B = magic8 + ver1 + type1 + interval2 + model4 + pos12 + quat16 + vel12 + count4 + dur4 + totalCp4 + bestMs4 */
 const HEADER_BYTES_V2 = 72;
 /** v3+：头 76B = v2 头 + frameBytes4（自描述，未来帧字段追加零破坏） */
 const HEADER_BYTES_V3 = HEADER_BYTES_V2 + 4;
 
-/** 当前帧字节数（v4） */
-export const FRAME_BYTES = FRAME_BYTES_V4;
+/** 当前帧字节数（v5） */
+export const FRAME_BYTES = FRAME_BYTES_V5;
 /** 当前头字节数（v3+ 头布局不变） */
 export const HEADER_BYTES = HEADER_BYTES_V3;
 
@@ -76,6 +81,14 @@ export interface ReplayFrame {
   vehicleHealth: number;
   /** DriverSync 按键状态（KeysEnum 位集；氮气=SPRINT 位，回放时按帧注入 NPC 按键） */
   keys: number;
+  /** DriverSync 完整字段（emulate 回放原样写回；旧文件默认 0/false） */
+  lrKey: number;
+  udKey: number;
+  additionalKey: number;
+  landingGearState: boolean;
+  sirenState: boolean;
+  trailerId: number;
+  trainSpeed: number;
 }
 
 export interface ReplayHeader {
@@ -158,7 +171,7 @@ export function encodeHeader(h: ReplayHeader): Buffer {
   return buf;
 }
 
-/** 编码单帧 → Buffer（当前帧布局 57B：v2 的 55B + keys u16） */
+/** 编码单帧 → Buffer（当前帧布局 68B：v2 的 55B + keys u16 + v5 追加字段） */
 export function encodeFrame(f: ReplayFrame): Buffer {
   const buf = Buffer.allocUnsafe(FRAME_BYTES);
   buf.writeFloatLE(V(f.x), 0);
@@ -178,7 +191,14 @@ export function encodeFrame(f: ReplayFrame): Buffer {
   // 天气 0-255：必须用 UInt8（writeInt8 范围 -128..127，weather>127 会抛 RangeError 导致录制丢失）
   buf.writeUInt8(U8(f.weather), 50);
   buf.writeFloatLE(V(f.vehicleHealth), 51);
-  buf.writeUInt16LE((f.keys | 0) & 0xffff, 55); // v4 追加：按键状态
+  buf.writeUInt16LE((f.keys | 0) & 0xffff, 55); // v4：按键状态
+  buf.writeUInt8(U8(f.lrKey), 57); // v5：左右方向键
+  buf.writeUInt8(U8(f.udKey), 58); // v5：上下方向键
+  buf.writeUInt8(U8(f.additionalKey), 59); // v5：附加键
+  buf.writeUInt8(f.landingGearState ? 1 : 0, 60); // v5：起落架
+  buf.writeUInt8(f.sirenState ? 1 : 0, 61); // v5：警笛
+  buf.writeUInt16LE((f.trailerId | 0) & 0xffff, 62); // v5：拖挂
+  buf.writeFloatLE(V(f.trainSpeed), 64); // v5：火车速度
   return buf;
 }
 
@@ -246,7 +266,8 @@ export function decodeFrame(buf: Buffer, index: number, frameBytes: number): Rep
   const o = index * frameBytes;
   if (o + frameBytes > buf.length) return null;
   // 帧字段均为尾部追加设计：旧字段固定在前部偏移（55B 内），
-  // v4 起 frameBytes≥57 时读取追加的 keys（旧 v2/v3 文件 frameBytes=55 → keys=0）
+  // v4 起 frameBytes≥57 读取 keys；v5 起 frameBytes≥68 读取剩余 sync 字段
+  // （旧文件这些字段取默认 0/false）
   return {
     x: buf.readFloatLE(o),
     y: buf.readFloatLE(o + 4),
@@ -265,6 +286,13 @@ export function decodeFrame(buf: Buffer, index: number, frameBytes: number): Rep
     weather: buf.readUInt8(o + 50),
     vehicleHealth: buf.readFloatLE(o + 51),
     keys: frameBytes >= FRAME_BYTES_V4 ? buf.readUInt16LE(o + 55) : 0,
+    lrKey: frameBytes >= FRAME_BYTES_V5 ? buf.readUInt8(o + 57) : 0,
+    udKey: frameBytes >= FRAME_BYTES_V5 ? buf.readUInt8(o + 58) : 0,
+    additionalKey: frameBytes >= FRAME_BYTES_V5 ? buf.readUInt8(o + 59) : 0,
+    landingGearState: frameBytes >= FRAME_BYTES_V5 ? buf.readUInt8(o + 60) === 1 : false,
+    sirenState: frameBytes >= FRAME_BYTES_V5 ? buf.readUInt8(o + 61) === 1 : false,
+    trailerId: frameBytes >= FRAME_BYTES_V5 ? buf.readUInt16LE(o + 62) : 0,
+    trainSpeed: frameBytes >= FRAME_BYTES_V5 ? buf.readFloatLE(o + 64) : 0,
   };
 }
 
@@ -310,5 +338,12 @@ export function lerpFrame(a: ReplayFrame, b: ReplayFrame, t: number): ReplayFram
     weather: t < 0.5 ? a.weather : b.weather,
     vehicleHealth: t < 0.5 ? a.vehicleHealth : b.vehicleHealth,
     keys: t < 0.5 ? a.keys : b.keys,
+    lrKey: t < 0.5 ? a.lrKey : b.lrKey,
+    udKey: t < 0.5 ? a.udKey : b.udKey,
+    additionalKey: t < 0.5 ? a.additionalKey : b.additionalKey,
+    landingGearState: t < 0.5 ? a.landingGearState : b.landingGearState,
+    sirenState: t < 0.5 ? a.sirenState : b.sirenState,
+    trailerId: t < 0.5 ? a.trailerId : b.trailerId,
+    trainSpeed: t < 0.5 ? a.trainSpeed : b.trainSpeed,
   };
 }
