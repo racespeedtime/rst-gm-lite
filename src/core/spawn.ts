@@ -179,7 +179,16 @@ export function initSpawnSystem(): void {
   // 否则 RANDOM 会再随机一次，出现两个不同出生点。
   PlayerEvent.onSpawn(({ player, next }) => {
     if (player.isNpc()) return next();
-    if (loginSpawned.delete(player.id)) return next(); // 登录首次出生已定位
+    // 登录首次出生已定位
+    if (loginSpawned.delete(player.id)) return next();
+    // 兜底：已认证但仍处于 spect（出生方式/进入世界对话框未完成）却触发了
+    // 出生（open.mp 默认出生/时序竞态）→ 维持 spect 隐藏（拉回不可见无实体），
+    // 等 spawnPlayer 正式出生时一并 toggleSpectating(false)
+    if (getAuthState(player.id) && player.isSpectating()) {
+      player.toggleSpectating(true);
+      return next();
+    }
+    // 正常死亡重生：按 spawnMode 自动定位（随机/上次位置）
     void respawnBySetting(player);
     return next();
   });

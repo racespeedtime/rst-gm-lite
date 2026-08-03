@@ -164,7 +164,17 @@ PlayerEvent.onConnect(({ player, next }) => {
   if (isNpc(player)) {
     return next();
   }
-  // 异步认证，不阻塞事件链
+  // 同步进入观战模式：open.mp 在连接后会立即触发默认出生（同步时序），
+  // 而认证/大厅流程是异步的（void handlePlayerConnect）——必须先在这条同步
+  // 路径隐藏玩家，否则玩家会在出生方式对话框期间被强制出生（实体出现在
+  // 虚空，spect 才设上，出现"被出生但 spect 没关"的经典错乱态）。
+  try {
+    player.toggleSpectating(true);
+  } catch {
+    // 玩家已失效等，忽略
+  }
+  // 异步认证，不阻塞事件链（handlePlayerConnect 内的 toggleSpectating(true)
+  // 保留作幂等确认）
   void handlePlayerConnect(player);
   return next();
 });
