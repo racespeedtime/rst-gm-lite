@@ -1,4 +1,4 @@
-import { GameMode, Player } from "@infernus/core";
+import { Player } from "@infernus/core";
 import { IPacket, PacketIdList, InCarSync } from "@infernus/raknet";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
@@ -58,6 +58,14 @@ export interface RecordingSession {
   cacheWeather: number;
   cacheHealth: number;
   cacheAt: number;
+  /** 诊断：RakNet DriverSync 拦截采到的帧数（与兜底帧分开计数，
+   *  停止时打印——0 说明拦截未触发） */
+  raknetFrames: number;
+  /** 诊断：拦截回调进入次数（含 readSync 失败/边界拦截等未采样的路径——
+   *  与 raknetFrames 对比可判断是"回调没触发"还是"回调在但采样失败"） */
+  interceptHits: number;
+  /** 诊断：最后一次 RakNet 拦截采样的时间（停止时打印，判断拦截是否"从头到尾都在"） */
+  lastRaknetAt: number;
 }
 
 const sessions = new Map<number, RecordingSession>();
@@ -241,8 +249,17 @@ export async function startRecording(
     cacheWeather: 0,
     cacheHealth: 1000,
     cacheAt: 0,
+    raknetFrames: 0,
+    interceptHits: 0,
+    lastRaknetAt: 0,
   };
   sessions.set(player.id, session);
+  // 诊断：录制开始快照——车内=否时 DriverSync 包不会产生（onfoot 是另一个包），
+  // 只剩兜底采样，帧数必然稀疏；世界用于核对边界检查
+  logger.info(
+    `[replay] 录制开始 type=${opts.type} player=${player.getName().name}(${player.id}) ` +
+      `车内=${player.isInAnyVehicle()} 世界=${player.getVirtualWorld()} 车型=${veh.getModel()}`,
+  );
   // 比赛录制：异步补个人最佳（回放 BEST TD 用），不阻塞开始
   if (opts.type === "race" && opts.raceId && auth) {
     void (async () => {
@@ -348,6 +365,18 @@ export async function stopRecording(
     if (player && player.isConnected() && !opts?.quiet) {
       player.sendClientMessage(COLOR_SUCCESS, `录制完成：${(durationMs / 1000).toFixed(1)}s / ${session.frames.length} 帧`);
     }
+    // 采样来源诊断（定位录制帧数少/0.1s 问题）：
+    // - interceptHits=0 → DriverSync 回调从未触发（插件未转发/包未到达）
+    // - interceptHits>0 但 raknetFrames=0 → 回调在但采样失败（readSync 抛错，
+    //   已单独打 error 日志）
+    // - raknetFrames>0 但总量少 → 玩家没在开车（DriverSync 只在司机位产生）
+    // - lastRaknetAt 距停止很远 → 录制中后期拦截中断
+    const elapsed = durationMs / 1000;
+    const lastHitAgo = session.lastRaknetAt > 0 ? ((Date.now() - session.lastRaknetAt) / 1000).toFixed(1) : "无";
+    logger.info(
+      `[replay] 录制落盘 ${fileName} ${elapsed.toFixed(1)}s/${session.frames.length}帧` +
+        `（RakNet=${session.raknetFrames} 拦截=${session.interceptHits} 兜底=${session.frames.length - session.raknetFrames} 最后拦截于${lastHitAgo}s前）`,
+    );
     return { id: created.id, fileName };
   } catch (e) {
     logger.error(`[replay] 写回放元数据失败`, e);
@@ -380,21 +409,26 @@ function fallbackSample(): void {
   }
 }
 
-/** 初始化录制（兜底定时器立即启动；RakNet 拦截注册延后到 GameMode.onInit——
- *  Pawn.RakNet 的 RegisterPacket 原生与 streamer 同理，模块导入期（Loaded Map 前）
- *  注册会静默失败：不抛错、无 warn，回调永不触发 → 录制只剩兜底采样（每 2s 一帧，
- *  6 秒仅 3 帧 ≈ 0.1s）。日志无 warn 不代表注册成功。 */
+/** 初始化录制：
+ * - IPacket 是 samp.on 事件注册（与 PlayerEvent 同构），模块导入期注册即有效，
+ *   与服务器初始化时序无关（此前误认为需延后到 onInit，已还原）
+ * - 兜底定时器随系统启动（RakNet 拦截失效/玩家静止不发 sync 包时补帧）
+ * - 采样来源诊断：RakNet 帧 / 兜底帧分别计数，停止录制时打印汇总——若 raknet=0
+ *   说明拦截未触发（插件未加载/包未到达），若 raknet 有值但帧数仍少则是
+ *   采样间隔/播放问题 */
 export function initRecorder(): void {
-  fallbackTimer = setIntervalSafe(fallbackSample, FALLBACK_INTERVAL_MS);
-  GameMode.onInit(({ next }) => {
-    try {
-      IPacket(PacketIdList.DriverSync, ({ playerId, bs, next }) => {
-        const session = sessions.get(playerId);
-        if (session) {
-          const player = Player.getInstance(playerId);
-          if (player && checkRecordingBoundary(session, player)) {
-            // 已触发自动停止：不采样（会话可能已被 stopRecording 移除）
-          } else {
+  try {
+    IPacket(PacketIdList.DriverSync, ({ playerId, bs, next }) => {
+      const session = sessions.get(playerId);
+      if (session) {
+        const player = Player.getInstance(playerId);
+        if (player && checkRecordingBoundary(session, player)) {
+          // 已触发自动停止：不采样（会话可能已被 stopRecording 移除）
+        } else {
+          // 诊断：拦截是否真正进入（回调触发即 +1）；采样失败单独记日志——
+          // 若回调在但 sample 不执行，就是 readSync 抛错
+          session.interceptHits++;
+          try {
             const sync = new InCarSync(bs).readSync();
             if (sync) {
               // Vector3/Vector4 均为 [x,y,z] / [x,y,z,w] 元组
@@ -404,6 +438,8 @@ export function initRecorder(): void {
               // 离散状态（车型/时间/天气/血量）节流采样：sync 帧间用会话内缓存，
               // 避免每帧读 6-7 个 native（CP 进度由 noteCpProgress 事件驱动）
               if (player) refreshDiscreteCache(session, player);
+              session.raknetFrames++; // 诊断：RakNet 拦截实际采到的帧数
+              session.lastRaknetAt = Date.now();
               sample(session, {
                 x: p[0],
                 y: p[1],
@@ -423,16 +459,18 @@ export function initRecorder(): void {
                 vehicleHealth: session.cacheHealth,
               });
             }
+          } catch (e) {
+            logger.error(`[replay] ${playerId} DriverSync 采样异常`, e);
           }
         }
-        bs.resetReadPointer(); // 放行（回放录制只采样不改包）
-        return next();
-      });
-    } catch (e) {
-      logger.warn(`[replay] RakNet 拦截不可用，录制将依赖兜底采样`, e);
-    }
-    return next();
-  });
+      }
+      bs.resetReadPointer(); // 放行（回放录制只采样不改包）
+      return next();
+    });
+  } catch (e) {
+    logger.warn(`[replay] RakNet 拦截不可用，录制将依赖兜底采样`, e);
+  }
+  fallbackTimer = setIntervalSafe(fallbackSample, FALLBACK_INTERVAL_MS);
 }
 
 /** 停止录制系统（onExit/清理）：全部强制落盘 + 停定时器 */

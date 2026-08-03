@@ -1,4 +1,4 @@
-import { BulletHitTypesEnum, GameMode, Player, PlayerEvent, Vehicle } from "@infernus/core";
+import { BulletHitTypesEnum, Player, PlayerEvent, Vehicle } from "@infernus/core";
 import { BulletSync, IPacket, PacketIdList } from "@infernus/raknet";
 import { getSetting } from "@/personalize/settings";
 import { applyDefaultArmor } from "@/core/armor";
@@ -22,6 +22,10 @@ const invincibleSet = new Set<number>();
 /** 无敌提示节流：攻击者-目标 3 秒内只提示一次（防自动武器扫射刷屏） */
 const GIVE_NOTIFY_MS = 3000;
 const lastGiveNotify = new Map<string, number>();
+/** 诊断：BulletSync 拦截触发计数（确认包拦截是否真正生效——0 说明拦截未触发，
+ *  与回放录制 DriverSync 同源问题；日志核对用） */
+let bulletIntercepts = 0;
+let bulletInterceptLogged = false;
 
 /** 玩家是否无敌（同步读取，供伤害事件与 raknet 拦截用） */
 export function isInvincible(playerId: number): boolean {
@@ -100,34 +104,41 @@ export function initInvincible(): void {
 
   // raknet 层：子弹同步包拦截——目标为无敌玩家/其车辆时直接丢弃该包。
   // Pawn.RakNet 约定：return true(1) = 拦截包不交给游戏处理。
-  // 注册延后到 GameMode.onInit：Pawn.RakNet 的 RegisterPacket 原生与 streamer
-  // 同理，模块导入期（Loaded Map 前）注册会静默失败（不抛错、无 warn、回调
-  // 永不触发）——否则无敌的子弹包拦截形同虚设，只剩回血兜底。
-  GameMode.onInit(({ next }) => {
-    try {
-      IPacket(PacketIdList.BulletSync, ({ bs, next }) => {
-        try {
-          const bullet = new BulletSync(bs).readSync();
-          bs.resetReadPointer(); // 不拦截时恢复读取位置，让游戏正常处理
-          if (!bullet) return next();
-          if (bullet.hitType === BulletHitTypesEnum.PLAYER && invincibleSet.has(bullet.hitId)) {
-            return true; // 丢弃朝无敌玩家飞来的子弹包
+  // IPacket 是 samp.on 事件注册（与 PlayerEvent 同构），模块导入期注册即有效。
+  // 诊断：首次拦截成功打一条日志——若一直没出现，说明包拦截链路未通。
+  try {
+    IPacket(PacketIdList.BulletSync, ({ bs, next }) => {
+      try {
+        const bullet = new BulletSync(bs).readSync();
+        bs.resetReadPointer(); // 不拦截时恢复读取位置，让游戏正常处理
+        if (!bullet) return next();
+        if (bullet.hitType === BulletHitTypesEnum.PLAYER && invincibleSet.has(bullet.hitId)) {
+          bulletIntercepts++;
+          // 诊断：首次拦截成功打一条日志（确认 IPacket 链路通；后续不刷屏）
+          if (!bulletInterceptLogged) {
+            bulletInterceptLogged = true;
+            logger.info(`[invincible] raknet 子弹拦截已生效（累计 ${bulletIntercepts} 次）`);
           }
-          if (bullet.hitType === BulletHitTypesEnum.VEHICLE) {
-            const veh = Vehicle.getInstance(bullet.hitId);
-            const driver = veh?.getDriver();
-            if (driver && invincibleSet.has(driver.id)) {
-              return true; // 丢弃朝无敌玩家车辆飞来的子弹包（保护车辆不被击毁）
-            }
-          }
-          return next();
-        } catch {
-          return next(); // 异常包不拦截，放行给游戏处理
+          return true; // 丢弃朝无敌玩家飞来的子弹包
         }
-      });
-    } catch (e) {
-      logger.warn(`[invincible] raknet 插件未加载，无敌仅靠回血兜底: ${e}`);
-    }
-    return next();
-  });
+        if (bullet.hitType === BulletHitTypesEnum.VEHICLE) {
+          const veh = Vehicle.getInstance(bullet.hitId);
+          const driver = veh?.getDriver();
+          if (driver && invincibleSet.has(driver.id)) {
+            bulletIntercepts++;
+            if (!bulletInterceptLogged) {
+              bulletInterceptLogged = true;
+              logger.info(`[invincible] raknet 子弹拦截已生效（累计 ${bulletIntercepts} 次）`);
+            }
+            return true; // 丢弃朝无敌玩家车辆飞来的子弹包（保护车辆不被击毁）
+          }
+        }
+        return next();
+      } catch {
+        return next(); // 异常包不拦截，放行给游戏处理
+      }
+    });
+  } catch (e) {
+    logger.warn(`[invincible] raknet 插件未加载，无敌仅靠回血兜底: ${e}`);
+  }
 }
