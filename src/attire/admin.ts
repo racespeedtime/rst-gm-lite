@@ -105,7 +105,8 @@ async function createAttire(player: Player, back: MenuBack): Promise<void> {
         1394, 1395, 1396, 1397, 1398, 1399, 1400,
       ].map((id) => ({ modelId: id, modelText: `Model ${id}` })),
       headerText: "Select Model",
-      maxItemPerPage: 6,
+      // 一页 14 个（e-selection 布局：第一行 6 + 第二行 8，两行铺满）
+      maxItemPerPage: 14,
       bannerColor: "#333",
       menuBgColor: "#222",
       menuTextColor: "#fff",

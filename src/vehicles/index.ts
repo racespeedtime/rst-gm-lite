@@ -440,7 +440,8 @@ async function showVehicleSelection(
       modelText: `${vehicleName(modelId)} [${modelId}]`,
     })),
     headerText: cat.menuTitle,
-    maxItemPerPage: 8,
+    // 一页 14 个（e-selection 布局：第一行 6 + 第二行 8，两行铺满）
+    maxItemPerPage: 14,
     bannerColor: "#333",
     menuBgColor: "#222",
     menuTextColor: "#fff",

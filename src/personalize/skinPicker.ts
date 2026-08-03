@@ -43,7 +43,8 @@ export async function showSkinPicker(player: Player): Promise<void> {
     player,
     models: PICKABLE_SKINS.map((id) => ({ modelId: id, modelText: `Skin ${id}` })),
     headerText: "Select Skin",
-    maxItemPerPage: 6,
+    // 一页 14 个（e-selection 布局：第一行 6 + 第二行 8，两行铺满）
+    maxItemPerPage: 14,
     bannerColor: "#333",
     menuBgColor: "#222",
     menuTextColor: "#fff",
