@@ -83,6 +83,36 @@ export interface ReplaySession {
 
 const sessions = new Map<number, ReplaySession>(); // playerId -> 该玩家自己的回放会话（各看各的）
 
+/**
+ * NPC 池子边界（回放/挑战共用，对齐 config.json max_bots=100）：
+ * - 用 Npc.getInstances() 实时统计已用槽位（服务器权威，destroy 后自动减少，
+ *   无需自维护计数）
+ * - 创建前检查剩余槽位；创建后校验 isValid（open.mp 的 npc_create 失败
+ *   不抛异常，仅 NPC 保持 invalid，必须显式校验）
+ * - 创建中失败自动降级：已成功 ≥1 个 ghost 则继续用已成功的，否则整体失败
+ */
+const MAX_REPLAY_NPC = 100;
+
+/** 剩余 NPC 槽位 */
+export function npcSlotsLeft(): number {
+  return MAX_REPLAY_NPC - Npc.getInstances().length;
+}
+
+/**
+ * 分配一个 NPC（创建 + isValid 校验 + getPlayer 验证）。
+ * 失败返回 null（槽位不足/创建失败），不抛异常。
+ */
+export function allocReplayNpc(name: string): Npc | null {
+  try {
+    const npc = new Npc(name).create();
+    if (!npc.isValid()) return null;
+    npc.getPlayer(); // 触发 NpcException 校验（invalid NPC 的 getPlayer 会抛）
+    return npc;
+  } catch {
+    return null;
+  }
+}
+
 export function getReplaySession(playerId: number): ReplaySession | undefined {
   return sessions.get(playerId);
 }
@@ -352,6 +382,12 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
   }
 
   const count = Math.min(5, Math.max(1, opts?.npcCount ?? 1));
+  // NPC 池子边界：创建前检查剩余槽位（回放/挑战共用 100 槽，各世界多人同时
+  // 开回放/挑战可能占满）。不足则明确提示剩余数，避免创建到一半才失败
+  if (npcSlotsLeft() < count) {
+    player.sendClientMessage(COLOR_ERROR, `NPC 槽位不足（剩余 ${npcSlotsLeft()}），请稍后再试`);
+    return false;
+  }
   // 按类型分流：ghost（自由录制）→ 当前世界播放（其他玩家看得见、可一起玩，
   // 但控制 strictly per-player——每人只能控制自己发起的会话，各看各的）；
   // race（比赛回放）→ 独立世界 + 发起人自动观战（重现比赛场景）。
@@ -364,8 +400,17 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
 
   try {
     for (let i = 0; i < count; i++) {
-      const name = `RP_${Date.now()}_${i}`.slice(0, 24);
-      const npc = new Npc(name).create();
+      // 创建中失败自动降级：某分身 NPC 分配失败（槽位被并发抢占）→
+      // 若已成功 ≥1 个则用已成功的继续，否则整体失败（防一半资源半拉子）
+      const npc = allocReplayNpc(`RP_${Date.now()}_${i}`.slice(0, 24));
+      if (!npc) {
+        if (ghosts.length === 0) {
+          player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足，回放创建失败");
+          return false;
+        }
+        logger.warn(`[replay] ${player.getName().name} 分身 ${i + 1}/${count} NPC 分配失败，降级为 ${ghosts.length} 台`);
+        break;
+      }
       const npcPlayer = npc.getPlayer();
       const vehicle = new Vehicle({
         modelId: data.header.vehicleModelId,
@@ -385,9 +430,9 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
       // NPC 无 nametag：绑 3D 标签显示"本身身份（NPC 名）+ 扮演谁（录制者 + 分身编号）"
       const label = new Dynamic3DTextLabel({
         text:
-          `{FFD700}${name}` +
+          `{FFD700}${npc.getName()}` +
           `\n{FFFFFF}回放 · ${replay.recorderName}` +
-          (count > 1 ? `{808080} [ghost ${i + 1}/${count}]` : ""),
+          (ghosts.length + 1 > 1 ? `{808080} [ghost ${ghosts.length + 1}/${count}]` : ""),
         color: "#ffffff",
         x: 0,
         y: 0,

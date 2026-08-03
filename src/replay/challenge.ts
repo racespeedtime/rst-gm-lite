@@ -20,7 +20,7 @@ import { showDialog } from "@/utils/dialog";
 import { parseReplayFile, type ReplayData } from "./format";
 import { join } from "node:path";
 import { RECORDING_DIR } from "./storage";
-import { sampleAt, allocReplayWorld, getReplaySession } from "./playback";
+import { sampleAt, allocReplayWorld, allocReplayNpc, getReplaySession } from "./playback";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR } from "@/utils/colors";
 
@@ -256,10 +256,14 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
   }
   const worldId = allocReplayWorld();
 
-  // 影子（ghost）创建
+  // 影子（ghost）创建：复用回放的 NPC 池子边界（槽位检查 + isValid 校验）
   let ghost: ChallengeGhost;
   try {
-    const npc = new Npc(`CHA_${Date.now()}`.slice(0, 24)).create();
+    const npc = allocReplayNpc(`CHA_${Date.now()}`.slice(0, 24));
+    if (!npc) {
+      player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足，影子挑战创建失败");
+      return false;
+    }
     const vehicle = new Vehicle({
       modelId: data.header.vehicleModelId,
       // 影子起点 = 录制起始位置（与回放/玩家起点一致）
