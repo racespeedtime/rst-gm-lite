@@ -93,6 +93,8 @@ export function initChat(): void {
     }
     // 未认证玩家不参与聊天（正常流程中认证期间也不会发出文本）
     if (!getAuthState(player.id)) {
+      // B9：认证对话框期间打字被静默丢弃 → 给反馈，避免玩家以为发出去了
+      player.sendClientMessage(COLOR_ERROR, "请先完成登录（正在登录中）");
       return false;
     }
     // 全局限频：发言过快则提示并忽略本次

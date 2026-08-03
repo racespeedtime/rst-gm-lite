@@ -4,6 +4,8 @@ import { setTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve, isObserving } from "@/core/observe";
 import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";
 import { flipVehicle } from "@/core/vehicleAuto";
+import { isPlayerLocked } from "@/core/interaction";
+import { getAuthState } from "@/auth/auth";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { isPlayerInWater } from "@infernus/colandreas";
 import type { MenuBack } from "@/core/panel";
@@ -119,19 +121,23 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
     });
   }
 
-  rows.push({
-    label: "重生",
-    run: () => {
-      // 比赛中：重生回上一 CP（与 /kill 一致）；非比赛：正常重生
-      const racePr = isInRace(player.id) ? getRacePlayerState(player.id) : undefined;
-      const room = racePr ? getRaceRoom(racePr.roomId) : undefined;
-      if (racePr && room && room.state === "RACING") {
-        respawnToLastCp(player, racePr, room);
-      } else {
-        player.spawn();
-      }
-    },
-  });
+  // 重生：观战中隐藏（观战态重生会 spawn 出观战但 observeStates 残留，
+  // 且 stopObserve 恢复的 prevWorld 语义错乱；观战有独立的"停止观战"项）
+  if (!isObserving(player.id)) {
+    rows.push({
+      label: "重生",
+      run: () => {
+        // 比赛中：重生回上一 CP（与 /kill 一致）；非比赛：正常重生
+        const racePr = isInRace(player.id) ? getRacePlayerState(player.id) : undefined;
+        const room = racePr ? getRaceRoom(racePr.roomId) : undefined;
+        if (racePr && room && room.state === "RACING") {
+          respawnToLastCp(player, racePr, room);
+        } else {
+          player.spawn();
+        }
+      },
+    });
+  }
 
   rows.push({
     label: "当前位置信息",
@@ -200,7 +206,13 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
           }),
         );
         if (!res || res.response !== 1) return;
-        const target = Player.getInstance(+res.inputText.trim());
+        // B5：空输入/非数字会解析成 0/NaN → 误观战 0 号玩家，先校验
+        const input = res.inputText.trim();
+        if (!/^\d+$/.test(input)) {
+          player.sendClientMessage(COLOR_ERROR, "请输入有效的玩家ID");
+          return;
+        }
+        const target = Player.getInstance(+input);
         if (!target) {
           player.sendClientMessage(COLOR_ERROR, "对方未在线");
           return;
@@ -277,6 +289,11 @@ function sleep(ms: number): Promise<void> {
  */
 export function initQuickCommands(): void {
   PlayerEvent.onCommandText("fxq", ({ player, next }) => {
+    // U3：命令入口统一拦截（未认证/流程锁中不可执行，对齐 /skin 无参路径）
+    if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      return next();
+    }
     if (isInRace(player.id)) {
       player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能获取喷气背包");
       return next();
@@ -287,6 +304,10 @@ export function initQuickCommands(): void {
   });
 
   PlayerEvent.onCommandText("jls", ({ player, next }) => {
+    if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      return next();
+    }
     if (isInRace(player.id)) {
       player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能获取降落伞");
       return next();
@@ -299,6 +320,10 @@ export function initQuickCommands(): void {
   // /f 车辆翻正（对齐原版 /f）：抬升 2 让物理重新落正 + 修复。与快捷操作菜单
   // "车辆翻正"同一实现；车内任意模式可用（比赛内翻车自救也支持）。
   PlayerEvent.onCommandText("f", ({ player, next }) => {
+    if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      return next();
+    }
     const vehicle = Vehicle.getInstances().find((v) => v.isPlayerIn(player));
     if (!vehicle) {
       player.sendClientMessage(COLOR_ERROR, "你不在车内，无法翻正车辆");

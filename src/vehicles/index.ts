@@ -12,6 +12,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { cleanupAttire, applyVehiclePreset } from "@/attire";
 import { isInRace } from "@/race/room";
+import { isPlayerLocked } from "@/core/interaction";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { DEFAULT_CHARSET } from "@/utils/constants";
@@ -266,6 +267,12 @@ export function initVehicleCommands(): void {
   });
 
   PlayerEvent.onCommandText(["c", "veh"], ({ player, subcommand, next }) => {
+    // B6：刷车需已认证且不在流程锁中（未登录/大厅对话框期间 /c 会触发
+    // getOrCreateUserVehicle 的 auth! 空断言 → 报错被吞，只留"刷车失败"）
+    if (!getAuthState(player.id) || isPlayerLocked(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "请先完成登录后再刷车");
+      return next();
+    }
     const arg = subcommand[0];
     if (arg === "list") {
       void showVehicleCategoryMenu(player);
@@ -394,7 +401,8 @@ export function initVehicleCommands(): void {
       if (p.getVehicle() !== veh) continue;
       const pos = p.getPos();
       p.setPos(pos.x, pos.y, pos.z + 5);
-      p.sendClientMessage(COLOR_ERROR, "该车已被锁，你被移出");
+      // U2：实际是车主主动踢人（车没锁），文案与动作一致
+      p.sendClientMessage(COLOR_ERROR, "你被车主移出了车辆");
       kicked++;
     }
     player.sendClientMessage(
