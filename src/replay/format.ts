@@ -1,10 +1,9 @@
 import { readFileSync } from "node:fs";
 
 /**
- * 回放文件二进制格式（rec v2，存于 scriptfiles/recordings/）：
- * - 定长 Header（72 字节）+ 定长帧 Body（每帧 55 字节）
- * - 帧 = 位置(3×f32) + 四元数(4×f32) + 速度(3×f32) + 车型(i32) +
- *       CP进度(i32) + 时(u8) + 分(u8) + 天气(i8) + 血量(f32)
+ * 回放文件二进制格式（rec v3，存于 scriptfiles/recordings/）：
+ * - 定长 Header + 定长帧 Body；帧 = 位置(3×f32) + 四元数(4×f32) + 速度(3×f32)
+ *   + 车型(i32) + CP进度(i32) + 时(u8) + 分(u8) + 天气(u8) + 血量(f32)
  * - 定长帧设计：seek/后退/快进 = O(1) 偏移直取，无需顺序解析；
  *   回放时整文件读入内存 Buffer，纯内存切帧零 IO
  *
@@ -14,21 +13,45 @@ import { readFileSync } from "node:fs";
  * 错乱。改为每帧记录那一刻的完整可观测状态——事件的效果已编码进后续帧
  * （换车后的车型、改过的时间/天气），seek = 恢复状态而非重放事件，天然
  * 无时序问题。观战者的比赛 TD（C P/TIME）也从帧状态渲染，不依赖事件。
+ *
+ * 兼容性设计（向后兼容：新版本读旧文件，旧版本不读新文件）：
+ * - 版本号递增；头/帧字段一律"尾部追加"，旧字段偏移永不改动
+ * - v3 起 header 末尾自描述 frameBytes（帧字节数）——未来帧加字段时版本
+ *   +1 且 frameBytes 写入新值，旧文件按各自帧布局照常解析，零破坏
+ * - 读端 parseHeader/parseReplayFile 按版本分支：v2 头 72B / 帧 55B，
+ *   v3 头 76B（多 4B frameBytes）/ 帧仍 55B
  */
 
 /** 魔数 + 版本（首个 8 字节签名，兼容性/损坏检测） */
 const MAGIC = "RSTREP01";
-/** 格式版本：v2 引入帧内完整状态（车型/CP进度/时间天气/血量） */
-const FORMAT_VERSION = 2;
+/** 当前格式版本：v3 引入 header 自描述 frameBytes */
+export const FORMAT_VERSION = 3;
 
 /** 录制类型 */
 export const REPLAY_TYPE_GHOST = 0;
 export const REPLAY_TYPE_RACE = 1;
 
-/** 帧字节数 = 12+16+12 + 4+4 + 1+1+1 + 4 = 55 */
-export const FRAME_BYTES = 55;
-/** 头字节数 = magic8 + ver1 + type1 + interval2 + model4 + pos12 + quat16 + vel12 + count4 + dur4 + totalCp4 + bestMs4 = 72 */
-export const HEADER_BYTES = 72;
+/** v2：帧 55B = pos12 + quat16 + vel12 + model4 + cp4 + hour1 + min1 + weather1 + health4 */
+const FRAME_BYTES_V2 = 55;
+/** v2：头 72B = magic8 + ver1 + type1 + interval2 + model4 + pos12 + quat16 + vel12 + count4 + dur4 + totalCp4 + bestMs4 */
+const HEADER_BYTES_V2 = 72;
+/** v3：头 76B = v2 头 + frameBytes4（自描述，未来帧字段追加零破坏） */
+const HEADER_BYTES_V3 = HEADER_BYTES_V2 + 4;
+
+/** 当前帧字节数（v3 帧布局仍 55；未来加字段时版本 +1 并更新此值） */
+export const FRAME_BYTES = FRAME_BYTES_V2;
+/** 当前头字节数（v3） */
+export const HEADER_BYTES = HEADER_BYTES_V3;
+
+/** 版本 → 头字节数（向后兼容 v2） */
+export function headerBytesFor(version: number): number {
+  return version >= 3 ? HEADER_BYTES_V3 : HEADER_BYTES_V2;
+}
+
+/** 版本 → 帧字节数（向后兼容 v2） */
+export function frameBytesFor(version: number): number {
+  return version >= 3 ? FRAME_BYTES_V2 : FRAME_BYTES_V2;
+}
 
 export interface ReplayFrame {
   x: number;
@@ -71,18 +94,22 @@ export interface ReplayHeader {
   totalCp: number;
   /** 录制者该赛道个人最佳（毫秒，回放 BEST TD；无则 -1） */
   bestMs: number;
+  /** 帧字节数（自描述；v2 兼容 = 55） */
+  frameBytes: number;
 }
 
 /** 已解析的回放文件（整文件读入内存，帧为纯内存切片） */
 export interface ReplayData {
   header: ReplayHeader;
+  /** 该文件的头字节数（按版本） */
+  headerBytes: number;
   frames: Buffer; // Body 切片（从 header 末尾开始）
 }
 
 const V = (n: number): number => (Number.isFinite(n) ? n : 0);
 const U8 = (n: number): number => Math.max(0, Math.min(255, Math.round(n)));
 
-/** 编码 Header → Buffer（录制结束写文件用） */
+/** 编码 Header（当前版本 v3：末尾带 frameBytes）→ Buffer */
 export function encodeHeader(h: ReplayHeader): Buffer {
   const buf = Buffer.allocUnsafe(HEADER_BYTES);
   buf.write(MAGIC, 0, "ascii");
@@ -122,10 +149,12 @@ export function encodeHeader(h: ReplayHeader): Buffer {
   buf.writeInt32LE(h.totalCp, o);
   o += 4;
   buf.writeInt32LE(h.bestMs, o);
+  o += 4;
+  buf.writeUInt32LE(h.frameBytes, o); // v3：自描述帧字节数
   return buf;
 }
 
-/** 编码单帧 → Buffer（录制结束写文件用） */
+/** 编码单帧 → Buffer（当前帧布局 55B） */
 export function encodeFrame(f: ReplayFrame): Buffer {
   const buf = Buffer.allocUnsafe(FRAME_BYTES);
   buf.writeFloatLE(V(f.x), 0);
@@ -148,12 +177,12 @@ export function encodeFrame(f: ReplayFrame): Buffer {
   return buf;
 }
 
-/** 解析 Header（从文件前 HEADER_BYTES 字节）。格式损坏抛 Error。 */
+/** 解析 Header（按版本分支：v2 头 72B 无 frameBytes，v3 头 76B 带 frameBytes）。格式损坏抛 Error。 */
 export function parseHeader(buf: Buffer): ReplayHeader {
-  if (buf.length < HEADER_BYTES) throw new Error("回放文件头损坏");
+  if (buf.length < HEADER_BYTES_V2) throw new Error("回放文件头损坏");
   if (buf.toString("ascii", 0, 8) !== MAGIC) throw new Error("不是有效的回放文件");
   const version = buf.readUInt8(8);
-  if (version !== FORMAT_VERSION) throw new Error(`不支持的版本 ${version}`);
+  if (version < 2) throw new Error(`不支持的版本 ${version}`);
   let o = 9;
   const type = buf.readUInt8(o);
   o += 1;
@@ -188,30 +217,40 @@ export function parseHeader(buf: Buffer): ReplayHeader {
   const totalCp = buf.readInt32LE(o);
   o += 4;
   const bestMs = buf.readInt32LE(o);
-  return { type, frameIntervalMs, vehicleModelId, startX, startY, startZ, qx, qy, qz, qw, vx, vy, vz, frameCount, durationMs, totalCp, bestMs };
+  // 版本分支：v3 起末尾多 4B frameBytes（自描述）；v2 无该字段用固定 55
+  const frameBytes = version >= 3 ? buf.readUInt32LE(o + 4) : FRAME_BYTES_V2;
+  return { type, frameIntervalMs, vehicleModelId, startX, startY, startZ, qx, qy, qz, qw, vx, vy, vz, frameCount, durationMs, totalCp, bestMs, frameBytes };
 }
 
 /** 读取并解析回放文件（整文件入内存；帧体切片供 O(1) 随机访问）。损坏抛 Error。 */
 export function parseReplayFile(filePath: string): ReplayData {
   const buf = readFileSync(filePath);
   const header = parseHeader(buf);
-  const frames = buf.subarray(HEADER_BYTES);
-  // 帧数与文件长度一致性校验（防截断/损坏）
-  if (frames.length < header.frameCount * FRAME_BYTES) {
+  const headerBytes = headerBytesFor(readVersion(buf));
+  const frames = buf.subarray(headerBytes);
+  // 帧数与文件长度一致性校验（用文件内自描述的 frameBytes，兼容未来帧加字段）
+  if (frames.length < header.frameCount * header.frameBytes) {
     throw new Error("回放文件数据不完整");
   }
-  return { header, frames };
+  return { header, headerBytes, frames };
+}
+
+/** 读魔数后的版本号（parseHeader 内部用，避免二次解析） */
+function readVersion(buf: Buffer): number {
+  return buf.readUInt8(8);
 }
 
 /** 第 index 帧的起始偏移（帧体切片内） */
-export function frameOffset(index: number): number {
-  return index * FRAME_BYTES;
+export function frameOffset(index: number, frameBytes: number): number {
+  return index * frameBytes;
 }
 
-/** 解码帧体切片（越界返回 null） */
-export function decodeFrame(buf: Buffer, index: number): ReplayFrame | null {
-  const o = frameOffset(index);
-  if (o + FRAME_BYTES > buf.length) return null;
+/** 解码帧体切片（越界返回 null）。frameBytes 用文件内自描述值（兼容未来版本）。 */
+export function decodeFrame(buf: Buffer, index: number, frameBytes: number): ReplayFrame | null {
+  const o = index * frameBytes;
+  if (o + frameBytes > buf.length) return null;
+  // 帧字段均为尾部追加设计：旧字段固定在前部偏移（55B 内），
+  // 未来帧加字段只会追加在尾部，不影响旧字段读取
   return {
     x: buf.readFloatLE(o),
     y: buf.readFloatLE(o + 4),

@@ -208,12 +208,12 @@ export function sampleAt(data: ReplayData, playTime: number): SampledState | nul
     };
   };
   if (idx >= lastIdx) {
-    const f = decodeFrame(frames, lastIdx);
+    const f = decodeFrame(frames, lastIdx, data.header.frameBytes);
     if (!f) return null;
     return pick(f);
   }
-  const a = decodeFrame(frames, idx);
-  const b = decodeFrame(frames, idx + 1);
+  const a = decodeFrame(frames, idx, data.header.frameBytes);
+  const b = decodeFrame(frames, idx + 1, data.header.frameBytes);
   if (!a || !b) return null;
   const frac = (t - idx * interval) / interval;
   return pick(lerpFrame(a, b, frac));

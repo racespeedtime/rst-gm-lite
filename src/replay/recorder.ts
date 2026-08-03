@@ -249,6 +249,7 @@ export async function stopRecording(
     durationMs,
     totalCp: session.totalCp ?? 0,
     bestMs: session.bestMs ?? -1,
+    frameBytes: FRAME_BYTES, // 自描述帧字节数（v3；未来帧加字段时版本 +1 更新）
   };
 
   // 组装文件 Buffer：定长头 + 定长帧（一次性分配，避免多次 Buffer 拼接）
