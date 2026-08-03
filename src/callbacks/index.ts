@@ -23,7 +23,12 @@ import {
   setHouseObjectsVisibleForPlayer,
   applyHouseRemovedBuildings,
 } from "@/house";
-import { applyPlayerPreset, cleanupAttire, cleanupOrphanPresets } from "@/attire";
+import {
+  applyPlayerPreset,
+  cleanupAttire,
+  cleanupOrphanPresets,
+  initAttireEditor,
+} from "@/attire";
 import { initRaceSystem, cleanupRacePlayer, tryReconnectRace, isInRace } from "@/race/room";
 import { initRaceEditor, exitEdit } from "@/race/editor";
 import { initRaceCommands } from "@/race/manage";
@@ -92,7 +97,7 @@ async function handlePlayerConnect(player: Player) {
     if (!player.isConnected()) {
       return;
     }
-    // 登录成功：停止登录音乐 + 回到第三人称视角
+    // 登录成功：停止登录音乐
     stopLoginCamera(player);
     // 无限金钱（对齐原版登录 GivePlayerMoney(99999999)）
     giveInfinityMoney(player);
@@ -282,7 +287,10 @@ PlayerEvent.onCommandError(({ player, command, cmdText, error, getSuggestion, ne
       // 传送点也不存在 → 命令确实不存在：提示 + 最接近的命令建议（避免静默吞掉）
       const { suggestion, distance } = getSuggestion();
       if (suggestion && Number.isFinite(distance) && distance <= 4) {
-        player.sendClientMessage(COLOR_ERROR, `命令不存在: ${used}，你是不是想输入 /${suggestion}？`);
+        player.sendClientMessage(
+          COLOR_ERROR,
+          `命令不存在: ${used}，你是不是想输入 /${suggestion}？`,
+        );
       } else {
         player.sendClientMessage(COLOR_ERROR, `命令不存在: ${used}`);
       }
@@ -324,6 +332,9 @@ initArmor();
 
 // 车辆自动系统：翻车自动翻正/自动修复/定时换色/氮气补充
 initVehicleAuto();
+
+// 装扮实时编辑器（人物 EditAttachedObject / 车辆 DynamicObject 拖拽编辑保存）
+initAttireEditor();
 
 // 游戏会话心跳：定时更新 last_heartbeat_at + 更正异常掉线会话
 startSessionHeartbeat();
