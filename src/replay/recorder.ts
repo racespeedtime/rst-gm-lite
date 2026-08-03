@@ -183,6 +183,9 @@ function captureVehicleFrame(player: Player, session?: RecordingSession): Replay
     minute,
     weather: player.getWeather(),
     vehicleHealth: veh.getHealth().health,
+    // 兜底采样没有 DriverSync 包 → 无法拿到按键状态，0（无按键）；
+    // 正常录制以 RakNet 帧为主，兜底仅补帧间隙
+    keys: 0,
   };
 }
 
@@ -467,6 +470,9 @@ export function initRecorder(): void {
                 minute: session.cacheMinute,
                 weather: session.cacheWeather,
                 vehicleHealth: session.cacheHealth,
+                // DriverSync 按键状态（氮气=SPRINT 位）：回放按帧注入 NPC 按键，
+                // 让氮气/转向在对应时刻喷发/对应
+                keys: sync.keys,
               });
             }
           } catch (e) {

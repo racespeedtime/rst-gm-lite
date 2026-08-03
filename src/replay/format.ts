@@ -24,23 +24,30 @@ import { readFileSync } from "node:fs";
 
 /** 魔数 + 版本（首个 8 字节签名，兼容性/损坏检测） */
 const MAGIC = "RSTREP01";
-/** 当前格式版本：v3 引入 header 自描述 frameBytes */
-export const FORMAT_VERSION = 3;
+/**
+ * 当前格式版本：
+ * - v3 引入 header 自描述 frameBytes
+ * - v4 帧尾部追加 keys(u16)——DriverSync 按键状态（氮气=SPRINT 位），
+ *   回放时按帧注入 NPC 按键让氮气在对应时刻喷发。旧 v3/v2 文件照读（keys=0）
+ */
+export const FORMAT_VERSION = 4;
 
 /** 录制类型（recorder 写 header 用） */
 export const REPLAY_TYPE_GHOST = 0;
 export const REPLAY_TYPE_RACE = 1;
 
-/** v2：帧 55B = pos12 + quat16 + vel12 + model4 + cp4 + hour1 + min1 + weather1 + health4 */
+/** v2/v3：帧 55B = pos12 + quat16 + vel12 + model4 + cp4 + hour1 + min1 + weather1 + health4 */
 const FRAME_BYTES_V2 = 55;
+/** v4：帧 57B = v2 帧 + keys2（DriverSync 按键状态） */
+const FRAME_BYTES_V4 = FRAME_BYTES_V2 + 2;
 /** v2：头 72B = magic8 + ver1 + type1 + interval2 + model4 + pos12 + quat16 + vel12 + count4 + dur4 + totalCp4 + bestMs4 */
 const HEADER_BYTES_V2 = 72;
-/** v3：头 76B = v2 头 + frameBytes4（自描述，未来帧字段追加零破坏） */
+/** v3+：头 76B = v2 头 + frameBytes4（自描述，未来帧字段追加零破坏） */
 const HEADER_BYTES_V3 = HEADER_BYTES_V2 + 4;
 
-/** 当前帧字节数（v3 帧布局仍 55；未来加字段时版本 +1 并更新此值） */
-export const FRAME_BYTES = FRAME_BYTES_V2;
-/** 当前头字节数（v3） */
+/** 当前帧字节数（v4） */
+export const FRAME_BYTES = FRAME_BYTES_V4;
+/** 当前头字节数（v3+ 头布局不变） */
 export const HEADER_BYTES = HEADER_BYTES_V3;
 
 /** 版本 → 头字节数（向后兼容 v2） */
@@ -67,6 +74,8 @@ export interface ReplayFrame {
   minute: number;
   weather: number;
   vehicleHealth: number;
+  /** DriverSync 按键状态（KeysEnum 位集；氮气=SPRINT 位，回放时按帧注入 NPC 按键） */
+  keys: number;
 }
 
 export interface ReplayHeader {
@@ -149,7 +158,7 @@ export function encodeHeader(h: ReplayHeader): Buffer {
   return buf;
 }
 
-/** 编码单帧 → Buffer（当前帧布局 55B） */
+/** 编码单帧 → Buffer（当前帧布局 57B：v2 的 55B + keys u16） */
 export function encodeFrame(f: ReplayFrame): Buffer {
   const buf = Buffer.allocUnsafe(FRAME_BYTES);
   buf.writeFloatLE(V(f.x), 0);
@@ -169,6 +178,7 @@ export function encodeFrame(f: ReplayFrame): Buffer {
   // 天气 0-255：必须用 UInt8（writeInt8 范围 -128..127，weather>127 会抛 RangeError 导致录制丢失）
   buf.writeUInt8(U8(f.weather), 50);
   buf.writeFloatLE(V(f.vehicleHealth), 51);
+  buf.writeUInt16LE((f.keys | 0) & 0xffff, 55); // v4 追加：按键状态
   return buf;
 }
 
@@ -236,7 +246,7 @@ export function decodeFrame(buf: Buffer, index: number, frameBytes: number): Rep
   const o = index * frameBytes;
   if (o + frameBytes > buf.length) return null;
   // 帧字段均为尾部追加设计：旧字段固定在前部偏移（55B 内），
-  // 未来帧加字段只会追加在尾部，不影响旧字段读取
+  // v4 起 frameBytes≥57 时读取追加的 keys（旧 v2/v3 文件 frameBytes=55 → keys=0）
   return {
     x: buf.readFloatLE(o),
     y: buf.readFloatLE(o + 4),
@@ -254,6 +264,7 @@ export function decodeFrame(buf: Buffer, index: number, frameBytes: number): Rep
     minute: buf.readUInt8(o + 49),
     weather: buf.readUInt8(o + 50),
     vehicleHealth: buf.readFloatLE(o + 51),
+    keys: frameBytes >= FRAME_BYTES_V4 ? buf.readUInt16LE(o + 55) : 0,
   };
 }
 
@@ -298,5 +309,6 @@ export function lerpFrame(a: ReplayFrame, b: ReplayFrame, t: number): ReplayFram
     minute: t < 0.5 ? a.minute : b.minute,
     weather: t < 0.5 ? a.weather : b.weather,
     vehicleHealth: t < 0.5 ? a.vehicleHealth : b.vehicleHealth,
+    keys: t < 0.5 ? a.keys : b.keys,
   };
 }

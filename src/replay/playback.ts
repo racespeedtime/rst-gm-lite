@@ -63,6 +63,8 @@ interface Ghost {
   model: number;
   /** 上次应用的车辆血量（变化检测，防每帧 setHealth） */
   lastHealth: number;
+  /** 上次注入的按键状态（变化检测，防每帧 setKeys） */
+  lastKeys: number;
 }
 
 export interface ReplaySession {
@@ -275,6 +277,7 @@ export interface SampledState {
   minute: number;
   weather: number;
   vehicleHealth: number;
+  keys: number;
 }
 
 /** 按播放时间取插值帧（帧序保证前后一致性；超出范围 clamp 到边界帧）。（challenge 复用） */
@@ -305,6 +308,7 @@ export function sampleAt(data: ReplayData, playTime: number): SampledState | nul
       minute: f.minute,
       weather: f.weather,
       vehicleHealth: f.vehicleHealth,
+      keys: f.keys,
     };
   };
   if (idx >= lastIdx) {
@@ -351,7 +355,7 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
   }
 }
 
-/** 渲染单个 ghost 到当前帧（位置/旋转/速度 + 车型/血量；时间天气随帧给观察者） */
+/** 渲染单个 ghost 到当前帧（位置/旋转/速度 + 按键 + 车型/血量；时间天气随帧给观察者） */
 function renderGhost(session: ReplaySession, ghost: Ghost): void {
   const s = sampleAt(session.data, ghost.playTime);
   if (!s) return;
@@ -360,6 +364,12 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     ghost.npc.setVehiclePos(s.x, s.y, s.z, true);
     ghost.npc.setVehicleRot(s.rx, s.ry, s.rz, true);
     ghost.npc.setVelocity(s.vx, s.vy, s.vz);
+    // 按键状态（DriverSync keys 帧）：SPRINT=氮气等按键在对应时刻注入 NPC，
+    // 让回放车在录制按加速键的时刻喷氮气。变化检测防每帧 setKeys。
+    if (s.keys !== ghost.lastKeys) {
+      ghost.lastKeys = s.keys;
+      ghost.npc.setKeys(0, 0, s.keys);
+    }
     // 血量变化检测（血量帧间极少变化，防 60fps×N 每帧 setHealth）
     if (Math.abs(s.vehicleHealth - ghost.lastHealth) > 0.5) {
       ghost.lastHealth = s.vehicleHealth;
@@ -555,7 +565,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         charset: DEFAULT_CHARSET, // 支持中文（录制者名可能为中文）
       });
       label.create();
-      ghosts.push({ npc, vehicle, label, playTime: i * staggerMs, staggerMs, model: data.header.vehicleModelId, lastHealth: -1 });
+      ghosts.push({ npc, vehicle, label, playTime: i * staggerMs, staggerMs, model: data.header.vehicleModelId, lastHealth: -1, lastKeys: -1 });
     }
   } catch (e) {
     logger.error(`[replay] 创建回放实体失败`, e);
