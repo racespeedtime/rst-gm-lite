@@ -496,7 +496,7 @@ function beginRace(room: RaceRoom): void {
       // 开赛重置 TIME 显示为 0（tickRooms 开始计时刷新）
       const tds = room.raceTextTds.get(m.id);
       if (tds) {
-        tds.cp.setString(`C  P / ~p~0~w~/~y~${room.cps.length}`);
+        tds.cp.setString(`C  P / ~p~1~w~/~y~${room.cps.length}`);
         tds.time.setString("TIME / 00:00:00");
         tds.rank.setString("RANK / 1 st");
       }
@@ -531,7 +531,7 @@ function raceTdBase(player: Player, y: number, text: string): TextDraw {
 /** 创建比赛信息 UI（每人 4 行独立 TD，位置与原版一致：x 500 左缘，y 118/136/154/172） */
 function createRaceTd(player: Player, room: RaceRoom): RoomRaceTds {
   const tds: RoomRaceTds = {
-    cp: raceTdBase(player, 118, "C  P / ~p~0~w~/~y~0"),
+    cp: raceTdBase(player, 118, `C  P / ~p~1~w~/~y~${room.cps.length}`),
     time: raceTdBase(player, 136, "TIME / 00:00:00"),
     best: raceTdBase(player, 154, "BEST / 00:00:00"),
     rank: raceTdBase(player, 172, "RANK / 1 st"),
