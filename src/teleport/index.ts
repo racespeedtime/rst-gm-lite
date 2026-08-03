@@ -383,14 +383,14 @@ export function initTpTimeoutLoop(): void {
   setIntervalSafe(() => updateTpTimeouts(), 1000);
 }
 
-/** 面板入口：传送菜单（系统/我的传送点列表 / 创建传送点 / OP 管理） */
+/** 面板入口：传送菜单（系统/用户传送点列表 / 创建传送点 / OP 管理） */
 export async function openTeleportMenu(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "传送",
-      info: "1. 系统传送点\n2. 我的传送点\n3. 创建传送点\n4. 管理传送点（OP）",
+      info: "1. 系统传送点\n2. 用户传送点（//）\n3. 创建传送点\n4. 管理传送点（OP）",
       button1: "确定",
       button2: "关闭",
     }),
@@ -401,7 +401,7 @@ export async function openTeleportMenu(player: Player, back?: MenuBack): Promise
   if (res.listItem === 0) {
     await listSystemTeleports(player, toThis);
   } else if (res.listItem === 1) {
-    await listMyTeleports(player, toThis);
+    await listUserTeleports(player, toThis);
   } else if (res.listItem === 2) {
     await createTeleportFlow(player, toThis);
   } else if (res.listItem === 3) {
@@ -445,20 +445,23 @@ async function listSystemTeleports(player: Player, back?: MenuBack): Promise<voi
   return back?.();
 }
 
-/** 我的传送点列表（// 用户点，分页选择传送） */
-async function listMyTeleports(player: Player, back?: MenuBack): Promise<void> {
-  const auth = getAuthState(player.id);
-  if (!auth) return;
+/**
+ * 用户传送点列表（// 用户点，分页选择传送）。
+ * 与 fallbackTeleport 的查询一致（isSystem:false 即可，不按 userId 过滤）——
+ * 历史 // 点（原版迁移，owner 为特殊账号）对所有玩家可见可用，
+ * 否则列表为空但 //名称 输入又能传，行为不一致。
+ */
+async function listUserTeleports(player: Player, back?: MenuBack): Promise<void> {
   const points = await prisma.teleport.findMany({
-    where: { isSystem: false, isEnabled: true, deletedAt: null, userId: auth.userId },
+    where: { isSystem: false, isEnabled: true, deletedAt: null },
     orderBy: { name: "asc" },
   });
   if (points.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "你还没有个人传送点，创建后输入 //名称 或在此选择使用");
+    player.sendClientMessage(COLOR_WHITE, "暂无用户传送点，创建后输入 //名称 或在此选择使用");
     return back?.();
   }
   const r = await showPagedDialog(player, {
-    caption: "我的传送点",
+    caption: "用户传送点",
     data: points,
     format: (p) => `//${p.name}${p.description ? `（${p.description}）` : ""}`,
     button1: "传送",
