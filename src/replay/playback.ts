@@ -1,4 +1,5 @@
 import { Dynamic3DTextLabel, Npc, Player, TextDraw, Vehicle } from "@infernus/core";
+import { InCarSync, IncomingBitStream } from "@infernus/raknet";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -16,8 +17,9 @@ import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/co
 /**
  * 回放会话（NPC 逐帧驱动，非原生 .rec）：
  * - 回放文件整读入内存（Buffer 帧切片，O(1) seek）
- * - 60fps tick：按播放时间（方向×倍速推进）→ 相邻帧插值 → npc.setVehiclePos/
- *   setVehicleRot/setVelocity 驱动 NPC 车辆
+ * - 60fps tick：按播放时间（方向×倍速推进）→ 相邻帧插值 → 构造 InCarSync
+ *   DriverSync 包 emulateIncomingPacket 模拟 NPC 传入——服务器按真实司机处理
+ *   并广播给所有玩家，客户端物理驱动（位置/速度/氮气按键都真实平滑）
  * - 帧带"完整状态"：车型变化（cveh 换车）→ 重建车辆；时间/天气/血量随帧应用。
  *   CP 脚本是离散事件，NPC 不触发 onPlayerReachCp——seek/回退时"恢复状态而非
  *   重放事件"，天然无事件顺序问题。观战者的比赛 TD（C P/TIME/BEST）也从帧状态
@@ -27,6 +29,24 @@ import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/co
  * - 观看：发起人自动 startObserveVehicle(ghost 车)（复用观战系统）
  * - 清理：/rp stop / 发起人断线 / onExit 全路径销毁
  */
+
+/** 回放/挑战 NPC 的 playerId 集合：其 DriverSync/OnFootSync 包直接丢弃——
+ *  emulateIncomingPacket 模拟的包不会进入 onIncomingPacket 回调，但 NPC 自身
+ * （如 putInVehicle 后的残留状态 / setVehiclePos immediate 路径）可能发真实
+ *  sync，会与 emulate 的广播冲突，必须屏蔽（不交给游戏处理、不采样） */
+const replayNpcIds = new Set<number>();
+
+export function isReplayNpc(playerId: number): boolean {
+  return replayNpcIds.has(playerId);
+}
+
+function registerReplayNpc(playerId: number): void {
+  replayNpcIds.add(playerId);
+}
+
+function unregisterReplayNpc(playerId: number): void {
+  replayNpcIds.delete(playerId);
+}
 
 /** 回放世界起始 id（避开公共大世界 0、战局 1..n、比赛 5000+；挑战共用） */
 const REPLAY_WORLD_BASE = 6000;
@@ -50,6 +70,9 @@ export function freeReplayWorld(worldId: number): void {
 
 /** 播放推进帧间隔（60fps） */
 const TICK_MS = 16;
+/** emulate 发包节流：对齐 open.mp in_vehicle_sync_rate=30（30Hz）——60fps tick
+ *  每 2 tick 发一个 DriverSync 模拟包（发太多服务器会合并/浪费） */
+const EMULATE_INTERVAL_MS = 33;
 
 interface Ghost {
   npc: Npc;
@@ -65,6 +88,10 @@ interface Ghost {
   lastHealth: number;
   /** 上次注入的按键状态（变化检测，防每帧 setKeys） */
   lastKeys: number;
+  /** NPC playerId（emulate 的发送者；缓存避免每帧 getPlayer） */
+  npcPlayerId: number;
+  /** 上次 emulate 发包时间（30Hz 节流） */
+  lastEmulateAt: number;
 }
 
 export interface ReplaySession {
@@ -260,11 +287,15 @@ export function quatToEuler(q: {
   return { rx: mod360(rx), ry: mod360(ry), rz: mod360(rz) };
 }
 
-/** 采样帧解出的可渲染状态（位置/旋转/速度 + 完整离散状态） */
+/** 采样帧解出的可渲染状态（位置/四元数/旋转/速度 + 完整离散状态） */
 export interface SampledState {
   x: number;
   y: number;
   z: number;
+  qx: number;
+  qy: number;
+  qz: number;
+  qw: number;
   rx: number;
   ry: number;
   rz: number;
@@ -296,6 +327,10 @@ export function sampleAt(data: ReplayData, playTime: number): SampledState | nul
       x: f.x,
       y: f.y,
       z: f.z,
+      qx: f.qx,
+      qy: f.qy,
+      qz: f.qz,
+      qw: f.qw,
       rx: e.rx,
       ry: e.ry,
       rz: e.rz,
@@ -355,29 +390,55 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
   }
 }
 
-/** 渲染单个 ghost 到当前帧（位置/旋转/速度 + 按键 + 车型/血量；时间天气随帧给观察者）
- * 速度：录制存多少这里赋多少（ghost 车的 getVelocity() 即真实速度，速度表
- * 始终读它）。录制当前全是兜底采样 getVelocity() m/s，单位自洽。 */
+/**
+ * 渲染单个 ghost：构造 InCarSync（DriverSync）包 emulateIncomingPacket 模拟
+ * 该 NPC 作为司机传入——服务器按真实司机处理车辆状态并广播给所有玩家，
+ * 客户端物理驱动：位置/朝向由 sync 的 position/quaternion 广播，速度由
+ * velocity（录制 SA 速度单位）广播 → 车速表/氮气按键（keys）全部真实平滑。
+ * 不再用 setVehiclePos/setVehicleRot/setVelocity 硬摆位（会与广播冲突）。
+ * 30Hz 节流（对齐 in_vehicle_sync_rate）；换车型（ensureGhostVehicle）仍保留。
+ */
 function renderGhost(session: ReplaySession, ghost: Ghost): void {
   const s = sampleAt(session.data, ghost.playTime);
   if (!s) return;
   try {
     ensureGhostVehicle(session, ghost, s.vehicleModel);
-    ghost.npc.setVehiclePos(s.x, s.y, s.z, true);
-    ghost.npc.setVehicleRot(s.rx, s.ry, s.rz, true);
-    // 赋录制速度（getVelocity 读到的就是它）；车辆实体朝向同步（rz=yaw）
-    ghost.npc.setVelocity(s.vx, s.vy, s.vz);
-    ghost.vehicle.setZAngle(s.rz);
-    // 按键状态（DriverSync keys 帧）：SPRINT=氮气等按键在对应时刻注入 NPC，
-    // 让回放车在录制按加速键的时刻喷氮气。变化检测防每帧 setKeys。
-    if (s.keys !== ghost.lastKeys) {
-      ghost.lastKeys = s.keys;
-      ghost.npc.setKeys(0, 0, s.keys);
-    }
-    // 血量变化检测（血量帧间极少变化，防 60fps×N 每帧 setHealth）
+    // 30Hz 发包节流（60fps tick 每 2 tick 一次；seek/快进时播放时间跳变，
+    // 首帧/跳转帧立即发一次保证位置同步）
+    const now = Date.now();
+    if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS) return;
+    ghost.lastEmulateAt = now;
+    // 血量变化检测（防每帧 setHealth；sync 的 vehicleHealth 也会广播）
     if (Math.abs(s.vehicleHealth - ghost.lastHealth) > 0.5) {
       ghost.lastHealth = s.vehicleHealth;
       ghost.vehicle.setHealth(s.vehicleHealth);
+    }
+    // 构造 DriverSync 包并模拟 NPC 传入（incoming 上下文 → 包内不含 playerId，
+    // emulateIncomingPacket 的 playerId 参数即发送者）
+    const bs = new IncomingBitStream();
+    try {
+      const sync = new InCarSync(bs);
+      sync.writeSync({
+        vehicleId: ghost.vehicle.id,
+        lrKey: 0,
+        udKey: 0,
+        keys: s.keys, // SPRINT=氮气，客户端据此在对应时刻喷氮
+        quaternion: [s.qx, s.qy, s.qz, s.qw],
+        position: [s.x, s.y, s.z],
+        velocity: [s.vx, s.vy, s.vz], // 录制 SA 速度单位（getVelocity 值）
+        vehicleHealth: s.vehicleHealth,
+        playerHealth: 100,
+        armour: 0,
+        additionalKey: 0,
+        weaponId: 0,
+        sirenState: false,
+        landingGearState: false,
+        trailerId: 0,
+        trainSpeed: 0,
+      });
+      bs.emulateIncomingPacket(ghost.npcPlayerId);
+    } finally {
+      bs.delete(); // 释放 BitStream 原生句柄
     }
   } catch {
     // NPC/车辆失效（异常销毁由清理兜底）
@@ -569,6 +630,9 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         charset: DEFAULT_CHARSET, // 支持中文（录制者名可能为中文）
       });
       label.create();
+      // 登记 NPC playerId：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
+      // 但 NPC 自身/残留状态可能发真实 sync 会冲突）；同时记录 em
+      registerReplayNpc(npcPlayer.id);
       ghosts.push({
         npc,
         vehicle,
@@ -578,6 +642,8 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         model: data.header.vehicleModelId,
         lastHealth: -1,
         lastKeys: -1,
+        npcPlayerId: npcPlayer.id,
+        lastEmulateAt: 0,
       });
     }
   } catch (e) {
@@ -752,6 +818,7 @@ export function stopReplaySession(playerId: number): void {
   if (session.timer) clearIntervalSafe(session.timer);
   for (const g of session.ghosts) {
     try {
+      unregisterReplayNpc(g.npcPlayerId); // 注销屏蔽（NPC 销毁后不再有 sync 包）
       g.label.destroy();
       g.npc.destroy();
       g.vehicle.destroy();

@@ -1,9 +1,10 @@
 import { Player } from "@infernus/core";
+import { IPacket, PacketIdList } from "@infernus/raknet";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { initReplayCommands } from "./commands";
 import { initRecorder, cleanupRecorder, forceStopRecording, isRecording, startRecording, stopRecording } from "./recorder";
-import { cleanupPlayback, destroyAllPlaybacks, stopReplaySession, getReplaySession } from "./playback";
+import { cleanupPlayback, destroyAllPlaybacks, stopReplaySession, getReplaySession, isReplayNpc } from "./playback";
 import { initChallenge, destroyAllChallenges, challengeDisconnect, cleanupChallenge } from "./challenge";
 import { ensureRecordingDir, cleanupOrphanFiles } from "./storage";
 
@@ -34,6 +35,23 @@ export function initReplay(): void {
   initReplayCommands();
   initRecorder();
   initChallenge();
+  // 屏蔽回放 NPC 的真实 sync 包：回放驱动改为 emulateIncomingPacket 模拟
+  // DriverSync 传入（emulate 的包不会进 onIncomingPacket 回调），但 NPC 自身/
+  // 残留状态（putInVehicle/setVehiclePos immediate 等）可能发真实 sync，
+  // 会与模拟广播冲突（位置/速度打架）——直接丢弃不交给游戏处理。
+  // IPacket 是 samp.on 事件注册（与 PlayerEvent 同构），模块导入期注册即有效。
+  try {
+    IPacket(PacketIdList.DriverSync, ({ playerId, next }) => {
+      if (isReplayNpc(playerId)) return true; // 丢弃（不转发给游戏）
+      return next();
+    });
+    IPacket(PacketIdList.OnFootSync, ({ playerId, next }) => {
+      if (isReplayNpc(playerId)) return true;
+      return next();
+    });
+  } catch (e) {
+    logger.warn(`[replay] 回放 NPC sync 屏蔽注册失败`, e);
+  }
   logger.info("[replay] 回放系统已初始化");
 }
 
