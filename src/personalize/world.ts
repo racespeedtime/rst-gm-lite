@@ -10,6 +10,7 @@ import {
 } from "./settings";
 import { openSpawnSettingsFlow } from "@/core/spawn";
 import { setHouseObjectsVisibleForPlayer } from "@/house";
+import { applyWorldEnv } from "@/core/worldenv";
 import { parseIntInRange } from "@/utils/parse";
 import { showDialog } from "@/utils/dialog";
 import type { MenuBack } from "@/core/panel";
@@ -83,11 +84,15 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
   if (index < 0) return back?.();
 
   if (index === 0) {
+    // 跟随世界时间：切换后立即应用（否则要等下一个 60s 同步才生效）
     await toggleSetting(player, "syncGameTime", "跟随世界时间");
+    await applyWorldEnv(player);
     return;
   }
   if (index === 1) {
+    // 跟随世界天气：切换后立即应用（否则保持旧天气直到下次轮换）
     await toggleSetting(player, "syncWorldWeather", "跟随世界天气");
+    await applyWorldEnv(player);
     return;
   }
   if (index === 2) {
