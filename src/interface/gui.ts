@@ -26,6 +26,8 @@ interface PlayerGui {
   /** 3d 速度表当前 attach 到的车辆 id（换车时据此重建） */
   speedo3dVehId: number | null;
   netstat: NetstatState | null;
+  /** 上次更新网络面板的时间戳（网络面板每秒更新，与 200ms 速度表 tick 分离） */
+  netstatAt: number;
 }
 
 const guis = new Map<number, PlayerGui>();
@@ -49,6 +51,7 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     speedo3d: null,
     speedo3dVehId: null,
     netstat: null,
+    netstatAt: 0,
   };
   guis.set(player.id, gui);
 
@@ -103,7 +106,12 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
   const kmh = getDisplaySpeed(player);
   if (gui.speedoTd.length > 0) updateSpeed2d(gui.speedoTd, kmh);
   if (gui.speedo3d) updateSpeed3d(player, gui.speedo3d, kmh);
-  if (gui.netstat) updateNetstat(gui.netstat, player);
+  // 网络面板速率是每秒增量（KB/s），须每秒更新（对齐原版 network GUI）；
+  // 不跟 200ms 速度表 tick 一起刷，否则速率数值偏小且刷新过快看不清
+  if (gui.netstat && Date.now() - gui.netstatAt >= 1000) {
+    updateNetstat(gui.netstat, player);
+    gui.netstatAt = Date.now();
+  }
 }
 
 /**

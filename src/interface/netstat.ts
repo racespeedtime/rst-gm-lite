@@ -168,12 +168,13 @@ export function createNetstat(player: Player): NetstatState {
       .setProportional(true),
   );
 
+  // baseline 快照为当前累计值：避免首次更新时把历史累计当成本秒速率（爆表）
   const state: NetstatState = {
     tds,
-    lastBytesSent: 0,
-    lastMessagesSent: 0,
-    lastBytesRec: 0,
-    lastMessagesRec: 0,
+    lastBytesSent: NetStats.getBytesSent(player),
+    lastMessagesSent: NetStats.getMessagesSent(player),
+    lastBytesRec: NetStats.getBytesReceived(player),
+    lastMessagesRec: NetStats.getMessagesReceived(player),
   };
   tds.forEach((t) => t.show(player));
   return state;
