@@ -1,4 +1,4 @@
-import { Dialog, DialogStylesEnum, GameText, Player, Vehicle, WeaponEnum } from "@infernus/core";
+import { Dialog, DialogStylesEnum, GameText, Player, PlayerEvent, Vehicle, WeaponEnum } from "@infernus/core";
 import { pickOption, notifySaved, COLOR_ERROR } from "./settings";
 import { setTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve, isObserving } from "@/core/observe";
@@ -268,4 +268,31 @@ async function sessionCountdown(player: Player, seconds: number): Promise<void> 
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeoutSafe(resolve, ms));
+}
+
+/**
+ * 初始化快捷命令：
+ * /fxq 获取喷气背包 · /jls 获取降落伞（对齐原版命令：喷气背包/降落伞装备）。
+ * 比赛/编辑中禁用（与快捷操作菜单一致，避免装备作弊）。
+ */
+export function initQuickCommands(): void {
+  PlayerEvent.onCommandText("fxq", ({ player, next }) => {
+    if (isInRace(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能获取喷气背包");
+      return next();
+    }
+    player.setSpecialAction(2); // USEJETPACK
+    notifySaved(player, "已获取喷气背包");
+    return next();
+  });
+
+  PlayerEvent.onCommandText("jls", ({ player, next }) => {
+    if (isInRace(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能获取降落伞");
+      return next();
+    }
+    player.giveWeapon(WeaponEnum.PARACHUTE, 1);
+    notifySaved(player, "已获取降落伞（按 F 使用）");
+    return next();
+  });
 }

@@ -41,6 +41,7 @@ import {
 } from "@/core/vehicleAuto";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
 import { initSkinCommands } from "@/personalize/skinPicker";
+import { initQuickCommands } from "@/personalize/quickActions";
 import { initHelpCommand, sendWelcomeMessage } from "@/core/help";
 import { initColandreas } from "@/core/colandreas";
 import {
@@ -326,6 +327,8 @@ initPlayerInfo();
 
 // 皮肤命令（/skin 3D 选肤 / /skin ID）
 initSkinCommands();
+// 快捷命令（/fxq 喷气背包 · /jls 降落伞）
+initQuickCommands();
 
 // 帮助命令（/help 常用命令）
 initHelpCommand();
