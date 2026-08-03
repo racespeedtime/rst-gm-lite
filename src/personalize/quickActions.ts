@@ -4,6 +4,7 @@ import { setTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve } from "@/core/observe";
 import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";
 import { flipVehicle } from "@/core/vehicleAuto";
+import { getSafeGroundZ } from "@/core/colandreas";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
@@ -40,10 +41,30 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
     rows.push({
       label: "脱离卡死（垂直方向）",
       run: () => {
-        // 垂直方向抬升
+        // 垂直方向抬升（对齐原版 /xiufu 的 Z+2.8，对卡在墙缝/室内有效）
         const pos = player.getPos();
         player.setPos(pos.x, pos.y, pos.z + 5);
         player.sendClientMessage("#ffffff", "已尝试脱离卡死（垂直方向）");
+      },
+    });
+    rows.push({
+      label: "脱离卡死（传送到最近地面）",
+      run: () => {
+        // 用 colandreas 找当前 (x,y) 的实际地面高度落上去（最可靠）：
+        // 卡在建筑里/悬空时直接回到该点的地面。室内没有碰撞数据 → 退化为抬升。
+        const pos = player.getPos();
+        if (player.getInterior() === 0) {
+          const ground = getSafeGroundZ(pos.x, pos.y, pos.z);
+          if (Math.abs(ground - pos.z) > 0.5) {
+            player.setPos(pos.x, pos.y, ground);
+            player.sendClientMessage("#ffffff", "已脱离卡死（传送到最近地面）");
+            return;
+          }
+          player.sendClientMessage("#ffffff", "已在安全位置或无法检测地面，可尝试垂直抬升");
+        } else {
+          player.setPos(pos.x, pos.y, pos.z + 5);
+          player.sendClientMessage("#ffffff", "室内无法检测地面，已尝试垂直抬升");
+        }
       },
     });
   }
