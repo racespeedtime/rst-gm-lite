@@ -272,7 +272,6 @@ export async function initWorldEnvironment(): Promise<void> {
           z: Number(first.z),
           color: COLOR_RACE,
           worldId: PUBLIC_WORLD_ID,
-          streamDistance: 10000, // 全图常驻（默认 200 会导致起点图标走近才显示）
         });
         icon.create();
         icons.push(icon);
