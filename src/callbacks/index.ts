@@ -44,6 +44,7 @@ import { initSkinCommands } from "@/personalize/skinPicker";
 import { initQuickCommands } from "@/personalize/quickActions";
 import { initHelpCommand, sendWelcomeMessage } from "@/core/help";
 import { initColandreas } from "@/core/colandreas";
+import { initElevators } from "@/elevator";
 import { initReplay, cleanupReplay, shutdownReplay } from "@/replay";
 import {
   applyWorldEnv,
@@ -241,6 +242,11 @@ PlayerEvent.onDisconnect(({ player, next }) => {
 
 // 命令为辅：/op 打开管理员面板（对话框驱动主流程）
 initOpCommands();
+
+// 电梯系统（LS 大楼/公寓楼/海滨公寓/SF ZomboTech）。
+// 必须注册在 initPanel 之前：电梯与万能面板共用 Y 键，电梯优先消费其检测区内的按键
+//（轿厢内选层/楼层呼叫），未在检测区内的 Y 键继续放行给面板。
+initElevators();
 
 // 万能面板快捷键（Y 键）
 initPanel();
