@@ -29,7 +29,7 @@ import { showMySessionLogs } from "@/auth/sessionLog";
 import { showMyProfile } from "@/core/profile";
 import { openReplayMenuPanel } from "@/replay/menu";
 import { showDialog } from "@/utils/dialog";
-import { COLOR_INFO } from "@/utils/colors";
+import { COLOR_ERROR, COLOR_INFO } from "@/utils/colors";
 
 /** 面板条目：条件可见 + 点击执行 */
 interface PanelItem {
@@ -342,7 +342,11 @@ async function showGroupMenu(player: Player, group: PanelGroup, back: MenuBack):
   }
 }
 
-/** 注册万能面板快捷键（Y 键，按下瞬间触发） */
+/** 注册万能面板入口：
+ * - Y 键（按下瞬间触发）
+ * - /panel 命令：观战（spectator）模式下客户端收不到按键事件（open.mp 文档
+ *   明确 "This key can not be detected when the player is in spectator mode"），
+ *   但聊天框命令不受 spect 限制——观战中可用 /panel 打开面板 */
 export function initPanel(): void {
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     const pressed = isPressed(newKeys, oldKeys, KeysEnum.YES); // 按下瞬间（旧没按、新按下）
@@ -353,6 +357,21 @@ export function initPanel(): void {
     ) {
       void openPanel(player);
     }
+    return next();
+  });
+
+  PlayerEvent.onCommandText("panel", ({ player, next }) => {
+    // 与 Y 键同样的前置校验：未认证 / 在其它流程中（对话框互斥）时不打开，
+    // 避免覆盖当前对话框或把别人的流程锁解开
+    if (!getAuthState(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "请先完成登录");
+      return next();
+    }
+    if (isPlayerLocked(player.id)) {
+      player.sendClientMessage(COLOR_INFO, "当前正在其他流程中，请稍后再试");
+      return next();
+    }
+    void openPanel(player); // openPanel 内部自行 lock/unlock
     return next();
   });
 }
