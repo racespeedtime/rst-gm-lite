@@ -124,7 +124,7 @@ export function cleanupTeleportFreeze(playerId: number): void {
 }
 
 /** 玩家是否接受传送（设置校验） */
-async function acceptsTeleport(player: Player): Promise<boolean> {
+export async function acceptsTeleport(player: Player): Promise<boolean> {
   const auth = getAuthState(player.id);
   if (!auth) return false;
   const setting = await prisma.sysUserSetting.findUnique({ where: { userId: auth.userId } });
@@ -401,35 +401,30 @@ export function initTpTimeoutLoop(): void {
   setIntervalSafe(() => updateTpTimeouts(), 1000);
 }
 
-/** 面板入口：传送菜单（系统/用户传送点列表 / 创建传送点 / OP 管理） */
+/** 面板入口：传送菜单（系统/用户传送点列表 / 创建传送点 / OP 管理，OP 项仅管理员显示） */
 export async function openTeleportMenu(player: Player, back?: MenuBack): Promise<void> {
+  const toThis = () => openTeleportMenu(player, back);
+  const rows: { label: string; run: () => Promise<void> }[] = [
+    { label: "系统传送点", run: () => listSystemTeleports(player, toThis) },
+    { label: "用户传送点（//）", run: () => listUserTeleports(player, toThis) },
+    { label: "创建传送点", run: () => createTeleportFlow(player, toThis) },
+  ];
+  if (isSuperAdmin(player)) {
+    rows.push({ label: "管理传送点（OP）", run: () => manageTeleports(player, toThis) });
+  }
   const res = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "传送",
-      info: "1. 系统传送点\n2. 用户传送点（//）\n3. 创建传送点\n4. 管理传送点（OP）",
+      info: rows.map((r, i) => `${i + 1}. ${r.label}`).join("\n"),
       button1: "确定",
       button2: "关闭",
     }),
   );
   if (!res) return; // 断线
   if (res.response !== 1) return back?.(); // 取消 → 返回上一层
-  const toThis = () => openTeleportMenu(player, back);
-  if (res.listItem === 0) {
-    await listSystemTeleports(player, toThis);
-  } else if (res.listItem === 1) {
-    await listUserTeleports(player, toThis);
-  } else if (res.listItem === 2) {
-    await createTeleportFlow(player, toThis);
-  } else if (res.listItem === 3) {
-    if (isSuperAdmin(player)) {
-      await manageTeleports(player, toThis);
-    } else {
-      player.sendClientMessage(COLOR_ERROR, "仅管理员可管理传送点");
-      return back?.();
-    }
-  }
+  await rows[res.listItem].run();
 }
 
 /** 系统传送点列表（分页选择传送） */

@@ -17,29 +17,38 @@ import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
  * 4. 收起当前车辆
  */
 export async function openMyVehicleMenu(player: Player, back?: MenuBack): Promise<void> {
+  const hasVeh = getOwnedVehicle(player.id) != null;
+  const toThis = () => openMyVehicleMenu(player, back); // 子菜单取消时回本菜单
+  // 无车时不显示"当前爱车管理/收起当前车辆"（点了也是"还没有刷出车辆"的无效项）
+  const rows: { label: string; run: () => void | Promise<void> }[] = [
+    { label: "刷车", run: () => spawnVehicleFlow(player, toThis) },
+    { label: "爱车列表", run: () => listVehiclesFlow(player, toThis) },
+  ];
+  if (hasVeh) {
+    rows.push(
+      { label: "当前爱车管理", run: () => manageCurrentVehicle(player, toThis) },
+      {
+        label: "收起当前车辆",
+        run: () => {
+          destroyPlayerVehicle(player.id);
+          player.sendClientMessage(COLOR_SUCCESS, "已收起当前车辆");
+        },
+      },
+    );
+  }
   const res = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "爱车",
-      info: "1. 刷车\n2. 爱车列表\n3. 当前爱车管理\n4. 收起当前车辆",
+      info: rows.map((r, i) => `${i + 1}. ${r.label}`).join("\n"),
       button1: "确定",
       button2: "关闭",
     }),
   );
   if (!res) return; // 断线
   if (res.response !== 1) return back?.(); // 取消 → 返回上一层
-  const toThis = () => openMyVehicleMenu(player, back);
-  if (res.listItem === 0) {
-    await spawnVehicleFlow(player, toThis);
-  } else if (res.listItem === 1) {
-    await listVehiclesFlow(player, toThis);
-  } else if (res.listItem === 2) {
-    await manageCurrentVehicle(player, toThis);
-  } else if (res.listItem === 3) {
-    destroyPlayerVehicle(player.id);
-    player.sendClientMessage(COLOR_SUCCESS, "已收起当前车辆");
-  }
+  await rows[res.listItem].run();
 }
 
 /** 刷车：输入模型ID */

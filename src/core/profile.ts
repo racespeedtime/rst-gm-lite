@@ -1,11 +1,13 @@
-import { Dialog, DialogStylesEnum, Player, PlayerEvent } from "@infernus/core";
+import { Dialog, DialogStylesEnum, Player, PlayerEvent, PlayerStateEnum } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { pickOption } from "@/personalize/settings";
 import { startObservePlayer } from "@/core/observe";
-import { requestTpa } from "@/teleport";
+import { requestTpa, acceptsTeleport } from "@/teleport";
+import { sessionManager } from "@/sessions/manager";
+import { isInRace } from "@/race/room";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
@@ -189,25 +191,46 @@ export async function showProfileByUsername(player: Player, back?: MenuBack): Pr
   return back?.();
 }
 
-/** 点击玩家操作菜单：查看信息 / 观战 / 请求传送到身边（对齐原版 ClickPlayer 列表） */
+/**
+ * 点击玩家操作菜单：查看信息 / 观战 / 请求传送到身边（对齐原版 ClickPlayer 列表）。
+ * 无效操作不展示：点自己只留"查看信息"（观战/传送自己本就不可用）；
+ * 观战项仅目标可被观看时显示；传送项仅双方不在比赛且同战局且目标接受传送时显示。
+ */
 async function openClickPlayerMenu(player: Player, target: Player): Promise<void> {
   lockPlayer(player.id); // 菜单对话框流程期间锁定，防重复触发/覆盖当前对话框
   try {
     const name = target.getName().name;
-    const index = await pickOption(player, `${name} 的操作`, [
-      "查看个人信息",
-      "观战玩家",
-      "请求传送到TA身边",
-    ]);
-    if (index < 0) return; // 取消/关闭
-    if (index === 0) {
-      const auth = getAuthState(target.id);
-      if (auth) await showProfile(player, auth.userId, `${name} 的信息`);
-    } else if (index === 1) {
-      startObservePlayer(player, target);
-    } else if (index === 2) {
-      await requestTpa(player, target.id);
+    const rows: { label: string; run: () => void | Promise<void> }[] = [
+      { label: "查看个人信息", run: () => showProfile(player, getAuthState(target.id)!.userId, `${name} 的信息`) },
+    ];
+    const isSelf = player.id === target.id;
+    if (!isSelf) {
+      // 观战：目标可观看（非观战/未连接等状态）才显示
+      const watchable =
+        target.isConnected() &&
+        ![PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState());
+      if (watchable) {
+        rows.push({ label: "观战玩家", run: () => startObservePlayer(player, target) });
+      }
+      // 传送到身边：双向不在比赛中 + 同战局 + 目标接受传送 才显示（完整校验 requestTpa 仍兜底）
+      const tpaOk =
+        !isInRace(player.id) &&
+        !isInRace(target.id) &&
+        getAuthState(target.id) != null &&
+        sessionManager.getPlayerSession(player).id === sessionManager.getPlayerSession(target).id &&
+        (await acceptsTeleport(target));
+      if (tpaOk) {
+        rows.push({
+          label: "请求传送到TA身边",
+          run: () => {
+            void requestTpa(player, target.id);
+          },
+        });
+      }
     }
+    const index = await pickOption(player, `${name} 的操作`, rows.map((r) => r.label));
+    if (index < 0) return; // 取消/关闭
+    await rows[index].run();
   } finally {
     unlockPlayer(player.id);
   }

@@ -13,42 +13,32 @@ import type { MenuBack } from "@/core/panel";
 import { createRaceRoom } from "./room";
 import { enterRaceEdit, canEditRace } from "./editor";
 
-/** 面板入口：赛道管理 */
+/** 面板入口：赛道管理（管理赛道为 OP 专属，非 OP 不显示该行） */
 export async function openRaceMenu(player: Player, back?: MenuBack): Promise<void> {
+  const isOp = isSuperAdmin(player);
+  const toThis = () => openRaceMenu(player, back);
+  const rows: { label: string; run: () => Promise<void> }[] = [
+    { label: "创建赛道", run: () => createRaceFlow(player, toThis) },
+    { label: "赛道列表", run: () => raceListFlow(player, "ALL", toThis) },
+    { label: "我的赛道", run: () => raceListFlow(player, "MINE", toThis) },
+    { label: "赛道分组", run: () => raceGroupFlow(player, toThis) },
+  ];
+  if (isOp) {
+    rows.push({ label: "管理赛道（OP）", run: () => adminRaceFlow(player, toThis) });
+  }
   const res = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "赛车",
-      info: "1. 创建赛道\n2. 赛道列表\n3. 我的赛道\n4. 赛道分组\n5. 管理赛道（OP）",
+      info: rows.map((r, i) => `${i + 1}. ${r.label}`).join("\n"),
       button1: "确定",
       button2: "关闭",
     }),
   );
   if (!res) return; // 断线
   if (res.response !== 1) return back?.(); // 取消 → 返回上一层
-  const toThis = () => openRaceMenu(player, back);
-  switch (res.listItem) {
-    case 0:
-      await createRaceFlow(player, toThis);
-      break;
-    case 1:
-      await raceListFlow(player, "ALL", toThis);
-      break;
-    case 2:
-      await raceListFlow(player, "MINE", toThis);
-      break;
-    case 3:
-      await raceGroupFlow(player, toThis);
-      break;
-    case 4:
-      if (isSuperAdmin(player)) {
-        await adminRaceFlow(player, toThis);
-      } else {
-        player.sendClientMessage(COLOR_ERROR, "仅管理员可管理赛道");
-      }
-      break;
-  }
+  await rows[res.listItem].run();
 }
 
 /** 创建赛道 */

@@ -1,7 +1,7 @@
 import { Dialog, DialogStylesEnum, GameText, Player, Vehicle, WeaponEnum } from "@infernus/core";
 import { pickOption, notifySaved, COLOR_ERROR } from "./settings";
 import { setTimeoutSafe } from "@/core/timers";
-import { startObservePlayer, stopObserve } from "@/core/observe";
+import { startObservePlayer, stopObserve, isObserving } from "@/core/observe";
 import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";
 import { flipVehicle } from "@/core/vehicleAuto";
 import { getSafeGroundZ } from "@/core/colandreas";
@@ -148,33 +148,36 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
     run: () => sessionCountdown(player, 10),
   });
 
-  rows.push({
-    label: "观战玩家",
-    run: async () => {
-      const res = await showDialog(
-        player,
-        new Dialog({
-          style: DialogStylesEnum.INPUT,
-          caption: "观战玩家",
-          info: "输入要观看的玩家ID：",
-          button1: "确定",
-          button2: "取消",
-        }),
-      );
-      if (!res || res.response !== 1) return;
-      const target = Player.getInstance(+res.inputText.trim());
-      if (!target) {
-        player.sendClientMessage(COLOR_ERROR, "对方未在线");
-        return;
-      }
-      startObservePlayer(player, target);
-    },
-  });
-
-  rows.push({
-    label: "停止观战",
-    run: () => stopObserve(player),
-  });
+  // 观战相关：未观战显示"观战玩家"，已观战显示"停止观战"（互斥，避免无效项）
+  if (!isObserving(player.id)) {
+    rows.push({
+      label: "观战玩家",
+      run: async () => {
+        const res = await showDialog(
+          player,
+          new Dialog({
+            style: DialogStylesEnum.INPUT,
+            caption: "观战玩家",
+            info: "输入要观看的玩家ID：",
+            button1: "确定",
+            button2: "取消",
+          }),
+        );
+        if (!res || res.response !== 1) return;
+        const target = Player.getInstance(+res.inputText.trim());
+        if (!target) {
+          player.sendClientMessage(COLOR_ERROR, "对方未在线");
+          return;
+        }
+        startObservePlayer(player, target);
+      },
+    });
+  } else {
+    rows.push({
+      label: "停止观战",
+      run: () => stopObserve(player),
+    });
+  }
 
   const index = await pickOption(
     player,
