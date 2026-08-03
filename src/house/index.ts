@@ -3,6 +3,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
 import { registerObjectCollision, clearObjectCollisions } from "@/core/collision";
+import { teleportTo } from "@/teleport";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 
 import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
@@ -433,14 +434,10 @@ async function teleportToHouse(player: Player, houseName: string): Promise<void>
     player.sendClientMessage(COLOR_ERROR, `未找到房屋「${houseName}」的传送点`);
     return;
   }
-  player.setInterior(tp.interiorId);
-  if (player.isInAnyVehicle()) {
-    const veh = player.getVehicle()!;
-    veh.setPos(Number(tp.x), Number(tp.y), Number(tp.z));
-    veh.setZAngle(Number(tp.angle));
-  } else {
-    player.setPos(Number(tp.x), Number(tp.y), Number(tp.z));
-    player.setFacingAngle(Number(tp.angle));
-  }
+  // await 后复查断线（查询期间玩家可能已掉线）
+  if (!player.isConnected()) return;
+  // 用 teleportTo 统一处理：车内 linkToInterior（防人车分离）+ 传送后冻结
+  // （房屋 interior 物件流式加载，不冻结会下坠/穿模）
+  teleportTo(player, Number(tp.x), Number(tp.y), Number(tp.z), Number(tp.angle), tp.interiorId);
   player.sendClientMessage(COLOR_WHITE, `[房屋] 已传送到 ${tp.house?.name ?? houseName}`);
 }

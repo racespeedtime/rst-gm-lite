@@ -270,6 +270,8 @@ export function initTeleport(): void {
       const veh = player.getVehicle()!;
       veh.setPos(saved.x, saved.y, saved.z);
       veh.setZAngle(saved.zAngle);
+      // 车辆必须连到保存的 interior（否则人进室内、车留在旧 interior → 人车分离/车隐形）
+      veh.linkToInterior(saved.interior);
     } else {
       player.setPos(saved.x, saved.y, saved.z);
       player.setFacingAngle(saved.facingAngle);
@@ -336,12 +338,13 @@ export function initTeleport(): void {
       return next();
     }
     const pos = player.getPos();
-    // 用 teleportTo 统一处理人车分离（车内/步行分别移动），避免 setPos 后玩家与车分离
+    // 落点 X/Y 横向随机（错开与对方重合），Z 保持原高度（之前 z+rand 会
+    // 把被传送者抬高砸在对方头顶/卡进身体）
     teleportTo(
       from,
       pos.x + Math.random() * 3,
-      pos.y,
-      pos.z + Math.random() * 3,
+      pos.y + Math.random() * 3,
+      pos.z,
       player.getFacingAngle().angle,
       player.getInterior(),
     );
