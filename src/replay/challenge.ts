@@ -42,6 +42,9 @@ export interface ChallengeSession {
   /** 挑战前所在世界（退出/结束恢复） */
   prevWorld: number;
   replayId: string;
+  /** 影子战绩快照（结算显示） */
+  replayRank: number | null;
+  replayName: string | null;
   data: ReplayData;
   ghost: ChallengeGhost;
   cps: { x: number; y: number; z: number; size: number }[];
@@ -189,6 +192,9 @@ async function finishChallenge(player: Player, ch: ChallengeSession): Promise<vo
       style: DialogStylesEnum.MSGBOX,
       caption: "影子挑战",
       info: [
+        `{98CDFE}赛道: {FFFFFF}${ch.replayName ?? "—"}`,
+        `{98CDFE}影子战绩: {FFFFFF}${ch.replayRank != null ? `No.${ch.replayRank}` : "未完成"}`,
+        "",
         `{98CDFE}你的用时: {FFFFFF}${fmtMs(playerMs)}`,
         `{98CDFE}影子用时: {FFFFFF}${fmtMs(ghostMs)}`,
         `{98CDFE}差距: {FFFFFF}${fmtMs(Math.abs(diff))}`,
@@ -243,7 +249,23 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     player.sendClientMessage(COLOR_ERROR, "你还没有该赛道的比赛回放（跑一场比赛后自动生成）");
     return false;
   }
-  const replay = races[0]; // 最近一次完成比赛的回放
+  // 多场回放可选：跟"哪一场比赛"比由玩家决定（默认最近完成的一场）
+  const chosen = races.length === 1
+    ? races[0]
+    : await showDialog(
+        player,
+        new Dialog({
+          style: DialogStylesEnum.LIST,
+          caption: "选择影子（比赛回放）",
+          info: races
+            .map((r, i) => `${i + 1}. ${r.rank != null ? `No.${r.rank}` : "未完成"} · ${new Date(r.createdAt).toLocaleString("zh-CN", { hour12: false })}`)
+            .join("\n"),
+          button1: "确定",
+          button2: "取消",
+        }),
+      ).then((res) => (res && res.response === 1 ? races[res.listItem] : undefined));
+  if (!chosen) return false; // 取消选择
+  const replay = chosen;
   let data: ReplayData;
   try {
     data = loadReplayData(replay.fileName); // 只读缓存（与回放共享文件数据）
@@ -312,6 +334,8 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     worldId,
     prevWorld: player.getVirtualWorld(),
     replayId: replay.id,
+    replayRank: replay.rank ?? null,
+    replayName: replay.raceName ?? null,
     data,
     ghost,
     cps: cps.map((c) => ({ x: Number(c.x), y: Number(c.y), z: Number(c.z), size: Number(c.size) })),
