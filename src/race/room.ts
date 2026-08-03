@@ -670,15 +670,16 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
     return;
   }
 
-  // 第一名完成 → 20s 后结束
-  if (rank === 1 && !room.endTimer) {
-    broadcastToRoom(room, "[赛车] 第一名已完成，20 秒后比赛结束");
-    room.endTimer = setTimeoutSafe(() => endRoom(room), END_GRACE_MS);
-  }
-  // 全部完成 → 立即结束
+  // 全部完成 → 立即结束（单人房间/全员冲线：没有人在跑，不需要 20s 宽限，
+  // 否则会先广播"20 秒后结束"再立刻结束，误导）
   if (room.results.length >= room.members.size) {
     endRoom(room);
     return;
+  }
+  // 第一名完成、还有成员在跑 → 20s 宽限等他们冲线
+  if (rank === 1 && !room.endTimer) {
+    broadcastToRoom(room, "[赛车] 第一名已完成，20 秒后比赛结束");
+    room.endTimer = setTimeoutSafe(() => endRoom(room), END_GRACE_MS);
   }
   // 自动观战下一个未完成玩家（二次确认目标仍有效）
   const next = [...room.members.values()].find((m) => {
