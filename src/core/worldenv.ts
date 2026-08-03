@@ -139,30 +139,15 @@ export function clearWorldEnvironment(): void {
   worldEnv = { icons: [], labels: [], checkpoints: [] };
 }
 
-/** 地图图标定义（map_icon 表 → per-player SetPlayerMapIcon，登录时设置） */
-let mapIconDefs: { iconId: number; x: number; y: number; z: number }[] = [];
-
-/**
- * 给玩家设置全部地图图标（per-player SetPlayerMapIcon，无流式距离，小地图常驻）。
- * 断线后图标随连接自动消失，无需清理；重新登录时再设置。
- * 对齐原版 Race_ShowCp 的 SetPlayerMapIcon 用法（style=1 仅小地图显示）。
- */
-export function applyMapIconsToPlayer(player: Player): void {
-  for (let i = 0; i < mapIconDefs.length; i++) {
-    const d = mapIconDefs[i];
-    try {
-      player.setMapIcon(i, d.x, d.y, d.z, d.iconId, 0xffffffaa, 1);
-    } catch (e) {
-      logger.warn(`[worldenv] 设置玩家地图图标失败 ${player.getName().name} icon=${d.iconId}`, e);
-    }
-  }
-}
+/** 大世界 map_icon 流式显示距离：覆盖一个城市范围（SA 城市半径约 2000-3000 单位），
+ *  玩家所在城市内的图标显示、走远消失（按城市就近显示）。 */
+const MAP_ICON_STREAM_DISTANCE = 2500;
 
 /**
  * 初始化世界环境（GameMode.onInit 调用）：
  * 1. 服务器全局时间/天气（世界环境基准）
- * 2. map_icon 表 → 缓存图标定义（per-player SetPlayerMapIcon 常驻小地图，
- *    不再用 DynamicMapIcon——streamer 默认 streamDistance=200 导致走远图标消失）
+ * 2. map_icon 表 → DynamicMapIcon 流式图标（streamDistance=城市范围：玩家所在
+ *    城市内的图标显示、走远消失——按城市就近显示，不再全图常驻铺满小地图）
  * 3. 系统传送点 → 3D 标签（"/名称 + 描述"）
  * 4. 启用赛道起点 → 3D 标签（"输入 /r s 赛道名 开始比赛"）+ 地图图标（类型 53）
  */
@@ -178,21 +163,33 @@ export async function initWorldEnvironment(): Promise<void> {
   const checkpoints: DynamicCheckpoint[] = [];
 
   // 2. 地图图标（数据库 map_icon 表）
-  // 缓存定义即可（不创建实体）：登录时用 per-player SetPlayerMapIcon 设置，
-  // 小地图常驻显示。不用 DynamicMapIcon——streamer 流式默认 streamDistance=200，
-  // 玩家走远图标就消失（小地图也跟着没）。
+  // 用 DynamicMapIcon 流式图标：streamDistance 覆盖一个城市范围（SA 城市半径
+  // 约 2000-3000 单位）——玩家在哪个城市附近就看到那个城市的图标（走进显示、
+  // 走远消失，对齐"按用户所在城市来显示"），不再用 SetPlayerMapIcon 全图常驻。
+  // 全局实体（worldId 公共大世界），onExit 统一销毁，无需 per-player 清理。
   try {
     const mapIcons = await prisma.mapIcon.findMany({
       where: { deletedAt: null },
       orderBy: { index: "asc" },
     });
-    mapIconDefs = mapIcons.map((mi) => ({
-      iconId: mi.iconId,
-      x: Number(mi.x),
-      y: Number(mi.y),
-      z: Number(mi.z),
-    }));
-    logger.info(`[worldenv] 已缓存 ${mapIconDefs.length} 个地图图标定义`);
+    for (const mi of mapIcons) {
+      try {
+        const icon = new DynamicMapIcon({
+          type: mi.iconId,
+          x: Number(mi.x),
+          y: Number(mi.y),
+          z: Number(mi.z),
+          color: 0xffffffaa,
+          worldId: PUBLIC_WORLD_ID,
+          streamDistance: MAP_ICON_STREAM_DISTANCE,
+        });
+        icon.create();
+        icons.push(icon);
+      } catch (e) {
+        logger.warn(`[worldenv] 地图图标创建失败 icon=${mi.iconId}`, e);
+      }
+    }
+    logger.info(`[worldenv] 已创建 ${icons.length} 个地图图标（流式，城市范围 ${MAP_ICON_STREAM_DISTANCE}）`);
   } catch (e) {
     logger.error("[worldenv] 加载地图图标失败", e);
   }

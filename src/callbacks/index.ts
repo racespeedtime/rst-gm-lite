@@ -48,7 +48,6 @@ import {
   clearWorldEnvironment,
   initWorldEnvironment,
   startWorldClockTimers,
-  applyMapIconsToPlayer,
 } from "@/core/worldenv";
 
 import { COLOR_INFO, COLOR_ERROR } from "@/utils/colors";
@@ -116,8 +115,6 @@ async function handlePlayerConnect(player: Player) {
       // 注册（prevWorld 战局仍存在则加回，否则回公共大世界）——不能再调
       // onPlayerAuthenticated，否则会把玩家塞回 publicWorld 造成双注册/注册错乱
       initChatState(player.id);
-      // 地图图标（per-player SetPlayerMapIcon，重连是全新连接需重新设置）
-      applyMapIconsToPlayer(player);
       // 解除连接时的观战模式，恢复可见（比赛世界）
       player.toggleSpectating(false);
       if (auth.isSuperAdmin) {
@@ -134,8 +131,6 @@ async function handlePlayerConnect(player: Player) {
     setHouseObjectsVisibleForPlayer(player, loginSetting?.showObject ?? true);
     // 应用房屋建筑移除（removeobj，per-player 需要在世界内执行）
     applyHouseRemovedBuildings(player);
-    // 地图图标（per-player SetPlayerMapIcon，小地图常驻显示）
-    applyMapIconsToPlayer(player);
     if (!player.isConnected()) {
       return;
     }
