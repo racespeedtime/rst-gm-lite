@@ -30,6 +30,8 @@ import { COLOR_INFO } from "@/utils/colors";
 /** 面板条目：条件可见 + 点击执行 */
 interface PanelItem {
   label: string;
+  /** 简短说明（主面板表格第二列/分组菜单表格第二列展示） */
+  desc?: string;
   visible?: (player: Player) => boolean;
   /** 比赛中是否允许（默认 false，比赛中隐藏） */
   raceSafe?: boolean;
@@ -43,6 +45,8 @@ export type MenuBack = () => void | Promise<void>;
 /** 面板分组：一级菜单 = 玩法域，二级菜单 = 具体功能入口 */
 interface PanelGroup {
   label: string;
+  /** 简短说明（主面板表格第二列展示，一眼看出该分组能做什么） */
+  desc?: string;
   /** 组级可见条件（如 OP 专属） */
   visible?: (player: Player) => boolean;
   items: PanelItem[];
@@ -60,6 +64,7 @@ interface PanelGroup {
 const panelGroups: PanelGroup[] = [
   {
     label: "比赛房间",
+    desc: "开始 / 离开比赛",
     // 仅在比赛房间内（创建/加入比赛后）显示；其余玩法组在比赛中自动隐藏
     visible: (player) => isInRace(player.id),
     items: [
@@ -86,6 +91,7 @@ const panelGroups: PanelGroup[] = [
   },
   {
     label: "赛道编辑",
+    desc: "退出编辑模式",
     // 仅在赛道编辑模式中显示；其余玩法组在编辑中自动隐藏（编辑用 F5 交互，避免干扰）
     visible: (player) => isEditing(player.id),
     items: [
@@ -101,28 +107,33 @@ const panelGroups: PanelGroup[] = [
   },
   {
     label: "战局",
+    desc: "创建 / 加入 / 管理战局",
     items: [{ label: "战局", run: openSessionMenu }],
   },
   {
     label: "赛车",
+    desc: "创建赛道 / 列表 / 排行 / 分组",
     items: [{ label: "赛车", run: openRaceMenu }],
   },
   {
     label: "爱车",
+    desc: "刷车 / 爱车列表 / 管理",
     items: [{ label: "爱车", run: openMyVehicleMenu }],
   },
   {
     label: "个性化",
+    desc: "人物 / 车辆 / 世界 / 界面 / 装扮",
     items: [
-      { label: "人物", run: openCharacterMenu },
-      { label: "车辆", run: openVehicleMenu },
-      { label: "世界", run: openWorldMenu },
-      { label: "界面", run: openInterfaceMenu },
-      { label: "装扮", run: openAttireMenu },
+      { label: "人物", desc: "皮肤 / NameTag / 前缀 / 预设 / 无敌", run: openCharacterMenu },
+      { label: "车辆", desc: "装扮 / 换色 / 修复 / 氮气 / 翻正", run: openVehicleMenu },
+      { label: "世界", desc: "时间 / 天气 / 物件 / 颜色 / 出生 / 传送", run: openWorldMenu },
+      { label: "界面", desc: "GUI / 速度表 / 特技", run: openInterfaceMenu },
+      { label: "装扮", desc: "预设 / 挂件 / 编辑", run: openAttireMenu },
     ],
   },
   {
     label: "我的",
+    desc: "信息 / 登录记录 / 密码 / 快捷操作",
     items: [
       { label: "我的信息", raceSafe: true, run: showMyProfile },
       { label: "我的登录记录", raceSafe: true, run: showMySessionLogs },
@@ -133,10 +144,12 @@ const panelGroups: PanelGroup[] = [
   },
   {
     label: "传送",
+    desc: "系统 / 用户传送点 · 创建 / 管理",
     items: [{ label: "传送", run: openTeleportMenu }],
   },
   {
     label: "管理",
+    desc: "管理员面板 / 装扮管理（仅管理员）",
     visible: isSuperAdmin,
     items: [
       { label: "管理员面板", raceSafe: true, run: openOpPanel },
@@ -201,16 +214,20 @@ export async function openPanel(player: Player): Promise<void> {
   }
 }
 
-/** 主面板：分组列表。点"关闭"终止面板；选组进入分组菜单（停留主面板 → 记忆清空） */
+/** 主面板：分组列表（表格：分组 | 说明）。点"关闭"终止面板；选组进入分组菜单（停留主面板 → 记忆清空） */
 async function showPanelList(player: Player): Promise<void> {
   const groups = getVisibleGroups(player);
   if (groups.length === 0) return;
   lastGroupByPlayer.set(player.id, null);
-  const info = groups.map((group, i) => `${i + 1}. ${group.label}`).join("\n");
+  // TABLIST_HEADERS 两列：分组 + 简短说明（一眼看出每个分组能做什么）
+  const info = [
+    ["{FFD700}分组", "{FFD700}说明"].join("\t"),
+    ...groups.map((g) => [g.label, g.desc ?? ""].join("\t")),
+  ].join("\n");
   const res = await showDialog(
     player,
     new Dialog({
-      style: DialogStylesEnum.LIST,
+      style: DialogStylesEnum.TABLIST_HEADERS,
       caption: "万能面板",
       info,
       button1: "确定",
@@ -219,13 +236,13 @@ async function showPanelList(player: Player): Promise<void> {
   );
   if (!res) return; // 断线直接退出
   if (res.response !== 1) return; // 主面板点"关闭"→ 关闭面板
-  const group = groups[res.listItem];
+  const group = groups[res.listItem]; // TABLIST_HEADERS 表头不占行号，listItem 即分组下标
   if (group) {
     await showGroupMenu(player, group, () => showPanelList(player));
   }
 }
 
-/** 分组菜单：显示组内功能入口，子菜单取消回本组，本组"关闭"回主面板（停留本组 → 记忆本组） */
+/** 分组菜单：显示组内功能入口（表格：功能 | 说明），子菜单取消回本组，本组"关闭"回主面板（停留本组 → 记忆本组） */
 async function showGroupMenu(player: Player, group: PanelGroup, back: MenuBack): Promise<void> {
   const items = getVisibleItems(group, player);
   if (items.length === 0) return back();
@@ -237,11 +254,14 @@ async function showGroupMenu(player: Player, group: PanelGroup, back: MenuBack):
     return;
   }
   lastGroupByPlayer.set(player.id, group.label);
-  const info = items.map((item, i) => `${i + 1}. ${item.label}`).join("\n");
+  const info = [
+    ["{FFD700}功能", "{FFD700}说明"].join("\t"),
+    ...items.map((item) => [item.label, item.desc ?? ""].join("\t")),
+  ].join("\n");
   const res = await showDialog(
     player,
     new Dialog({
-      style: DialogStylesEnum.LIST,
+      style: DialogStylesEnum.TABLIST_HEADERS,
       caption: group.label,
       info,
       button1: "确定",

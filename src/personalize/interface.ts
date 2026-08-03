@@ -18,20 +18,24 @@ import type { MenuBack } from "@/core/panel";
  * 5. 速度表 3d 显示（与 2d 互斥）
  * 6. 特技显示
  *
- * 操作一项后自动刷新回本菜单（状态实时刷新），点"取消"才退出面板。
+ * 表格两列（功能 | 当前值），操作一项后自动刷新回本菜单（状态实时刷新），
+ * 点"取消"才退出面板。
  */
 export async function openInterfaceMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
   if (!setting) return;
-  const options = [
-    `隐藏所有GUI（覆盖优先）：${toggleText(setting.hideAllGui)}`,
-    `网络信息GUI：${toggleText(setting.showNetstat)}`,
-    `速度表显示：${toggleText(setting.showSpeed)}`,
-    `速度表 2d：${toggleText(setting.showSpeed2d)}`,
-    `速度表 3d：${toggleText(setting.showSpeed3d)}`,
-    `特技显示：${toggleText(setting.showStunt)}`,
+  const rows = [
+    { name: "隐藏所有GUI（覆盖优先）", value: toggleText(setting.hideAllGui) },
+    { name: "网络信息GUI", value: toggleText(setting.showNetstat) },
+    { name: "速度表显示", value: toggleText(setting.showSpeed) },
+    { name: "速度表 2d", value: toggleText(setting.showSpeed2d) },
+    { name: "速度表 3d", value: toggleText(setting.showSpeed3d) },
+    { name: "特技显示", value: toggleText(setting.showStunt) },
   ];
-  const index = await pickOption(player, "界面个性化", options);
+  const index = await pickOption(player, "界面个性化", rows.map((r) => r.name), {
+    headers: ["设置", "当前"],
+    format: (_o, i) => [rows[i].name, rows[i].value],
+  });
   if (index < 0) return back?.();
 
   const again = () => openInterfaceMenu(player, back);

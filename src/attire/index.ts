@@ -679,7 +679,9 @@ async function addPlayerPresetItem(
   const r = await showPagedDialog(player, {
     caption: "选择装扮",
     data: attires,
-    format: (a) => `${a.name}（模型${a.modelId} 骨${a.boneId}）`,
+    // 多列：名称 | 模型 | 默认骨骼 | 类型
+    headers: ["名称", "模型", "默认骨骼", "类型"],
+    format: (a) => [a.name, String(a.modelId), String(a.boneId), a.type === "COMMON" ? "通用" : "人物"],
     button1: "确定",
     button2: "取消",
   });
@@ -1101,7 +1103,8 @@ async function addVehiclePresetItem(
   const r = await showPagedDialog(player, {
     caption: "选择挂件",
     data: attires,
-    format: (a) => `${a.name}（模型${a.modelId}）`,
+    headers: ["名称", "模型", "类型"],
+    format: (a) => [a.name, String(a.modelId), a.type === "COMMON" ? "通用" : "车辆"],
     button1: "确定",
     button2: "取消",
   });

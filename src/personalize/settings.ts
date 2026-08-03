@@ -44,17 +44,35 @@ export async function updateSetting(
   settingCache.set(auth.userId, setting);
 }
 
-/** 显示一个"选择切换"对话框：LIST 列出选项，返回所选下标；取消返回 -1 */
+/** 表格模式参数（TABLIST_HEADERS 多列：表头 + 每行多列，\t 分隔） */
+export interface PickOptionTable {
+  headers: string[];
+  /** 行 → 各列文本（须与 headers 列数一致）；option 为对应行原始文本 */
+  format: (option: string, index: number) => string[];
+}
+
+/**
+ * 显示一个"选择切换"对话框：返回所选下标；取消返回 -1。
+ * 默认 LIST 单列（`1. xxx`）；传 table 时用 TABLIST_HEADERS 多列
+ * （表头金色首行不占行号，listItem 从首个数据行起算——与 LIST 语义一致）。
+ */
 export async function pickOption(
   player: Player,
   caption: string,
   options: string[],
+  table?: PickOptionTable,
 ): Promise<number> {
-  const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
+  const isTable = !!table && table.headers.length > 0;
+  const info = isTable
+    ? [
+        table!.headers.map((h) => `{FFD700}${h}`).join("\t"),
+        ...options.map((o, i) => table!.format(o, i).join("\t")),
+      ].join("\n")
+    : options.map((o, i) => `${i + 1}. ${o}`).join("\n");
   const res = await showDialog(
     player,
     new Dialog({
-      style: DialogStylesEnum.LIST,
+      style: isTable ? DialogStylesEnum.TABLIST_HEADERS : DialogStylesEnum.LIST,
       caption,
       info,
       button1: "确定",

@@ -89,7 +89,13 @@ async function listVehiclesFlow(player: Player, back?: MenuBack): Promise<void> 
   const r = await showPagedDialog(player, {
     caption: `我的爱车（${vehicles.length} 辆）`,
     data: vehicles,
-    format: (v) => `模型 ${v.modelId}${v.plateNumber ? `（${v.plateNumber}）` : ""}`,
+    // 多列：模型 | 车牌 | 锁定状态
+    headers: ["模型", "车牌", "状态"],
+    format: (v) => [
+      String(v.modelId),
+      v.plateNumber || "—",
+      v.isLocked ? "{FF0000}锁定" : "{00FF00}未锁",
+    ],
     button1: "刷出",
     button2: "取消",
   });

@@ -26,22 +26,25 @@ import { showDialog } from "@/utils/dialog";
  * 6. 默认人物预设
  * 7. 无敌状态
  *
- * 操作一项后自动刷新回本菜单（改完一项可继续改下一项，状态实时刷新），
+ * 表格两列（功能 | 当前值），操作一项后自动刷新回本菜单（状态实时刷新），
  * 点"取消"才退出面板——避免改一项就得重新按 Y 的来回折腾。
  */
 export async function openCharacterMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
   if (!setting) return;
-  const options = [
-    `人物装扮：${toggleText(setting.showPlayerAttire)}`,
-    `显示NameTag：${toggleText(setting.showName)}`,
-    `皮肤模型（当前：${setting.skinId}）`,
-    `名字前缀（当前：${setting.prefix ? setting.prefix : "无"}）`,
-    `名字后缀（当前：${setting.suffix ? setting.suffix : "无"}）`,
-    `默认人物预设`,
-    `无敌状态：${toggleText(setting.invincible)}`,
+  const rows = [
+    { name: "人物装扮", value: toggleText(setting.showPlayerAttire) },
+    { name: "显示NameTag", value: toggleText(setting.showName) },
+    { name: "皮肤模型", value: String(setting.skinId) },
+    { name: "名字前缀", value: setting.prefix || "无" },
+    { name: "名字后缀", value: setting.suffix || "无" },
+    { name: "默认人物预设", value: "" },
+    { name: "无敌状态", value: toggleText(setting.invincible) },
   ];
-  const index = await pickOption(player, "人物个性化", options);
+  const index = await pickOption(player, "人物个性化", rows.map((r) => r.name), {
+    headers: ["设置", "当前"],
+    format: (_o, i) => [rows[i].name, rows[i].value],
+  });
   if (index < 0) return back?.(); // 取消 → 退出面板
 
   const again = () => openCharacterMenu(player, back); // 操作完成后回到本菜单

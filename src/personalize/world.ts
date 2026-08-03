@@ -81,22 +81,26 @@ function normalizeHexColor(input: string): string | null {
  * 7. 出生点设置（随机/上次位置）
  * 8. 接受传送（开关）
  *
- * 操作一项后自动刷新回本菜单（状态实时刷新），点"取消"才退出面板。
+ * 表格两列（功能 | 当前值），操作一项后自动刷新回本菜单（状态实时刷新），
+ * 点"取消"才退出面板。
  */
 export async function openWorldMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
   if (!setting) return;
-  const options = [
-    `跟随世界时间：${toggleText(setting.syncGameTime)}`,
-    `跟随世界天气：${toggleText(setting.syncWorldWeather)}`,
-    `个人时间流逝：${toggleText(setting.timeFlow)}`,
-    `个人时间天气（时:${pad2(setting.timeHour)} 天气:${setting.weather}）`,
-    `显示物件（obj）：${toggleText(setting.showObject)}`,
-    `游戏内颜色`,
-    `出生点设置`,
-    `接受传送：${toggleText(setting.acceptTeleport)}`,
+  const rows = [
+    { name: "跟随世界时间", value: toggleText(setting.syncGameTime) },
+    { name: "跟随世界天气", value: toggleText(setting.syncWorldWeather) },
+    { name: "个人时间流逝", value: toggleText(setting.timeFlow) },
+    { name: "个人时间天气", value: `${pad2(setting.timeHour)}:${pad2(setting.timeMinute)} · ${setting.weather}` },
+    { name: "显示物件（obj）", value: toggleText(setting.showObject) },
+    { name: "游戏内颜色", value: setting.playerColor || "#ffffff" },
+    { name: "出生点设置", value: "" },
+    { name: "接受传送", value: toggleText(setting.acceptTeleport) },
   ];
-  const index = await pickOption(player, "世界个性化", options);
+  const index = await pickOption(player, "世界个性化", rows.map((r) => r.name), {
+    headers: ["设置", "当前"],
+    format: (_o, i) => [rows[i].name, rows[i].value],
+  });
   if (index < 0) return back?.();
 
   const again = () => openWorldMenu(player, back);
