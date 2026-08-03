@@ -90,7 +90,7 @@ export function initReplayCommands(): void {
       default:
         player.sendClientMessage(
           COLOR_INFO,
-          "用法: /rp play 开始/继续 · /rp pause 暂停 · /rp forward [2|4] 快进 · /rp back 后退 · /rp speed [0.5|1|2|4] 倍速 · /rp seek 秒 跳转 · /rp stop 停止",
+          "用法: /rp play 开始/继续 · /rp pause 暂停 · /rp forward [2|4] 快进 · /rp back [0.5|1|2|4] 倒放 · /rp speed [0.5|1|2|4] 倍速 · /rp seek 秒 跳转 · /rp stop 停止",
         );
         return next();
     }

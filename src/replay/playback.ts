@@ -454,16 +454,18 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
     case "forward": {
       const n = Number(arg);
       session.direction = 1;
-      session.speed = n === 2 || n === 4 ? n : 2;
+      session.speed = n === 2 || n === 4 ? n : 1; // 默认 ×1（正放）
       session.paused = false;
       player.sendClientMessage(COLOR_RACE, `快进 ×${session.speed}`);
       break;
     }
     case "back": {
+      const n = Number(arg);
+      // 倒放档位与正放对称：/rp back [0.5|1|2|4]（默认 ×1 倒放）
       session.direction = -1;
-      session.speed = Number(arg) === 2 || Number(arg) === 4 ? Number(arg) : 2;
+      session.speed = n === 0.5 || n === 1 || n === 2 || n === 4 ? n : 1;
       session.paused = false;
-      player.sendClientMessage(COLOR_RACE, `后退 ×${session.speed}`);
+      player.sendClientMessage(COLOR_RACE, `倒放 ×${session.speed}`);
       break;
     }
     case "speed": {
