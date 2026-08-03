@@ -135,6 +135,7 @@ function createDrifter(def: DrifterDef): void {
     vehicle.create();
     vehicle.setVirtualWorld(PUBLIC_WORLD_ID);
     vehicle.linkToInterior(0);
+    vehicle.addComponent(1010); // 氮气（对齐原版 NPC 漂移车带氮气）
     // 锁门防玩家抢司机位把 NPC 挤下车（对齐回放系统 ghost 车处理；
     // 乘客用 putPlayerIn 强塞座位，F 键仍可正常下车）
     vehicle.setParamsEx(true, false, false, true, false, false, false);
@@ -143,13 +144,14 @@ function createDrifter(def: DrifterDef): void {
     npc.setInvulnerable(true); // 防伤害
 
     // NPC 无 nametag：车顶绑 3D 标签显示"身份 + 路线"（随车移动）。
-    // attachedVehicle 的 x/y/z 为相对车辆原点（车底）的偏移，车高约 1.5，抬到车顶上方
+    // attachedVehicle 的 x/y/z 为相对车辆原点（车底中心）的偏移：跑车车顶约
+    // z+1.3~1.5，z=1.5 贴近车顶上方；之前 2.2 悬在车顶近 1 米显得脱离车身
     label = new Dynamic3DTextLabel({
       text: `{33FF33}漂移车手 ${def.name}\n{FFFFFF}路线：${def.route}`,
       color: 0x33aa33aa,
       x: 0,
       y: 0,
-      z: 2.2,
+      z: 1.5,
       drawDistance: 15,
       testLOS: false,
       attachedVehicle: vehicle.id,
@@ -225,20 +227,29 @@ function removePassenger(player: Player): void {
   }
 }
 
-/** 上车（已校验玩家在公共大世界） */
+/** 上车（已校验玩家在公共大世界；支持从其它 NPC 车直接切换：先释放旧座位） */
 function rideDrifter(player: Player, def: DrifterDef): void {
+  // 基础条件优先校验（世界不对时先提示，不落到满员/切换逻辑）
+  if (player.getVirtualWorld() !== PUBLIC_WORLD_ID) {
+    player.sendClientMessage(COLOR_ERROR, "[漂移] 请先回到公共大世界再上车");
+    return;
+  }
   const ent = entities.get(def.id);
   if (!ent || !ent.npc?.isValid() || !ent.vehicle?.isValid()) {
     player.sendClientMessage(COLOR_ERROR, `[漂移] ${def.name} 尚未就绪，请稍后再试`);
     return;
   }
+  // 已在目标车上 → 提示（避免重复上车/反复切换抖动）
+  if (ent.passengerSlots.includes(player)) {
+    player.sendClientMessage(COLOR_ERROR, `[漂移] 你已在 ${def.name} 的车上`);
+    return;
+  }
+  // 切换：先释放玩家在其它 NPC 车上的座位（坐在旧车上直接换到新车，
+  // 旧车座位立即空出——否则旧车会一直显示"满员"）
+  removePassenger(player);
   const slot = ent.passengerSlots.indexOf(null);
   if (slot === -1) {
     player.sendClientMessage(COLOR_ERROR, `[漂移] ${def.name} 的车已满员`);
-    return;
-  }
-  if (player.getVirtualWorld() !== PUBLIC_WORLD_ID) {
-    player.sendClientMessage(COLOR_ERROR, "[漂移] 请先回到公共大世界再上车");
     return;
   }
   // 座位号 = 槽位 + 1（0 号司机位被 NPC 占用）
@@ -255,7 +266,15 @@ async function openDrifterMenu(player: Player): Promise<void> {
   const info = DRIFTERS.map((d, i) => {
     const ent = entities.get(d.id);
     const free = ent ? ent.passengerSlots.filter((s) => s === null).length : 0;
-    const state = !ent || !ent.npc?.isValid() ? " {808080}未就绪" : free > 0 ? "" : " {FF0000}满员";
+    // 自己已乘坐的车显示"已乘坐"而非"满员"（座位被自己占着不算满员）
+    const riding = ent?.passengerSlots.includes(player) ?? false;
+    const state = !ent || !ent.npc?.isValid()
+      ? " {808080}未就绪"
+      : riding
+        ? " {00FF00}已乘坐"
+        : free > 0
+          ? ""
+          : " {FF0000}满员";
     return `{FFD700}${i + 1}. ${d.name}{FFFFFF}（${d.route}）${state}`;
   }).join("\n");
   const res = await showDialog(
