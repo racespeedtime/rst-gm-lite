@@ -14,6 +14,7 @@ import { cleanupAttire, applyVehiclePreset } from "@/attire";
 import { isInRace } from "@/race/room";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
+import { DEFAULT_CHARSET } from "@/utils/constants";
 import { VEHICLE_CATEGORIES, vehicleName, isValidVehicleModel } from "./catalog";
 import type { UserVehicleModel } from "@/prisma/generated/prisma/models/UserVehicle";
 
@@ -137,7 +138,7 @@ export async function spawnVehicle(
         drawDistance: 30,
         testLOS: false,
         attachedVehicle: veh.id,
-        charset: "gbk",
+        charset: DEFAULT_CHARSET,
       });
       label.create();
       playerVehLabels.set(player.id, label);

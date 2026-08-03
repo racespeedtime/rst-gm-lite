@@ -5,6 +5,7 @@ import { getAuthState } from "@/auth/auth";
 import { getSetting } from "@/personalize/settings";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
+import { DEFAULT_CHARSET } from "@/utils/constants";
 
 /** 世界环境持有的实体（onExit 时统一销毁） */
 interface WorldEnv {
@@ -212,7 +213,7 @@ export async function initWorldEnvironment(): Promise<void> {
           drawDistance: 30,
           virtualWorld: PUBLIC_WORLD_ID,
           testLOS: false,
-          charset: "gbk", // 玩家默认 gbk 字符集，3D 标签中文必须同字符集否则乱码
+          charset: DEFAULT_CHARSET, // 3D 标签中文必须与玩家默认字符集一致否则乱码
         });
         label.create();
         labels.push(label);
@@ -261,7 +262,7 @@ export async function initWorldEnvironment(): Promise<void> {
           drawDistance: 20,
           virtualWorld: PUBLIC_WORLD_ID,
           testLOS: false,
-          charset: "gbk", // 玩家默认 gbk 字符集，3D 标签中文必须同字符集否则乱码
+          charset: DEFAULT_CHARSET, // 3D 标签中文必须与玩家默认字符集一致否则乱码
         });
         label.create();
         labels.push(label);

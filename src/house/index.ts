@@ -3,6 +3,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
 import { registerObjectCollision, clearObjectCollisions } from "@/core/collision";
+import { DEFAULT_CHARSET } from "@/utils/constants";
 
 import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
 
@@ -207,10 +208,10 @@ export async function loadAllHouseObjects(): Promise<void> {
               stats.errors++;
               break;
             }
-            // charset 用 gbk（材质文字支持中文，对齐其他中文文本入口）
+            // charset 用默认字符集（材质文字支持中文，对齐其他中文文本入口）
             // DynamicObject.setMaterialText 参数顺序：charset, materialIndex, text, ...
             target.setMaterialText(
-              "gbk",
+              DEFAULT_CHARSET,
               0,
               text,
               textSize,
@@ -260,7 +261,7 @@ export async function loadAllHouseObjects(): Promise<void> {
               z,
               drawDistance: 30,
               testLOS: false,
-              charset: "gbk", // 房屋文字可能含中文
+              charset: DEFAULT_CHARSET, // 房屋文字可能含中文
             });
             label.create();
             labels.push(label);

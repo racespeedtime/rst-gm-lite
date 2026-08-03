@@ -56,8 +56,8 @@ import {
   applyMapIconsToPlayer,
 } from "@/core/worldenv";
 
-const DEFAULT_CHARSET = "gbk";
 import { COLOR_INFO, COLOR_ERROR } from "@/utils/colors";
+import { DEFAULT_CHARSET } from "@/utils/constants";
 
 /**
  * 判断是否为 NPC（所有回调事件统一排除 NPC）
@@ -358,10 +358,10 @@ GameMode.onInit(({ next }) => {
   // 对齐原版 SendRconCommand 的 gbk 编码——SA-MP 客户端按 gbk 显示服务器名，
   // 中文必须用 gbk 编码发送否则乱码（infernus sendRconCommand 默认 utf8，显式传 gbk）。
   // hostname：服务器描述（轻量化竞技 + 玩法）
-  GameMode.sendRconCommand("hostname [RST] 轻量化竞技 · 自由大世界 · 赛车", "gbk");
+  GameMode.sendRconCommand("hostname [RST] 轻量化竞技 · 自由大世界 · 赛车", DEFAULT_CHARSET);
   // gamemodetext：浏览器 Mode 列（setGameModeText 无 charset 参数直接传字符串，
   // 中文会乱码，改走 sendRconCommand 的 gamemodetext rcon 命令 + gbk）
-  GameMode.sendRconCommand("gamemodetext [RST] 赛车 / 自由", "gbk");
+  GameMode.sendRconCommand("gamemodetext [RST] 赛车 / 自由", DEFAULT_CHARSET);
   // 昵称即账号：放开昵称字符限制（支持中文/特殊字符），否则部分昵称被 open.mp 默认规则拒绝连入
   GameMode.supportAllNickname();
   // 初始化碰撞检测插件（缺失时静默跳过，不影响其他功能）
