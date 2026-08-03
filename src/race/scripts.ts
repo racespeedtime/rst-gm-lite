@@ -133,8 +133,9 @@ function setVehicleSpeed(veh: Vehicle, kmh: number, angleDeg: number, z?: number
   veh.setVelocity(units * Math.cos(rad), units * Math.sin(rad), z ?? veh.getVelocity().z);
 }
 
-/** 执行一条 CP 脚本 */
-export function execCpScript(player: Player, ctx: CpScriptContext, script: string): void {
+/** 执行一条 CP 脚本。返回 false 表示终止整条脚本链（对齐原版 Race_Cp_Script_Start：
+ * 碰到 spawnpos 直接 return 1，其后的脚本全部不再执行）。其余情况返回 true 继续。 */
+export function execCpScript(player: Player, ctx: CpScriptContext, script: string): boolean {
   const [fn, ...rawArgs] = script.trim().split(/\s+/);
   const args = resolveArgs(player, ctx, rawArgs);
   const veh = player.getVehicle();
@@ -149,9 +150,9 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
   switch (fn) {
     case "spawnpos": {
       // 赛道重生坐标提取用，不触发（对齐原版 Race_Cp_Script_Start：
-      // 碰到 spawnpos 直接 return 1，终止整条脚本链）。
-      // 过 CP 时不执行——否则玩家会被瞬移到重生点。重生坐标由 room 的重生逻辑处理。
-      return;
+      // 碰到 spawnpos 直接 return 1 终止整条脚本链——该点后续脚本全部不执行）。
+      // 过 CP 时不执行——否则玩家会被瞬移到重生点；重生坐标由 room 的重生逻辑处理。
+      return false;
     }
     case "time": {
       // 对齐原版 time：时 0-24、分 0-59
@@ -164,25 +165,25 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
         minute < 0 ||
         minute > 59
       ) {
-        return err("time 需要 时(0-24) 分(0-59)");
+        return err("time 需要 时(0-24) 分(0-59)"), true;
       }
       player.setTime(hour, minute);
       break;
     }
     case "weather": {
       const w = Number(args[0]);
-      if (!Number.isInteger(w) || w < 0 || w > 255) return err("weather ID 需 0-255");
+      if (!Number.isInteger(w) || w < 0 || w > 255) return err("weather ID 需 0-255"), true;
       player.setWeather(w);
       break;
     }
     case "cveh": {
       const model = Number(args[0]);
-      if (!isValidVehicleModel(model)) return err("cveh 车辆ID需 400-611");
+      if (!isValidVehicleModel(model)) return err("cveh 车辆ID需 400-611"), true;
       const pos = player.getPos();
-      // 销毁旧脚本车辆（防累积）；新车辆登记到生命周期表，断线/离场时统一清理。
-      // 注意：若玩家当前正坐在旧脚本车里（连续 cveh），清理后旧车已销毁，
-      // 不能再对它调用 destroy（会抛 "Cannot destroy before create" 异常中断本 CP 后续脚本）。
+      // 对齐原版 cveh（HRace.inc:561）：换车前先取当前车辆速度，换车后无条件恢复。
+      // 顺序：读速度须在销毁旧脚本车前（veh 还指向旧车，避免对已销毁车辆取值）。
       const oldScriptVeh = scriptVehicles.get(player.id);
+      const oldVelo = veh ? { x: veh.getVelocity().x, y: veh.getVelocity().y, z: veh.getVelocity().z } : null;
       cleanupScriptVehicle(player.id);
       const v = new Vehicle({
         modelId: model,
@@ -198,12 +199,14 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       v.setVirtualWorld(player.getVirtualWorld());
       v.linkToInterior(player.getInterior());
       v.putPlayerIn(player, 0);
-      // 司机在旧车里才搬移速度并销毁旧车；旧车是脚本车时已由 cleanupScriptVehicle 销毁。
+      // 恢复原速（司机/乘客一律恢复，对齐原版 SetVehicleVelocity 无条件执行）
+      if (oldVelo) {
+        v.setVelocity(oldVelo.x, oldVelo.y, oldVelo.z);
+      }
       // 旧车若是玩家的爱车（playerVehs 登记），用 destroyPlayerVehicle 一并清理
       // playerVehs/标签引用，否则 /c wode 会对已销毁的车 setPos 抛异常。
+      // （旧车是脚本车时已由 cleanupScriptVehicle 销毁，且 oldScriptVeh === veh 跳过）
       if (veh && oldScriptVeh !== veh && player.getState() === PlayerStateEnum.DRIVER) {
-        const vv = veh.getVelocity();
-        v.setVelocity(vv.x, vv.y, vv.z);
         destroyPlayerVehicle(player.id);
       }
       break;
@@ -217,13 +220,22 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       // 对齐原版 speed（HRace.inc:805）：基准角度 = 玩家朝向 + 90（车内 = 车辆角度 + 90），
       // | 模式 = 角度 + 90；x = 速度·cos(na)、y = 速度·sin(na)（角度 0 = 正东）。
       // 原版不设车辆朝向，只 SetVehicleVelocity。
-      if (!veh) return err("speed 需要车辆");
-      if (args.length < 4) return err("speed 参数不足");
+      if (!veh) {
+        err("speed 需要车辆");
+        return true;
+      }
+      if (args.length < 4) {
+        err("speed 参数不足");
+        return true;
+      }
       const angleOp = normOp(args[0]);
       const angle = Number(args[1]);
       const speedOp = normOp(args[2]);
       const speed = Number(args[3]);
-      if ([angle, speed].some((n) => !Number.isFinite(n))) return err("speed 数值无效");
+      if ([angle, speed].some((n) => !Number.isFinite(n))) {
+        err("speed 数值无效");
+        return true;
+      }
       const base = veh.getZAngle().angle + 90;
       const newAngle = angleOp === "|" ? angle + 90 : applyOp(base, angleOp, angle);
       const newSpeed = applyOp(veh.getSpeed(), speedOp, speed);
@@ -231,23 +243,42 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       break;
     }
     case "angle": {
-      // angle 角度模式 角度
-      if (!veh) return err("angle 需要车辆");
-      if (args.length < 2) return err("angle 参数不足");
+      // angle 角度模式 角度（对齐原版 angle：| 模式直接设为指定角度，
+      // +/- 等以玩家朝向为基准运算；车内玩家朝向 = 车辆角度，等效 veh.getZAngle）
+      if (!veh) {
+        err("angle 需要车辆");
+        return true;
+      }
+      if (args.length < 2) {
+        err("angle 参数不足");
+        return true;
+      }
       const angleOp = normOp(args[0]);
       const angle = Number(args[1]);
-      if (!Number.isFinite(angle)) return err("angle 数值无效");
+      if (!Number.isFinite(angle)) {
+        err("angle 数值无效");
+        return true;
+      }
       const newAngle = applyOp(veh.getZAngle().angle, angleOp, angle);
       veh.setZAngle(newAngle);
       break;
     }
     case "zspeed": {
-      // zspeed 速度模式 速度
-      if (!veh) return err("zspeed 需要车辆");
-      if (args.length < 2) return err("zspeed 参数不足");
+      // zspeed 速度模式 速度（对齐原版 zspeed：| 模式直接设 Z 速度，其余在当前 Z 上运算）
+      if (!veh) {
+        err("zspeed 需要车辆");
+        return true;
+      }
+      if (args.length < 2) {
+        err("zspeed 参数不足");
+        return true;
+      }
       const speedOp = normOp(args[0]);
       const speed = Number(args[1]);
-      if (!Number.isFinite(speed)) return err("zspeed 数值无效");
+      if (!Number.isFinite(speed)) {
+        err("zspeed 数值无效");
+        return true;
+      }
       const vv = veh.getVelocity();
       veh.setVelocity(vv.x, vv.y, applyOp(vv.z, speedOp, speed));
       break;
@@ -257,15 +288,24 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       // 对齐原版 speedex（HRace.inc:728）：角度基准 = 玩家朝向 + 90（车内 = 车辆角度 + 90），
       // | 模式 = 角度 + 90；x = 速度·cos(na)、y = 速度·sin(na)（角度 0 = 正东）；Z 轴独立。
       // 原版不设车辆朝向，只 SetVehicleVelocity。
-      if (!veh) return err("speedex 需要车辆");
-      if (args.length < 6) return err("speedex 参数不足");
+      if (!veh) {
+        err("speedex 需要车辆");
+        return true;
+      }
+      if (args.length < 6) {
+        err("speedex 参数不足");
+        return true;
+      }
       const angleOp = normOp(args[0]);
       const angle = Number(args[1]);
       const speedOp = normOp(args[2]);
       const speed = Number(args[3]);
       const zOp = normOp(args[4]);
       const zspeed = Number(args[5]);
-      if ([angle, speed, zspeed].some((n) => !Number.isFinite(n))) return err("speedex 数值无效");
+      if ([angle, speed, zspeed].some((n) => !Number.isFinite(n))) {
+        err("speedex 数值无效");
+        return true;
+      }
       const base = veh.getZAngle().angle + 90;
       const newAngle = angleOp === "|" ? angle + 90 : applyOp(base, angleOp, angle);
       const newSpeed = applyOp(veh.getSpeed(), speedOp, speed);
@@ -276,11 +316,20 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
     }
     case "vgoto": {
       // vgoto 执行模式 x y z（s=不保留速度 v=保留速度）
-      if (!veh) return err("vgoto 需要车辆");
-      if (args.length < 4) return err("vgoto 参数不足");
+      if (!veh) {
+        err("vgoto 需要车辆");
+        return true;
+      }
+      if (args.length < 4) {
+        err("vgoto 参数不足");
+        return true;
+      }
       const mode = args[0] === "s" ? "s" : "v";
       const [x, y, z] = args.slice(1).map(Number);
-      if ([x, y, z].some((n) => !Number.isFinite(n))) return err("vgoto 坐标无效");
+      if ([x, y, z].some((n) => !Number.isFinite(n))) {
+        err("vgoto 坐标无效");
+        return true;
+      }
       const vv = veh.getVelocity();
       veh.setPos(x, y, z);
       if (mode === "v") {
@@ -289,8 +338,11 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
       break;
     }
     case "fix": {
-      // fix 执行模式（f=仅HP r=HP+外观）
-      if (!veh) return err("fix 需要车辆");
+      // fix 执行模式（f=仅HP r=HP+外观，对齐原版 fix：r 修复，否则血量 1000）
+      if (!veh) {
+        err("fix 需要车辆");
+        return true;
+      }
       const mode = args[0] === "r" ? "r" : "f";
       if (mode === "r") {
         veh.repair();
@@ -301,14 +353,27 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
     }
     case "damage": {
       // damage 破坏模式（0-15 轮胎位）
-      if (!veh) return err("damage 需要车辆");
+      if (!veh) {
+        err("damage 需要车辆");
+        return true;
+      }
       const mode = Number(args[0]);
-      if (!Number.isInteger(mode) || mode < 0 || mode > 15) return err("damage 模式需 0-15");
+      if (!Number.isInteger(mode) || mode < 0 || mode > 15) {
+        err("damage 模式需 0-15");
+        return true;
+      }
       const ds = veh.getDamageStatus();
       veh.updateDamageStatus(ds.panels, ds.doors, ds.lights, mode);
       break;
     }
     default:
+      // 对齐原版 Race_Cp_Script_Start：未知函数给玩家提示，且不中断后续脚本
       logger.warn(`[race] 未知脚本函数: ${fn}`);
+      player.sendClientMessage(
+        COLOR_RACE,
+        `[赛车] ${ctx.raceName} 第${ctx.cpid + 1}个检查点脚本错误: 不存在函数[${fn}]`,
+      );
+      return true;
   }
+  return true;
 }

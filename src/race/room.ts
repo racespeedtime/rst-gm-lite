@@ -647,7 +647,8 @@ async function onPlayerReachCp(player: Player): Promise<void> {
     cps: room.cps.map((c) => ({ index: c.index, x: c.x, y: c.y, z: c.z })),
   };
   for (const script of nextCp.scripts) {
-    execCpScript(player, scriptCtx, script);
+    // spawnpos 返回 false → 终止整条脚本链（对齐原版 Race_Cp_Script_Start 的 return 1）
+    if (!execCpScript(player, scriptCtx, script)) return;
     // 脚本执行（同步）期间玩家可能已离开/比赛结束 → 终止后续操作
     if (!playerRaces.has(player.id) || rooms.get(pr.roomId)?.state !== "RACING" || pr.finished) {
       return;
