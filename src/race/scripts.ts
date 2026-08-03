@@ -72,7 +72,9 @@ function resolveVar(player: Player, ctx: CpScriptContext, varName: string): stri
     case "#vs":
       return veh ? String(veh.getSpeed()) : "0";
     case "#va":
-      return veh ? String(veh.getZAngle().angle) : String(player.getFacingAngle().angle);
+      // 对齐原版 Race_Cp_Script_Return：#va = 玩家朝向（GetPlayerFacingAngleEx）。
+      // 车内时 open.mp 玩家朝向与车辆角度一致；下车后取玩家朝向更贴近原版语义
+      return String(player.getFacingAngle().angle);
     case "#vzs":
       return veh ? String(veh.getVelocity().z) : "0";
     case "#ncpx":
@@ -86,10 +88,10 @@ function resolveVar(player: Player, ctx: CpScriptContext, varName: string): stri
       if (varName === "#ncpx") return String(next.x);
       if (varName === "#ncpy") return String(next.y);
       if (varName === "#ncpz") return String(next.z);
-      // #ncpa：当前点与下一个点的角度（归一化 0-360）
+      // #ncpa：当前点与下一个点的角度，+90 偏移后归一化 0-360（对齐原版 atan2 + a=90+a）
       const cur = ctx.cps[idx];
       const ang = Math.atan2(cur.y - next.y, cur.x - next.x);
-      const deg = (ang * 180) / Math.PI;
+      const deg = (ang * 180) / Math.PI + 90;
       return String(((deg % 360) + 360) % 360);
     }
     default:
@@ -144,30 +146,23 @@ export function execCpScript(player: Player, ctx: CpScriptContext, script: strin
 
   switch (fn) {
     case "spawnpos": {
-      // 赛道重生位置：spawnpos x y z a（驾驶员/乘客都移动车辆）
-      if (args.length < 4) return err("spawnpos 参数不足");
-      const [x, y, z, a] = args.map(Number);
-      if ([x, y, z, a].some((n) => !Number.isFinite(n))) return err("spawnpos 坐标无效");
-      if (veh) {
-        veh.setPos(x, y, z);
-        veh.setZAngle(a);
-      } else {
-        player.setPos(x, y, z);
-        player.setFacingAngle(a);
-      }
-      break;
+      // 赛道重生坐标提取用，不触发（对齐原版 Race_Cp_Script_Start：
+      // 碰到 spawnpos 直接 return 1，终止整条脚本链）。
+      // 过 CP 时不执行——否则玩家会被瞬移到重生点。重生坐标由 room 的重生逻辑处理。
+      return;
     }
     case "time": {
+      // 对齐原版 time：时 0-24、分 0-59
       const [hour, minute] = args.map(Number);
       if (
         !Number.isInteger(hour) ||
         hour < 0 ||
-        hour > 23 ||
+        hour > 24 ||
         !Number.isInteger(minute) ||
         minute < 0 ||
         minute > 59
       ) {
-        return err("time 需要 时(0-23) 分(0-59)");
+        return err("time 需要 时(0-24) 分(0-59)");
       }
       player.setTime(hour, minute);
       break;
