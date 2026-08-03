@@ -115,14 +115,23 @@ async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBac
     deletedAt: null,
     ...(mode === "MINE" && auth ? { userId: auth.userId } : {}),
   } as const;
-  // 排序方式：按创建时间（默认，最新在前）/ 按名称（A-Z）
-  const sortIndex = await pickOption(player, mode === "MINE" ? "我的赛道 · 排序" : "赛道列表 · 排序", [
-    "按创建时间（最新在前）",
-    "按名称（A-Z）",
+  // 排序：先选字段（创建时间/名称/总长度），再选方向（升序/降序）
+  const fieldIndex = await pickOption(player, mode === "MINE" ? "我的赛道 · 排序" : "赛道列表 · 排序", [
+    "按创建时间",
+    "按名称",
+    "按总长度",
   ]);
-  if (sortIndex < 0) return back?.();
-  // as const 固定字面量类型，否则联合类型导致 Prisma 泛型推断失败（orderBy 报错）
-  const orderBy = sortIndex === 1 ? ({ name: "asc" } as const) : ({ createdAt: "desc" } as const);
+  if (fieldIndex < 0) return back?.();
+  const dirIndex = await pickOption(player, "排序方向", ["升序", "降序"]);
+  if (dirIndex < 0) return back?.();
+  const dir = dirIndex === 0 ? ("asc" as const) : ("desc" as const);
+  // 各字段明确字面量 as const，避免联合类型导致 Prisma 泛型推断失败
+  const orderBy =
+    fieldIndex === 0
+      ? ({ createdAt: dir } as const)
+      : fieldIndex === 1
+        ? ({ name: dir } as const)
+        : ({ totalLength: dir } as const);
   const races = await prisma.race.findMany({
     where,
     orderBy,
