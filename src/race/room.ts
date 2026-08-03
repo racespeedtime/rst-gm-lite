@@ -777,13 +777,14 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
     broadcastToRoom(room, "[赛车] 第一名已完成，20 秒后比赛结束");
     room.endTimer = setTimeoutSafe(() => endRoom(room), END_GRACE_MS);
   }
-  // 自动观战下一个未完成玩家（二次确认目标仍有效）
+  // 自动观战下一个未完成玩家（二次确认目标仍有效）。
+  // 仅弹结算框的"关闭"提示，不额外发"自动观战"消息——玩家点击结算框时
+  // 场景自然切换为观战（提示反而打断结算阅读），快捷操作面板可随时 /tv off
   const next = [...room.members.values()].find((m) => {
     const mp = playerRaces.get(m.id);
     return mp && !mp.finished && m.isConnected();
   });
   if (next) {
-    player.sendClientMessage(COLOR_RACE, "[赛车] 你已完成比赛，自动观战其他玩家（/tv off 停止）");
     startObservePlayer(player, next);
   }
 }

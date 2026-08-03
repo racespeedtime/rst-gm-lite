@@ -17,6 +17,8 @@ import type { MenuBack } from "@/core/panel";
  * 4. 速度表 2d 显示（开启 2d 时联动总开关）
  * 5. 速度表 3d 显示（与 2d 互斥）
  * 6. 特技显示
+ *
+ * 操作一项后自动刷新回本菜单（状态实时刷新），点"取消"才退出面板。
  */
 export async function openInterfaceMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
@@ -32,6 +34,7 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
   const index = await pickOption(player, "界面个性化", options);
   if (index < 0) return back?.();
 
+  const again = () => openInterfaceMenu(player, back);
   if (index === 0) {
     const next = !setting.hideAllGui;
     await updateSetting(player, { hideAllGui: next });
@@ -43,15 +46,15 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     } else {
       notifySaved(player, "已关闭隐藏所有GUI");
     }
-    return;
+    return again();
   }
   if (index === 1) {
     await toggleSetting(player, "showNetstat", "网络信息GUI");
-    return;
+    return again();
   }
   if (index === 2) {
     await toggleSetting(player, "showSpeed", "速度表显示");
-    return;
+    return again();
   }
   if (index === 3) {
     // 速度表 2d：开启时联动总开关，并关闭 3d
@@ -62,7 +65,7 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
       showSpeed: next ? true : setting.showSpeed,
     });
     notifySaved(player, `速度表 2d 已${next ? "开启" : "关闭"}`);
-    return;
+    return again();
   }
   if (index === 4) {
     // 速度表 3d：开启时联动总开关，并关闭 2d
@@ -73,9 +76,10 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
       showSpeed: next ? true : setting.showSpeed,
     });
     notifySaved(player, `速度表 3d 已${next ? "开启" : "关闭"}`);
-    return;
+    return again();
   }
   if (index === 5) {
     await toggleSetting(player, "showStunt", "特技显示");
+    return again();
   }
 }

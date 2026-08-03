@@ -80,6 +80,8 @@ function normalizeHexColor(input: string): string | null {
  * 6. 游戏内颜色（色板）
  * 7. 出生点设置（随机/上次位置）
  * 8. 接受传送（开关）
+ *
+ * 操作一项后自动刷新回本菜单（状态实时刷新），点"取消"才退出面板。
  */
 export async function openWorldMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
@@ -97,25 +99,26 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
   const index = await pickOption(player, "世界个性化", options);
   if (index < 0) return back?.();
 
+  const again = () => openWorldMenu(player, back);
   if (index === 0) {
     // 跟随世界时间：切换后立即应用（否则要等下一个 60s 同步才生效）
     await toggleSetting(player, "syncGameTime", "跟随世界时间");
     await applyWorldEnv(player);
-    return;
+    return again();
   }
   if (index === 1) {
     // 跟随世界天气：切换后立即应用（否则保持旧天气直到下次轮换）
     await toggleSetting(player, "syncWorldWeather", "跟随世界天气");
     await applyWorldEnv(player);
-    return;
+    return again();
   }
   if (index === 2) {
     await toggleSetting(player, "timeFlow", "个人时间流逝");
-    return;
+    return again();
   }
   if (index === 3) {
     await openTimeWeatherFlow(player);
-    return;
+    return again();
   }
   if (index === 4) {
     // 显示物件：切换后立即对玩家生效（房屋/场景物件显隐）
@@ -123,7 +126,7 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
     await updateSetting(player, { showObject: next });
     notifySaved(player, `显示物件已${next ? "开启" : "关闭"}`);
     setHouseObjectsVisibleForPlayer(player, next);
-    return;
+    return again();
   }
   if (index === 5) {
     const current = (setting.playerColor || "#ffffff").toLowerCase();
@@ -142,7 +145,7 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
       button1: "选择",
       button2: "取消",
     });
-    if (!r) return;
+    if (!r) return again();
     let next: string;
     if (r.item.value) {
       next = r.item.value;
@@ -158,14 +161,14 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
           button2: "取消",
         }),
       );
-      if (!res || res.response !== 1) return;
+      if (!res || res.response !== 1) return again();
       const input = res.inputText.trim();
       // 归一化为 hex（#fff → #ffffff、(r,g,b) → #rrggbb、(r,g,b,a) → #rrggbbaa），
       // 保证长度 ≤9 兼容 player_color VarChar(9)，否则 (255,255,255,255) 超长写库抛错
       const hexColor = normalizeHexColor(input);
       if (!hexColor) {
         player.sendClientMessage(COLOR_ERROR, "颜色格式不正确（支持 #fff / #ff0000 / (r,g,b,a)）");
-        return;
+        return again();
       }
       next = hexColor;
     }
@@ -174,14 +177,15 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
     // 聊天名颜色跟随玩家颜色（刷新聊天名缓存）
     await applyPlayerStyle(player);
     notifySaved(player, `游戏内颜色已设为：${next}`);
-    return;
+    return again();
   }
   if (index === 6) {
     await openSpawnSettingsFlow(player);
-    return;
+    return again();
   }
   if (index === 7) {
     await toggleSetting(player, "acceptTeleport", "接受传送");
+    return again();
   }
 }
 

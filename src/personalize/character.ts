@@ -25,6 +25,9 @@ import { showDialog } from "@/utils/dialog";
  * 5. 名字后缀
  * 6. 默认人物预设
  * 7. 无敌状态
+ *
+ * 操作一项后自动刷新回本菜单（改完一项可继续改下一项，状态实时刷新），
+ * 点"取消"才退出面板——避免改一项就得重新按 Y 的来回折腾。
  */
 export async function openCharacterMenu(player: Player, back?: MenuBack): Promise<void> {
   const setting = await getSetting(player);
@@ -39,8 +42,9 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     `无敌状态：${toggleText(setting.invincible)}`,
   ];
   const index = await pickOption(player, "人物个性化", options);
-  if (index < 0) return back?.();
+  if (index < 0) return back?.(); // 取消 → 退出面板
 
+  const again = () => openCharacterMenu(player, back); // 操作完成后回到本菜单
   if (index === 0) {
     const next = !setting.showPlayerAttire;
     await updateSetting(player, { showPlayerAttire: next });
@@ -51,7 +55,7 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     }
     // 立即生效：关闭则清空当前挂载，开启则重新应用默认预设（applyPlayerPreset 内部先清空再按开关应用）
     await applyPlayerPreset(player, setting.defaultPlayerPresetId ?? null);
-    return;
+    return again();
   }
   if (index === 1) {
     // NameTag 显示：切换后立即对所有在线玩家生效
@@ -59,7 +63,7 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     await updateSetting(player, { showName: next });
     notifySaved(player, `其他玩家NameTag已${next ? "开启" : "隐藏"}`);
     await applyPlayerStyle(player);
-    return;
+    return again();
   }
   if (index === 2) {
     const res = await showDialog(
@@ -72,16 +76,16 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
         button2: "取消",
       }),
     );
-    if (!res || res.response !== 1) return;
+    if (!res || res.response !== 1) return again(); // 取消子对话框 → 回菜单
     const skin = parseIntInRange(res.inputText, 0, 311);
     if (skin == null) {
       player.sendClientMessage(COLOR_ERROR, "皮肤ID需为 0-311 的整数");
-      return;
+      return again();
     }
     await updateSetting(player, { skinId: skin });
     player.setSkin(skin);
     notifySaved(player, `皮肤已切换为：${skin}`);
-    return;
+    return again();
   }
   if (index === 3) {
     // 名字前缀
@@ -95,16 +99,16 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
         button2: "取消",
       }),
     );
-    if (!res || res.response !== 1) return;
+    if (!res || res.response !== 1) return again();
     const prefix = res.inputText.trim();
     if (prefix.length > 255) {
       player.sendClientMessage(COLOR_ERROR, "名字前缀最多 255 个字符");
-      return;
+      return again();
     }
     await updateSetting(player, { prefix: prefix || null });
     notifySaved(player, prefix ? `名字前缀已设为：${prefix}` : "名字前缀已清除");
     await applyPlayerStyle(player);
-    return;
+    return again();
   }
   if (index === 4) {
     // 名字后缀
@@ -118,20 +122,20 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
         button2: "取消",
       }),
     );
-    if (!res || res.response !== 1) return;
+    if (!res || res.response !== 1) return again();
     const suffix = res.inputText.trim();
     if (suffix.length > 255) {
       player.sendClientMessage(COLOR_ERROR, "名字后缀最多 255 个字符");
-      return;
+      return again();
     }
     await updateSetting(player, { suffix: suffix || null });
     notifySaved(player, suffix ? `名字后缀已设为：${suffix}` : "名字后缀已清除");
     await applyPlayerStyle(player);
-    return;
+    return again();
   }
   if (index === 5) {
     await pickDefaultPreset(player);
-    return;
+    return again();
   }
   if (index === 6) {
     // 无敌开关：切换后立即应用（开启回满血 + 更新进程内缓存，关闭则移除）
@@ -139,6 +143,7 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     await updateSetting(player, { invincible: next });
     notifySaved(player, `无敌状态已${next ? "开启" : "关闭"}`);
     await applyInvincibleState(player);
+    return again();
   }
 }
 

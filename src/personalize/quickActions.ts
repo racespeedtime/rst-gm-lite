@@ -184,8 +184,10 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
     "快捷操作",
     rows.map((r) => r.label),
   );
-  if (index < 0) return back?.();
+  if (index < 0) return back?.(); // 取消 → 退出面板
   await rows[index].run();
+  // 操作完成后回到快捷操作菜单（可连续做多个操作），点"取消"才退出
+  return openQuickActionsMenu(player, back);
 }
 
 /**

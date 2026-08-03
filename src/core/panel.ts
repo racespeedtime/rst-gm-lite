@@ -14,10 +14,18 @@ import { openTeleportMenu } from "@/teleport";
 import { openAttireMenu } from "@/attire";
 import { openAttireAdmin } from "@/attire/admin";
 import { openRaceMenu } from "@/race/manage";
-import { isInRace, startRace, leaveRace } from "@/race/room";
+import {
+  isInRace,
+  getRacePlayerState,
+  getRaceRoom,
+  startRace,
+  leaveRace,
+} from "@/race/room";
+import { isEditing, exitEdit } from "@/race/editor";
 import { showMySessionLogs } from "@/auth/sessionLog";
 import { showMyProfile } from "@/core/profile";
 import { showDialog } from "@/utils/dialog";
+import { COLOR_INFO } from "@/utils/colors";
 
 /** 面板条目：条件可见 + 点击执行 */
 interface PanelItem {
@@ -46,7 +54,8 @@ interface PanelGroup {
  * - 战局设置已并入「战局」菜单（原一级菜单收纳为二级入口）
  * - 5 个个性化设置（人物/车辆/世界/界面/装扮）收纳进「个性化」
  * - 个人相关（信息/登录记录/改密/快捷操作/聊天范围）归入「我的」，比赛期间仍可用
- * - 比赛房间内：显示「比赛房间」组（开始比赛/离开房间），其余玩法组隐藏
+ * - 比赛房间内：显示「比赛房间」组（开始比赛[仅房主]/离开房间），其余玩法组隐藏
+ * - 赛道编辑中：显示「赛道编辑」组（退出编辑），其余玩法组隐藏
  */
 const panelGroups: PanelGroup[] = [
   {
@@ -54,13 +63,38 @@ const panelGroups: PanelGroup[] = [
     // 仅在比赛房间内（创建/加入比赛后）显示；其余玩法组在比赛中自动隐藏
     visible: (player) => isInRace(player.id),
     items: [
-      { label: "开始比赛", raceSafe: true, run: startRace },
+      {
+        label: "开始比赛",
+        raceSafe: true,
+        // 仅房主且房间处于等待状态才显示（非房主/已开跑时点了也是"只有房主能开始/比赛已开始"）
+        visible: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          return !!room && room.state === "WAITING" && room.ownerId === player.id;
+        },
+        run: startRace,
+      },
       {
         label: "离开房间",
         raceSafe: true,
         run: (player, back) => {
           leaveRace(player);
           return back?.();
+        },
+      },
+    ],
+  },
+  {
+    label: "赛道编辑",
+    // 仅在赛道编辑模式中显示；其余玩法组在编辑中自动隐藏（编辑用 F5 交互，避免干扰）
+    visible: (player) => isEditing(player.id),
+    items: [
+      {
+        label: "退出编辑",
+        raceSafe: true,
+        run: (player) => {
+          exitEdit(player.id);
+          player.sendClientMessage(COLOR_INFO, "已退出赛道编辑模式");
         },
       },
     ],
@@ -111,12 +145,12 @@ const panelGroups: PanelGroup[] = [
   },
 ];
 
-/** 组内可见条目（组级条件 + 条目级条件 + 比赛限制） */
+/** 组内可见条目（组级条件 + 条目级条件 + 比赛/编辑限制） */
 function getVisibleItems(group: PanelGroup, player: Player): PanelItem[] {
-  const inRace = isInRace(player.id);
+  const restricted = isInRace(player.id) || isEditing(player.id);
   return group.items.filter((item) => {
     if (item.visible && !item.visible(player)) return false;
-    if (inRace && !item.raceSafe) return false;
+    if (restricted && !item.raceSafe) return false;
     return true;
   });
 }
