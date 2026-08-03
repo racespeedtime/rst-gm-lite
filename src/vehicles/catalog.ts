@@ -14,7 +14,8 @@ export interface VehicleCategory {
 export const VEHICLE_CATEGORIES: VehicleCategory[] = [
   {
     label: "跑车",
-    menuTitle: "→ 跑车 ←",
+    // e-selection 图片菜单用 TextDraw 渲染标题，不支持中文（gbk 仅 Dialog/TextLabel）
+    menuTitle: "->Cars<-",
     models: [
       562, 411, 451, 541, 415, 477, 555, 401, 402, 404, 405, 409, 410, 412, 418, 419, 421, 422, 426,
       429, 436, 439, 445, 458, 466, 467, 474, 475, 479, 480, 491, 492, 496, 504, 507, 516, 517, 518,
@@ -24,7 +25,7 @@ export const VEHICLE_CATEGORIES: VehicleCategory[] = [
   },
   {
     label: "警车",
-    menuTitle: "→ 警车 ←",
+    menuTitle: "->Cars<-",
     models: [
       425, 427, 430, 432, 433, 470, 472, 476, 490, 497, 500, 520, 523, 528, 548, 563, 592, 595, 596,
       597, 598, 599, 601,
@@ -32,34 +33,34 @@ export const VEHICLE_CATEGORIES: VehicleCategory[] = [
   },
   {
     label: "飞机",
-    menuTitle: "→ 飞机 ←",
+    menuTitle: "->Planes<-",
     models: [460, 476, 511, 512, 513, 519, 520, 553, 577, 592, 593],
   },
   {
     label: "摩托",
-    menuTitle: "→ 摩托 ←",
+    menuTitle: "->Motorolas<-",
     models: [522, 521, 523, 581, 586, 510, 509, 481, 471, 468, 463, 462, 461, 448],
   },
   {
     label: "船",
-    menuTitle: "→ 船 ←",
+    menuTitle: "->Ships<-",
     models: [430, 460, 452, 453, 454, 472, 473, 484, 493, 539, 595],
   },
   {
     label: "越野",
-    menuTitle: "→ 越野 ←",
+    menuTitle: "->Cars<-",
     models: [400, 424, 444, 470, 489, 495, 500, 505, 556, 557, 568, 573, 579, 599],
   },
   {
     label: "拖车",
-    menuTitle: "→ 拖车 ←",
+    menuTitle: "->Cars<-",
     models: [
       403, 435, 450, 485, 514, 515, 525, 530, 531, 552, 583, 584, 591, 606, 607, 608, 610, 611,
     ],
   },
   {
     label: "货车",
-    menuTitle: "→ 货车 ←",
+    menuTitle: "->Cars<-",
     models: [
       406, 413, 414, 423, 428, 440, 443, 455, 456, 459, 478, 482, 498, 499, 524, 535, 543, 554, 573,
       578, 588, 609,
@@ -67,18 +68,18 @@ export const VEHICLE_CATEGORIES: VehicleCategory[] = [
   },
   {
     label: "火车及玩具车",
-    menuTitle: "→ 火车及玩具车 ←",
+    menuTitle: "->Trains<-",
     models: [441, 449, 464, 465, 501, 537, 538, 564, 569, 570, 590],
   },
   {
     label: "民政车",
-    menuTitle: "→ 民政车 ←",
+    menuTitle: "->Cars<-",
     models: [407, 408, 416, 420, 431, 437, 438, 442, 488, 544, 552, 572, 574, 577, 582],
   },
-  { label: "其他车", menuTitle: "→ 其他车 ←", models: [457, 483, 486, 508, 532, 571, 594] },
+  { label: "其他车", menuTitle: "->Others<-", models: [457, 483, 486, 508, 532, 571, 594] },
   {
     label: "常用车",
-    menuTitle: "→ 常用车 ←",
+    menuTitle: "->Favorites<-",
     models: [560, 562, 411, 451, 541, 415, 477, 555, 494, 502, 503, 506, 587, 602],
   },
 ];
