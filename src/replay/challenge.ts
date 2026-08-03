@@ -101,15 +101,14 @@ export function destroyAllChallenges(): void {
 }
 
 /** 渲染影子到当前播放时间（帧序一致；播完 clamp 终点）
- * 速度学 open.mp 官方回放：setVelocity 清零 + 只搬位置/旋转（防双 native
- * 交替覆盖导致 getSpeed 跳变） */
+ * 速度：录制存多少赋多少（getVelocity 即真实速度），并同步车辆朝向 */
 function renderGhost(ch: ChallengeSession): void {
   const s = sampleAt(ch.data, ch.ghost.playTime);
   if (!s) return;
   try {
     ch.ghost.npc.setVehiclePos(s.x, s.y, s.z, true);
     ch.ghost.npc.setVehicleRot(s.rx, s.ry, s.rz, true);
-    ch.ghost.npc.setVelocity(0, 0, 0);
+    ch.ghost.npc.setVelocity(s.vx, s.vy, s.vz);
     // 车辆实体朝向同步（rz=yaw）
     ch.ghost.vehicle.setZAngle(s.rz);
   } catch {
