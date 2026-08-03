@@ -175,6 +175,19 @@ export function initVehicleAuto(): void {
     return next();
   });
 
+  // 上车即给氮气（对齐原版 OnPlayerStateChange → PLAYER_STATE_DRIVER → AddVehicleComponent 1010）：
+  // 成为司机进入自己的爱车时立即补一次氮气，避免等 timer 计满 15 秒才第一次补
+  PlayerEvent.onStateChange(({ player, newState, next }) => {
+    if (player.isNpc()) return next();
+    if (newState !== PlayerStateEnum.DRIVER) return next();
+    const veh = player.getVehicle();
+    if (!veh || !isOwnVehicle(player, veh)) return next();
+    veh.addComponent(1010); // 氮气
+    // 重置计时：上车即补，之后的 15 秒计数从上车时刻重新开始（timer/hold 共用）
+    nitroCount.set(player.id, 0);
+    return next();
+  });
+
   // hold 氮气：按加速键（SPRINT/W）补氮气（有 15 秒冷却）
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
