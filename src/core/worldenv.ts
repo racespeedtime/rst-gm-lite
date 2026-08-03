@@ -11,7 +11,7 @@ interface WorldEnv {
   labels: TextLabel[];
 }
 
-import { COLOR_LABEL, COLOR_RACE } from "@/utils/colors";
+import { COLOR_LABEL, COLOR_RACE, COLOR_ORANGE } from "@/utils/colors";
 /** 服务器全局天气（作为"世界"环境基准，供 syncWorldWeather 跟随） */
 export const WORLD_WEATHER = 10;
 /** 大世界时间同步间隔（秒）——现实时间映射，每 60 秒同步一次 */
@@ -21,6 +21,14 @@ export const WEATHER_ROTATE_MS = 30 * 60_000;
 const WEATHER_ROTATE_CHANCE = 0.2;
 /** 常用天气池（晴/多云/雨/雾等） */
 const WEATHER_POOL = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16];
+
+/** 天气 ID → 中文名（变更提示用，未列出的 ID 回退显示 ID） */
+const WEATHER_NAMES: Record<number, string> = {
+  0: "晴", 1: "晴", 2: "少云", 3: "多云", 4: "阴",
+  5: "雨", 6: "小雨", 7: "雷阵雨", 8: "浓雾", 9: "薄雾",
+  10: "晴", 11: "晴", 12: "多云", 13: "晴", 14: "晴",
+  15: "多云", 16: "雨",
+};
 
 /**
  * 按现实时间分时段确定天气：
@@ -59,12 +67,16 @@ export function getWorldWeather(): number {
 }
 
 async function rotateWeather(): Promise<void> {
+  const oldWeather = currentWeather;
   if (Math.random() < WEATHER_ROTATE_CHANCE) {
     currentWeather = WEATHER_POOL[Math.floor(Math.random() * WEATHER_POOL.length)];
   } else {
     currentWeather = weatherByTime(new Date().getHours());
   }
+  // 只在天气实际变化时提示（分时段基准可能连续相同，避免刷提示）
+  const changed = currentWeather !== oldWeather;
   GameMode.setWeather(currentWeather);
+  const msg = `[天气] 大世界天气已变化：${WEATHER_NAMES[currentWeather] ?? `ID ${currentWeather}`}`;
   for (const player of Player.getInstances()) {
     if (player.isNpc() || !player.isConnected()) continue;
     const auth = getAuthState(player.id);
@@ -72,6 +84,10 @@ async function rotateWeather(): Promise<void> {
     const setting = await getSetting(player);
     if (!setting || !setting.syncWorldWeather) continue;
     player.setWeather(currentWeather);
+    // 只提示跟随大世界天气的玩家（不跟随的玩家有自己的个人天气，不打扰）
+    if (changed) {
+      player.sendClientMessage(COLOR_ORANGE, msg);
+    }
   }
 }
 
