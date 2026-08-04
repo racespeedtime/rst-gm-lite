@@ -19,6 +19,33 @@ export function invalidateSettingCache(userId: string): void {
   settingCache.delete(userId);
 }
 
+/** 同步读缓存（不查库）：GUI 高频轮询用——缓存未命中返回 undefined */
+export function getCachedSetting(player: Player): SysUserSettingModel | undefined {
+  const auth = getAuthState(player.id);
+  return auth ? getCachedSettingByUserId(auth.userId) : undefined;
+}
+
+/** 按 userId 同步读缓存（批量预取时只有 userId，无 Player 对象） */
+export function getCachedSettingByUserId(userId: string): SysUserSettingModel | undefined {
+  return settingCache.get(userId);
+}
+
+/**
+ * 批量预取设置填充缓存（一次 DB 查询替代逐条 findUnique）：
+ * 高频轮询（GUI 200ms tick）遇到缓存冷启动/大量失效时，用 findMany in 一次
+ * 拿回全部缺失行，避免 N 次串行往返。查不到的行（设置未创建）不写缓存。
+ */
+export async function preloadSettingsBatch(userIds: string[]): Promise<void> {
+  const missing = userIds.filter((uid) => !settingCache.has(uid));
+  if (missing.length === 0) return;
+  const rows = await prisma.sysUserSetting.findMany({
+    where: { userId: { in: missing } },
+  });
+  for (const row of rows) {
+    if (row.userId) settingCache.set(row.userId, row);
+  }
+}
+
 /** 读取玩家设置（优先缓存；无设置行返回 null） */
 export async function getSetting(player: Player): Promise<SysUserSettingModel | null> {
   const auth = getAuthState(player.id);

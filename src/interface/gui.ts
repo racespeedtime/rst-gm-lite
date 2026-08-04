@@ -3,7 +3,11 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { setIntervalSafe } from "@/core/timers";
 import { getObserveTarget } from "@/core/observe";
-import { getSetting } from "@/personalize/settings";
+import {
+  getCachedSetting,
+  getCachedSettingByUserId,
+  preloadSettingsBatch,
+} from "@/personalize/settings";
 import {
   createSpeed2d,
   createSpeed3d,
@@ -174,13 +178,26 @@ async function refreshAllGuis(): Promise<void> {
   if (refreshing) return; // 防止并发 tick
   refreshing = true;
   try {
-    for (const player of Player.getInstances()) {
-      if (player.isNpc() || !player.isConnected()) continue;
-      const auth = getAuthState(player.id);
-      if (!auth) continue;
+    const online = Player.getInstances().filter(
+      (p) => !p.isNpc() && p.isConnected() && !!getAuthState(p.id),
+    );
+    // 批量预取：缓存冷启动/大量失效（首登、改设置后）时一次 findMany 拿回全部
+    // 缺失设置，避免每玩家一条 findUnique 串行往返（1000 人冷启动 = 1000 次 DB）。
+    // 正常在线玩家缓存已热（登录时 getSetting 预热），此批通常为空
+    const missing = online
+      .map((p) => getAuthState(p.id)!.userId)
+      .filter((uid) => getCachedSettingByUserId(uid) === undefined);
+    if (missing.length > 0) {
       try {
-        // 走设置缓存（避免每 tick 查库）
-        const setting = await getSetting(player);
+        await preloadSettingsBatch(missing);
+      } catch (e) {
+        logger.error(`[gui] 批量预取设置失败（${missing.length} 人）`, e);
+      }
+    }
+    for (const player of online) {
+      try {
+        // 全部走内存缓存（上面的批量预取已填缺失），零 DB
+        const setting = getCachedSetting(player);
         if (!setting) continue;
         await syncGui(player, setting);
         const gui = guis.get(player.id);
