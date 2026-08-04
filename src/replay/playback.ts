@@ -384,6 +384,7 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
   try {
     const pos = ghost.vehicle.getPos();
     // 换车型：销毁旧车、建新车、NPC 立即上车（位置延续）
+    unregisterObserveCandidate(ghost.vehicle.id, "vehicle"); // 旧车移出观战切换候选
     ghost.vehicle.destroy();
     const v = new Vehicle({
       modelId: model,
@@ -402,6 +403,7 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
     ghost.npc.setVirtualWorld(session.worldId);
     ghost.npc.putInVehicle(v, 0);
     ghost.vehicle = v;
+    registerObserveCandidate(v.id, "vehicle"); // 新车登记进观战切换候选（否则该 ghost 无法被切到）
   } catch (e) {
     logger.warn(`[replay] 换车型失败 ${oldModel} -> ${model}`, e);
     ghost.model = oldModel;
@@ -647,7 +649,8 @@ export async function spawnReplay(
   const isGhost = replay.type === "ghost";
   const worldId = isGhost ? player.getVirtualWorld() : allocReplayWorld();
   const ghosts: Ghost[] = [];
-  const duration = data.header.frameCount * data.header.frameIntervalMs;
+  // 播放总时长 = 播放终点 (frameCount-1)×interval（与 renderGhost/tickSession 一致）
+  const duration = (data.header.frameCount - 1) * data.header.frameIntervalMs;
   // 分身错峰间隔：自定义（opts.staggerMs，毫秒）或自动等分总时长（count 辆均匀铺开）。
   // 用 || 而非 ??：显式传 0 视为"未指定"（0 间隔 = 无错峰，非用户本意）
   const baseGap = opts?.staggerMs || (count > 1 ? duration / count : 0);
@@ -661,6 +664,7 @@ export async function spawnReplay(
       const npc = allocReplayNpc(`RP${Date.now().toString(36)}_${i}_${rand}`.slice(0, 24));
       if (!npc) {
         if (ghosts.length === 0) {
+          freeReplayWorld(worldId); // race 回放已分配独立世界：失败即回收（ghost 回放 worldId 是玩家世界，内部守卫不会误回收）
           player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足，回放创建失败");
           return false;
         }
@@ -690,7 +694,7 @@ export async function spawnReplay(
       npc.setInvulnerable(true);
       // NPC 无 nametag：绑 3D 标签显示"本身身份（NPC 名）+ 扮演谁（录制者 + 分身编号）"。
       // 编号反序：所有 ghost 同速播同一文件，playTime 越大 = 位置越靠后 = 视觉跑最前
-      //（头车）；创建顺序 i=0 是 playTime 最小（视觉尾车）。故编号取 count-i：
+      //（头车）；创建顺序 i=0 是 playTime 最小（视觉尾车）。故编号取 total-已建数：
       // 头车（playTime 最大）= ghost 1/N，尾车 = ghost N/N，与视觉顺序一致
       const label = new Dynamic3DTextLabel({
         text:
@@ -727,11 +731,31 @@ export async function spawnReplay(
         lastNitroAt: 0,
       });
     }
+    // 降级修正：实际创建数 < 请求数（某分身分配失败 break）时，已创建标签的
+    // 分母仍写着请求 count，会显示"ghost 3/4 但只有 2 台"——统一改成实际数量
+    if (ghosts.length !== count) {
+      for (let k = 0; k < ghosts.length; k++) {
+        const g = ghosts[k];
+        try {
+          g.label.updateText(
+            "#ffffff",
+            `{FFD700}${g.npc.getName()}\n{FFFFFF}回放 · ${replay.recorderName}` +
+              (ghosts.length > 1 ? `{808080} [ghost ${ghosts.length - k}/${ghosts.length}]` : ""),
+            DEFAULT_CHARSET,
+          );
+        } catch {
+          /* 标签已失效等，忽略 */
+        }
+      }
+    }
   } catch (e) {
     logger.error(`[replay] 创建回放实体失败`, e);
-    // 清理已创建的
+    // 完整清理：注销 NPC sync 屏蔽（防 NPC id 残留，复用后真实 sync 被静默丢弃）、
+    // 移出观战候选、销毁实体、回收世界 id（race 回放）
     for (const g of ghosts) {
       try {
+        unregisterReplayNpc(g.npcPlayerId);
+        unregisterObserveCandidate(g.vehicle.id, "vehicle");
         g.label.destroy();
         g.npc.destroy();
         g.vehicle.destroy();
@@ -739,6 +763,7 @@ export async function spawnReplay(
         /* 忽略 */
       }
     }
+    freeReplayWorld(worldId);
     player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足或创建失败");
     return false;
   }
@@ -779,11 +804,13 @@ export async function spawnReplay(
     );
     return true;
   }
-  // 比赛回放：独立世界 + 发起人自动观战（复用观战系统：切世界/spectateVehicle/退出恢复）
-  player.setVirtualWorld(worldId);
-  player.setPos(data.header.startX, data.header.startY, data.header.startZ + 1);
+  // 比赛回放：独立世界 + 发起人自动观战（复用观战系统：切世界/spectateVehicle/退出恢复）。
+  // 必须先 startObserveVehicle 再手动切世界：它内部捕获 prevWorld = 当时的虚拟世界，
+  // 若先切到回放世界，prevWorld 会被记成回放世界自身——/tv off 或观战中死亡恢复时
+  // 玩家被扔回回放世界，且 tickSession 的"离开回放世界自动停止"判定永不触发
+  //（owner 世界恒等于回放世界），回放一直播、玩家被困。
   try {
-    startObserveVehicle(player, ghosts[0].vehicle);
+    startObserveVehicle(player, ghosts[0].vehicle); // 内部会切到 ghost 车世界（worldId）
     session.watchers.add(player.id);
     // 观战者比赛信息 TD（事件无关，从帧状态渲染）——NPC 回放的 TextDraw 状态可见
     ensureObserverTds(session, player);
@@ -791,6 +818,8 @@ export async function spawnReplay(
   } catch {
     /* 观战失败不影响播放 */
   }
+  player.setVirtualWorld(worldId); // 幂等（startObserveVehicle 已切）
+  player.setPos(data.header.startX, data.header.startY, data.header.startZ + 1);
   player.sendClientMessage(
     COLOR_SUCCESS,
     `回放已开始：${ghosts.length} 台车 · /rp 控制（暂停/快进/倍速/seek）`,
@@ -863,7 +892,10 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         player.sendClientMessage(COLOR_ERROR, "时间格式无效（秒或 mm:ss）");
         return;
       }
-      const max = session.data.header.frameCount * session.data.header.frameIntervalMs;
+      // seek 上限 = 播放终点 (frameCount-1)×interval（与 renderGhost/tickSession
+      // 的 maxTime 一致；旧 frameCount×interval 多一格，seek 到尾端会直接触发
+      // atEnd 停发 + "已播完"提示重置失效）
+      const max = (session.data.header.frameCount - 1) * session.data.header.frameIntervalMs;
       const target = Math.min(max, Math.max(0, ms));
       for (const g of session.ghosts) {
         // 保持分身的错峰偏移：各分身落在 target + 自身偏移（clamp 到文件末尾），
@@ -924,6 +956,20 @@ export function stopReplaySession(playerId: number): void {
   if (!session) return;
   sessions.delete(playerId);
   if (session.timer) clearIntervalSafe(session.timer);
+  // 先统一退出观战（发起人 + 非发起人 watch 者），再销毁车：destroy 车辆会触发
+  // onStreamOut，若观战态还在会弹 suggestStop"是否停止观战"对话框——点"否"会把
+  // 过期观战状态写回（observeStates 保留指向已销毁 ghost），玩家卡在观战态。
+  for (const pid of session.watchers) {
+    const w = Player.getInstance(pid);
+    if (w && w.isConnected() && isObserving(pid)) {
+      try {
+        stopObserve(w);
+      } catch {
+        /* 观战状态已失效 */
+      }
+    }
+  }
+  session.watchers.clear();
   for (const g of session.ghosts) {
     try {
       unregisterReplayNpc(g.npcPlayerId); // 注销屏蔽（NPC 销毁后不再有 sync 包）
@@ -938,18 +984,6 @@ export function stopReplaySession(playerId: number): void {
   for (const pid of [...session.tds.keys()]) {
     destroyObserverTds(session, pid);
   }
-  // 统一退出观战（发起人 + 非发起人 watch 者）：防观战者卡在 spectating 指向已销毁 ghost
-  for (const pid of session.watchers) {
-    const w = Player.getInstance(pid);
-    if (w && w.isConnected() && isObserving(pid)) {
-      try {
-        stopObserve(w);
-      } catch {
-        /* 观战状态已失效 */
-      }
-    }
-  }
-  session.watchers.clear();
   // 独立世界（比赛回放）的会话：会话销毁后世界无人使用 → 回收世界 id 供复用
   if (session.replayType === "race") freeReplayWorld(session.worldId);
   // 比赛回放（独立世界）：玩家可能在其中刷过车 → 恢复玩家世界 + 爱车世界，

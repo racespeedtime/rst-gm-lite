@@ -271,6 +271,9 @@ export function initSpawnSystem(): void {
   // ——直接强制重生（玩家此刻必然是想起死），死亡后即用即走，不再弹提示。
   PlayerEvent.onRequestClass(({ player, next }) => {
     if (player.isNpc()) return next();
+    // 观战中：保持观战态，不强制重生（否则观察者被拽出观战出生；onRequestSpawn
+    // 闸门只拦 RequestSpawn，拦不住服务器侧 player.spawn()）
+    if (player.isSpectating()) return false;
     // 比赛/编辑中的重生由各自系统处理（比赛回上一 CP / 编辑器状态），不干预
     if (isInRace(player.id) || isEditing(player.id)) return next();
     player.spawn();

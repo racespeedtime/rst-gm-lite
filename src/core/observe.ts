@@ -178,6 +178,7 @@ export function stopObserve(player: Player): void {
     return;
   }
   observeStates.delete(player.id);
+  observePrevLeftRight.delete(player.id); // 清轮询残留（防 playerId 复用时吞掉首次按键切换）
   player.toggleSpectating(false);
   // 恢复观战前所在战局（世界）与室内
   player.setVirtualWorld(state.prevWorld);
@@ -188,6 +189,7 @@ export function stopObserve(player: Player): void {
 /** 清理（断线时） */
 export function cleanupObserve(playerId: number): void {
   observeStates.delete(playerId);
+  observePrevLeftRight.delete(playerId);
 }
 
 /**
