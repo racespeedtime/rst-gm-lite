@@ -256,8 +256,10 @@ export function initObserve(): void {
   });
 
   // 观战切换（按下瞬间触发；只响应观战者）：
-  // 左键（FIRE）→ 下一个；A/D（LOOK_LEFT/LOOK_RIGHT）→ 上一个/下一个。
-  // 鼠标右键观战中客户端不发送，不可用；键盘 ←/→ 由 pollObserveKeys 轮询。
+  // 左键（FIRE）→ 下一个；Q（LOOK_LEFT）/E（LOOK_RIGHT）→ 上一个/下一个。
+  // SA-MP 键位：Q=LOOK_LEFT(256)、E=LOOK_RIGHT(64)，两者都触发
+  // onKeyStateChange；鼠标右键（瞄准）观战中客户端不发送不可用；←/→ 方向键
+  // 不触发 onKeyStateChange（文档明确），由 pollObserveKeys 的 getKeys 轮询。
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
     if (!observeStates.has(player.id)) return next(); // 非观战不处理
@@ -266,11 +268,11 @@ export function initObserve(): void {
       return next();
     }
     if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_RIGHT)) {
-      cycleObserveTarget(player, true); // D/A → 下一个
+      cycleObserveTarget(player, true); // E 键 → 下一个
       return next();
     }
     if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_LEFT)) {
-      cycleObserveTarget(player, false); // A → 上一个
+      cycleObserveTarget(player, false); // Q 键 → 上一个
       return next();
     }
     return next();
