@@ -17,10 +17,11 @@ export interface DebugInfoState {
 /** 底部居中调试文本 y（640x480 名义坐标：440 离底 40px，轻微 margin） */
 const DEBUG_Y = 440;
 
-/** 创建调试信息 TextDraw（单 TD 多行，居中） */
+/** 创建调试信息 TextDraw（单 TD 多行，底部居中） */
 export function createDebugInfo(player: Player): DebugInfoState {
   const td = new TextDraw({ player, x: 320, y: DEBUG_Y, text: " " })
     .create()
+    .setAlignment(2) // CENTER：x=320 为水平中心（默认左对齐会从左往右铺，偏左）
     .setFont(1)
     .setLetterSize(0.16, 0.65)
     .setColor(0xffffffff)
