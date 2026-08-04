@@ -134,10 +134,18 @@ interface RaceRoom {
   createdAt: number;
   /** 掉线重连：playerId -> 重连截止时间戳（窗口内不清理） */
   reconnectUntil: Map<number, number>;
-  /** 掉线重连：playerId -> 断线时进度快照 */
+  /** 掉线重连：playerId -> 断线时进度快照（含距下一 CP 距离——掉线玩家按快照
+   *  继续参与实时/最终排名，车停在原地被超越） */
   reconnectSlots: Map<
     number,
-    { cpIndex: number; lap: number; startTime: number; prevWorld: number }
+    {
+      cpIndex: number;
+      lap: number;
+      startTime: number;
+      prevWorld: number;
+      dist: number;
+      name: string;
+    }
   >;
   /** 本场比赛参与过录制的成员（房间销毁且无人完成时据此作废其未完成录像） */
   raceMembersLast: Set<number>;
@@ -247,11 +255,20 @@ export function cleanupRacePlayer(playerId: number): void {
           Math.max(RECONNECT_MIN_MS, estMs * RECONNECT_RATIO),
         );
         room.reconnectUntil.set(playerId, Date.now() + window);
+        // 快照含"距下一 CP 距离"：掉线玩家按掉线瞬间位置/CP 继续参与排名
+        const nextCp = room.cps[pr.cpIndex + 1];
+        let dist = 0;
+        if (nextCp) {
+          const pos = Player.getInstance(playerId)?.getPos();
+          if (pos) dist = Math.hypot(pos.x - nextCp.x, pos.y - nextCp.y, pos.z - nextCp.z);
+        }
         room.reconnectSlots.set(playerId, {
           cpIndex: pr.cpIndex,
           lap: pr.lap,
           startTime: pr.startTime,
           prevWorld: pr.prevWorld,
+          dist,
+          name: Player.getInstance(playerId)?.getName().name ?? `玩家${playerId}`,
         });
         room.members.delete(playerId);
         playerRaces.delete(playerId);
@@ -1163,6 +1180,17 @@ function endRoom(room: RaceRoom): void {
       dist,
     });
   }
+  // 掉线重连窗口玩家：按掉线前快照计入最终排名（未完成，排在线完成者之后）
+  for (const [pid, slot] of room.reconnectSlots) {
+    ranked.push({
+      playerId: pid,
+      name: slot.name,
+      time: 0,
+      finished: false,
+      cp: slot.lap * room.cps.length + slot.cpIndex + 1,
+      dist: slot.dist,
+    });
+  }
   ranked.sort((a, b) => {
     if (a.finished !== b.finished) return a.finished ? -1 : 1;
     if (a.finished) return a.time - b.time;
@@ -1365,6 +1393,19 @@ function tickRooms(): void {
         dist,
         finished: mp.finished,
         time: mp.finished ? (room.resultIndex.get(m.id) ?? 0) : 0,
+      });
+    }
+    // 掉线重连窗口玩家：按掉线前快照继续参与排名（车停在原地，被在线玩家超越，
+    // 但名次仍占着——重连成功后恢复真实位置重新计算）
+    for (const pid of room.reconnectUntil.keys()) {
+      const slot = room.reconnectSlots.get(pid);
+      if (!slot) continue;
+      rows.push({
+        playerId: pid,
+        totalCp: slot.lap * room.cps.length + (slot.cpIndex + 1),
+        dist: slot.dist,
+        finished: false,
+        time: 0,
       });
     }
     // 排序：完成者（按用时升序）> 未完成者（CP 多优先，同 CP 距离近优先）
