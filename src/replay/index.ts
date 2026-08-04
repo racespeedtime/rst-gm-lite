@@ -130,15 +130,20 @@ export function raceRecordingStop(
  * 作废一次已落盘的比赛回放（整场无人完成）：删录像文件 + 软删 DB 记录。
  * 用于"房间销毁且无人完成"和"掉线重连成功删掉线段"——删除前留 800ms
  * 让刚触发的 stopRecording 落盘完成（断线走 forceStopRecording 是异步的，
- * 立即查可能查到旧记录）。
+ * 立即查可能查到旧记录）。raceId 限定该场比赛，防误删同用户其他比赛记录。
  */
-export function discardRaceReplay(playerId: number): void {
+export function discardRaceReplay(playerId: number, raceId?: string | null): void {
   setTimeoutSafe(async () => {
     const auth = getAuthState(playerId);
     if (!auth) return;
     try {
       const row = await prisma.replay.findFirst({
-        where: { userId: auth.userId, type: "race", deletedAt: null },
+        where: {
+          userId: auth.userId,
+          type: "race",
+          deletedAt: null,
+          ...(raceId ? { raceId } : {}),
+        },
         orderBy: { createdAt: "desc" },
       });
       // 只作废"未完成"段（rank==null）；有 rank 说明该段有人冲线，保留

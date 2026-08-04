@@ -59,6 +59,8 @@ interface ChallengeGhost {
   warnedEmulateFail: boolean;
   /** 上次补氮气时刻（SA 氮气有容量，按录制者按键补，500ms 节流防高频 addComponent） */
   lastNitroAt: number;
+  /** 当前标签显示的在线状态（录制者掉线时标签追加红字"掉线"；变化时 updateText） */
+  online: boolean;
 }
 
 export interface ChallengeSession {
@@ -70,6 +72,8 @@ export interface ChallengeSession {
   /** 影子战绩快照（结算显示） */
   replayRank: number | null;
   replayName: string | null;
+  /** 录制者昵称（标签/掉线提示用） */
+  recorderName: string;
   data: ReplayData;
   ghost: ChallengeGhost;
   /** 影子起始播放帧（= 录制发车帧；倒计时期间停在起始帧，GO 后从这里开始播） */
@@ -134,6 +138,11 @@ export function destroyAllChallenges(): void {
   for (const id of [...challenges.keys()]) cleanupChallenge(id);
 }
 
+/** 影子车顶标签文本：身份 + 挑战谁；录制者掉线时追加红字标记 */
+function shadowLabelText(recorderName: string, online: boolean): string {
+  return `{FFD700}影子\n{FFFFFF}挑战 · ${recorderName}` + (online ? "" : `\n{FF0000}掉线`);
+}
+
 /** 渲染影子到当前播放时间（帧序一致；播完 clamp 终点）
  * emulate 驱动（与回放一致，复用 playback 的 emulateDriverSync 发包）：
  * 构造 DriverSync 包模拟影子 NPC 传入 + 发给挑战者——客户端本地物理驱动，
@@ -141,6 +150,27 @@ export function destroyAllChallenges(): void {
 function renderGhost(ch: ChallengeSession): void {
   const s = sampleAt(ch.data, ch.ghost.playTime);
   if (!s) return;
+  // 掉线状态变化（跨过掉线边界帧）：更新车顶标签（红字"掉线"）+ 聊天提示。
+  // 检测放采样后、节流前——保证边界帧即使被 30Hz 节流跳过也能触发。
+  if (s.online !== ch.ghost.online) {
+    ch.ghost.online = s.online;
+    try {
+      ch.ghost.label.updateText(
+        "#ffffff",
+        shadowLabelText(ch.recorderName, s.online),
+        DEFAULT_CHARSET,
+      );
+    } catch {
+      /* 标签已失效等，忽略 */
+    }
+    const p = Player.getInstance(ch.playerId);
+    if (p && p.isConnected()) {
+      p.sendClientMessage(
+        COLOR_RACE,
+        s.online ? `[影子] ${ch.recorderName} 已重新上线` : `[影子] ${ch.recorderName} 掉线了`,
+      );
+    }
+  }
   const maxTime = (ch.data.header.frameCount - 1) * Math.max(1, ch.data.header.frameIntervalMs);
   // 倒计时期间：playTime 停在起始帧（startFrame=录制发车帧）→ 按静止帧渲染
   //（速度/按键清零，影子停在起点等发车；GO 后 tick 推进 playTime 才离开
@@ -448,6 +478,16 @@ export async function startChallengeWithReplay(player: Player, replayId: string)
     player.sendClientMessage(COLOR_ERROR, "回放文件损坏或不存在");
     return false;
   }
+  // 赛道可能已被软删/禁用：此时 cps 查出来为空会误报"至少需要 2 个检查点"，
+  // 先确认赛道状态再读检查点
+  const race = await prisma.race.findFirst({
+    where: { id: replay.raceId, deletedAt: null, isEnabled: true },
+    select: { id: true },
+  });
+  if (!race) {
+    player.sendClientMessage(COLOR_ERROR, "该赛道已被删除或禁用，无法进行影子挑战");
+    return false;
+  }
   const cps = await prisma.raceCp.findMany({
     where: { raceId: replay.raceId },
     orderBy: { index: "asc" },
@@ -503,7 +543,7 @@ async function startChallengeCore(
     npc.setInvulnerable(true);
     const shadowPlayer = npc.getPlayer();
     const lab = new Dynamic3DTextLabel({
-      text: `{FFD700}影子\n{FFFFFF}挑战 · ${replay.recorderName}`,
+      text: shadowLabelText(replay.recorderName, true),
       color: "#ffffff",
       x: 0,
       y: 0,
@@ -531,6 +571,7 @@ async function startChallengeCore(
       lastEmulateAt: 0,
       warnedEmulateFail: false,
       lastNitroAt: 0,
+      online: true, // 起始帧在线（掉线重连回放才可能翻转为 false）
     };
   } catch (e) {
     logger.error(`[replay] 创建挑战影子失败`, e);
@@ -557,6 +598,7 @@ async function startChallengeCore(
     replayId: replay.id,
     replayRank: replay.rank ?? null,
     replayName: replay.raceName ?? null,
+    recorderName: replay.recorderName,
     data,
     ghost,
     startFrame: 0, // 录制发车帧（倒计时期间停在起始帧，GO 后从这里播）

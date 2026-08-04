@@ -566,6 +566,10 @@ export async function restartRace(player: Player): Promise<void> {
   room.results = [];
   room.lastCpAt.clear();
   room.resultIndex.clear();
+  // 清空掉线重连窗口：重开是新一场比赛，旧赛的窗口/进度快照不能带进新赛
+  //（否则窗口玩家重连会用旧赛进度恢复——CP/排名/计时全错）
+  room.reconnectUntil.clear();
+  room.reconnectSlots.clear();
   // 成员重置：退出观战（防 putPlayerIn 无效）+ 进度清零 + 回起点 + TD/CP 重建
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
@@ -1257,15 +1261,18 @@ function checkRoomState(room: RaceRoom): void {
     if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
     if (room.endTimer) clearTimeoutSafe(room.endTimer);
     destroyRaceTds(room);
-    // 房间销毁（最后成员离开/断线）：整场无人完成 → 该段比赛回放作废删除。
-    // 挂起中的掉线会话（掉线未重连）直接丢弃（不落盘，静止段无成绩价值）；
-    // 已落盘的未完成段作废（delayed discard 等落盘完成）。
-    // 掉线重连窗口的玩家不在 members（掉线即删），其挂起会话在这里处理。
+    // 有人完成（room.results 非空）→ 比赛有成绩，录像保留：挂起会话落盘、
+    // 已落盘段不作废。仅"无人完成"才作废删除（挂起丢弃 + 已落盘段删除）。
+    const someoneFinished = room.results.length > 0;
     for (const pid of room.raceMembersLast.keys()) {
       if (isRecording(pid)) {
-        dropRecording(pid); // 挂起会话：丢弃
-      } else {
-        discardRaceReplay(pid); // 已落盘段：作废
+        if (someoneFinished) {
+          void stopRecording(pid, { quiet: true }); // 挂起会话落盘保留（含静止段）
+        } else {
+          dropRecording(pid); // 挂起会话：丢弃（静止段无成绩价值）
+        }
+      } else if (!someoneFinished) {
+        discardRaceReplay(pid, room.raceId); // 已落盘未完成段：作废（限定本场比赛）
       }
     }
     room.raceMembersLast.clear();

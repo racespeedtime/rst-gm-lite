@@ -29,6 +29,11 @@ import { COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
 export interface RecordingSession {
   playerId: number;
   type: "ghost" | "race";
+  /** 录制者 userId（startRecording 时从 auth 存——落盘在断线/服务器退出后
+   *  auth 可能已清，不能依赖 getAuthState） */
+  userId: string;
+  /** 录制者用户名（断线玩家 getName 可能取不到，落盘 recorderName 用） */
+  recorderName: string;
   raceId: string | null;
   raceName: string | null;
   startAt: number;
@@ -233,8 +238,16 @@ export async function startRecording(
     return false;
   }
   if (sessions.has(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "你已在录制中");
-    return false;
+    const old = sessions.get(player.id);
+    // 挂起的旧会话（掉线/中途退出的比赛录制）不能跨比赛残留：新录制直接
+    // 丢弃旧挂起会话再开（挂起语义只用于"同一场比赛重连续录"，玩家开新比赛
+    // 意味着旧场已结束/放弃）
+    if (old?.suspended) {
+      dropRecording(player.id);
+    } else {
+      player.sendClientMessage(COLOR_ERROR, "你已在录制中");
+      return false;
+    }
   }
   const veh = getOwnedVehicle(player.id);
   if (!veh || !veh.isValid()) {
@@ -254,6 +267,8 @@ export async function startRecording(
   const session: RecordingSession = {
     playerId: player.id,
     type: opts.type,
+    userId: auth.userId, // 落盘不依赖后续 auth（断线/服务器退出时 auth 可能已清）
+    recorderName: auth.username,
     raceId: opts.raceId ?? null,
     raceName: opts.raceName ?? null,
     startAt: Date.now(),
@@ -398,22 +413,20 @@ export async function stopRecording(
     return null;
   }
 
-  // 认证态须在写文件后仍可用：断线/服务器退出（onExit 强制落盘）时 auth 可能
-  // 已被清理，userId 为空串会写进非空 UUID 列（PostgreSQL invalid uuid）触发
-  // create 失败 → catch 里还会删掉刚写好的文件。显式处理：无认证态直接删文件
-  // + 告警，宁可丢这段录制也不留"文件删了 DB 还残留"或"错误日志噪音"。
-  const auth = getAuthState(playerId);
-  if (!auth) {
+  // 录制者身份用 session 快照（startRecording 时从 auth 存）：断线/服务器退出后
+  // auth 可能已清（getAuthState 为 undefined），但落盘必须成功——退出/掉线玩家的
+  // 比赛录像要保留（endRoom/重连超时/onExit 路径）。空 userId 才防御性删文件。
+  if (!session.userId) {
     deleteRecordingFile(fileName);
-    logger.warn(`[replay] 录制落盘时认证态已失效，删除文件 ${fileName}（playerId=${playerId}）`);
+    logger.warn(`[replay] 录制会话无 userId，删除文件 ${fileName}（playerId=${playerId}）`);
     return null;
   }
   try {
     const created = await prisma.replay.create({
       data: {
         type: session.type,
-        userId: auth.userId,
-        recorderName: player?.getName().name ?? "未知",
+        userId: session.userId,
+        recorderName: session.recorderName || "未知",
         raceId: session.raceId,
         raceName: session.raceName,
         vehicleModelId: session.vehicleModelId,

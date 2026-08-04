@@ -848,10 +848,12 @@ export async function spawnReplay(
       });
     }
     // 降级修正：实际创建数 < 请求数（某分身分配失败 break）时，已创建标签的
-    // 分母仍写着请求 count，会显示"ghost 3/4 但只有 2 台"——统一改成实际数量
+    // 分母仍写着请求 count，会显示"ghost 3/2"——统一重编号（labelNo 反序 1..N
+    // 按实际数量）并 updateText
     if (ghosts.length !== count) {
       for (let k = 0; k < ghosts.length; k++) {
         const g = ghosts[k];
+        g.labelNo = ghosts.length - k; // 反序重编号：k=0（尾车）→ N，头车 → 1
         try {
           g.label.updateText(
             "#ffffff",
@@ -902,7 +904,7 @@ export async function spawnReplay(
     playing: true,
     paused: false,
     speed: 1,
-    countdownMs: 3000, // 开场 3-2-1-GO（模拟比赛；倒计时期间车停起始帧）
+    countdownMs: isGhost ? 0 : 3000, // 开场 3-2-1-GO 只对比赛回放模拟（倒计时期间车停起始帧）；自由录制直接播
     lastCountdownDisplay: 4,
     lastTickAt: Date.now(),
     endedNotified: false,
