@@ -127,6 +127,26 @@ interface Ghost {
   stopped: boolean;
   /** 上次补氮气时刻（SA 氮气有容量，按录制者按键补，500ms 节流防高频 addComponent） */
   lastNitroAt: number;
+  /** 分身编号（1..N，头车=1；标签显示用） */
+  labelNo: number;
+  /** 当前标签显示的在线状态（掉线时标签追加红字"掉线"；变化时 updateText） */
+  online: boolean;
+}
+
+/** ghost 车顶标签文本：身份 + 扮演谁 + 分身编号；掉线时追加红字标记 */
+function ghostLabelText(
+  npcName: string,
+  recorderName: string,
+  labelNo: number,
+  total: number,
+  online: boolean,
+): string {
+  return (
+    `{FFD700}${npcName}` +
+    `\n{FFFFFF}回放 · ${recorderName}` +
+    (total > 1 ? `{808080} [ghost ${labelNo}/${total}]` : "") +
+    (online ? "" : `\n{FF0000}掉线`)
+  );
 }
 
 export interface ReplaySession {
@@ -493,6 +513,35 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
   // 车辆原地抖动/朝向乱转（终点地面起伏或碰撞干扰时更明显）。
   const atEnd = ghost.playTime >= maxTime;
   if (atEnd) ghost.stopped = true;
+  // 掉线状态变化（跨过掉线边界帧）：更新车顶标签（红字"掉线"）+ 聊天提示
+  //（发起人/观战者）。检测放采样后、节流前——保证边界帧即使被 30Hz 节流跳过
+  // 也能触发。每次变化只提示一次（lastOnline 状态翻转才进这里）。
+  if (s.online !== ghost.online) {
+    ghost.online = s.online;
+    try {
+      ghost.label.updateText(
+        "#ffffff",
+        ghostLabelText(
+          ghost.npc.getName(),
+          session.recorderName,
+          ghost.labelNo,
+          session.ghosts.length,
+          s.online,
+        ),
+        DEFAULT_CHARSET,
+      );
+    } catch {
+      /* 标签已失效等，忽略 */
+    }
+    const msg = s.online ? `${session.recorderName} 已重新上线` : `${session.recorderName} 掉线了`;
+    const targets = new Set([session.ownerId, ...session.watchers]);
+    for (const pid of targets) {
+      const w = Player.getInstance(pid);
+      if (w && w.isConnected()) {
+        w.sendClientMessage(COLOR_RACE, `[回放] ${msg}`);
+      }
+    }
+  }
   try {
     ensureGhostVehicle(session, ghost, s.vehicleModel);
     // 30Hz 发包节流（60fps tick 每 2 tick 一次；seek/快进时播放时间跳变，
@@ -762,11 +811,9 @@ export async function spawnReplay(
       // 编号反序：所有 ghost 同速播同一文件，playTime 越大 = 位置越靠后 = 视觉跑最前
       //（头车）；创建顺序 i=0 是 playTime 最小（视觉尾车）。故编号取 total-已建数：
       // 头车（playTime 最大）= ghost 1/N，尾车 = ghost N/N，与视觉顺序一致
+      const labelNo = count - ghosts.length;
       const label = new Dynamic3DTextLabel({
-        text:
-          `{FFD700}${npc.getName()}` +
-          `\n{FFFFFF}回放 · ${replay.recorderName}` +
-          (count > 1 ? `{808080} [ghost ${count - ghosts.length}/${count}]` : ""),
+        text: ghostLabelText(npc.getName(), replay.recorderName, labelNo, count, true),
         color: "#ffffff",
         x: 0,
         y: 0,
@@ -795,6 +842,8 @@ export async function spawnReplay(
         warnedEmulateFail: false,
         stopped: false,
         lastNitroAt: 0,
+        labelNo,
+        online: true,
       });
     }
     // 降级修正：实际创建数 < 请求数（某分身分配失败 break）时，已创建标签的
@@ -805,8 +854,13 @@ export async function spawnReplay(
         try {
           g.label.updateText(
             "#ffffff",
-            `{FFD700}${g.npc.getName()}\n{FFFFFF}回放 · ${replay.recorderName}` +
-              (ghosts.length > 1 ? `{808080} [ghost ${ghosts.length - k}/${ghosts.length}]` : ""),
+            ghostLabelText(
+              g.npc.getName(),
+              replay.recorderName,
+              g.labelNo,
+              ghosts.length,
+              g.online,
+            ),
             DEFAULT_CHARSET,
           );
         } catch {
