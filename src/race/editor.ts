@@ -234,16 +234,20 @@ async function cpListMenu(player: Player): Promise<void> {
     await showEditMenu(player);
     return;
   }
-  const options = cps.map(
-    (c) =>
-      `CP${c.index + 1}（${Number(c.x).toFixed(1)}, ${Number(c.y).toFixed(1)}, ${Number(c.z).toFixed(1)}）`,
-  );
+  // TABLIST_HEADERS 多列：CP序号 / 坐标X / Y / Z / 尺寸（表头不占行号）
+  const info = [
+    "{FFD700}CP\tX\tY\tZ\t尺寸",
+    ...cps.map(
+      (c) =>
+        `CP${c.index + 1}\t${Number(c.x).toFixed(1)}\t${Number(c.y).toFixed(1)}\t${Number(c.z).toFixed(1)}\t${Number(c.size).toFixed(1)}`,
+    ),
+  ].join("\n");
   const res = await showDialog(
     player,
     new Dialog({
-      style: DialogStylesEnum.LIST,
+      style: DialogStylesEnum.TABLIST_HEADERS,
       caption: "CP列表",
-      info: options.map((o, i) => `${i + 1}. ${o}`).join("\n"),
+      info,
       button1: "管理",
       button2: "返回",
     }),

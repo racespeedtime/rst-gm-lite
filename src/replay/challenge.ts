@@ -268,6 +268,18 @@ function fmtMs(ms: number): string {
   return `${s}.${String(cs).padStart(2, "0")}s`;
 }
 
+/** 时长格式化（mm:ss 或 ss，选择影子列表用） */
+function challengeFmtDur(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** 时间格式化（MM-DD HH:MM，固定格式不依赖 locale） */
+function challengeFmtTime(d: Date): string {
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 /**
  * 开始影子挑战：从"本人的该赛道比赛回放"选一条当影子。
  * 独立世界隔离；玩家放入（有爱车则用，无则刷标准车型），与影子同步起跑。
@@ -299,21 +311,26 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     player.sendClientMessage(COLOR_ERROR, "你还没有该赛道的比赛回放（跑一场比赛后自动生成）");
     return false;
   }
-  // 多场回放可选：跟"哪一场比赛"比由玩家决定（默认最近完成的一场）
+  // 多场回放可选：跟"哪一场比赛"比由玩家决定（默认最近完成的一场）。
+  // TABLIST_HEADERS 多列：名次 / 完成 / 时长 / 录制时间（表头不占行号）
   const chosen =
     races.length === 1
       ? races[0]
       : await showDialog(
           player,
           new Dialog({
-            style: DialogStylesEnum.LIST,
+            style: DialogStylesEnum.TABLIST_HEADERS,
             caption: "选择影子（比赛回放）",
-            info: races
-              .map(
-                (r, i) =>
-                  `${i + 1}. ${r.rank != null ? `No.${r.rank}` : "未完成"} · ${new Date(r.createdAt).toLocaleString("zh-CN", { hour12: false })}`,
-              )
-              .join("\n"),
+            info: [
+              "{FFD700}名次\t完成\t时长\t录制时间",
+              ...races.map(
+                (r) =>
+                  `${r.rank != null ? `No.${r.rank}` : "{808080}未完成"}\t` +
+                  `${r.finished ? "完成" : "未完成"}\t` +
+                  `${challengeFmtDur(r.durationMs)}\t` +
+                  `${challengeFmtTime(r.createdAt)}`,
+              ),
+            ].join("\n"),
             button1: "确定",
             button2: "取消",
           }),

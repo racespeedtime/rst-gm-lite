@@ -435,18 +435,21 @@ async function houseList(player: Player): Promise<void> {
   const houses = await prisma.house.findMany({
     where: { isEnabled: true, deletedAt: null },
     orderBy: { name: "asc" },
+    include: { sysUser: true }, // 房主名（无主房屋 userId 为空）
   });
   if (houses.length === 0) {
     player.sendClientMessage(COLOR_WHITE, "暂无可用房屋");
     return;
   }
-  const info = houses
-    .map((h, i) => `${i + 1}. ${h.name}${h.description ? `（${h.description}）` : ""}`)
-    .join("\n");
+  // TABLIST_HEADERS 多列：名称 / 描述 / 房主（表头不占行号）
+  const info = [
+    "{FFD700}名称\t描述\t房主",
+    ...houses.map((h) => `${h.name}\t${h.description ?? "—"}\t${h.sysUser?.username ?? "—"}`),
+  ].join("\n");
   const res = await showDialog(
     player,
     new Dialog({
-      style: DialogStylesEnum.LIST,
+      style: DialogStylesEnum.TABLIST_HEADERS,
       caption: "房屋列表",
       info,
       button1: "传送",

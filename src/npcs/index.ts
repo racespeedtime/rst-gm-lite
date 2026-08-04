@@ -55,14 +55,86 @@ interface DrifterDef {
 /** 8 个 NPC：车型/颜色/初始位对齐原版 npc.inc，路线名对齐 /selectnpc 对话框；
  *  展示名统一用 .rec 文件名（LXD/Drift/…），不用中文名 */
 const DRIFTERS: readonly DrifterDef[] = [
-  { id: "DrifterLDZ",  rec: "LXD",        route: "雷达站往返",   model: 541, color: [6, 1],   pos: [-342.7927, 1540.4495, 75.1911], rot: 178.9945, skin: 115 },
-  { id: "DrifterSF",   rec: "Drift",      route: "SF 双环线",     model: 562, color: [7, 1],   pos: [1, 1, 5],  rot: 0, skin: 115 },
-  { id: "DrifterMadd", rec: "RunInMadd",  route: "LS 山区",       model: 411, color: [6, 1],   pos: [3, 3, 5],  rot: 0, skin: 115 },
-  { id: "DrifterLS",   rec: "LSEyeOut",   route: "LS 市区",       model: 411, color: [118, 1], pos: [5, 5, 5],  rot: 0, skin: 115 },
-  { id: "DrifterTD",   rec: "TestDrive",  route: "SF 市区",       model: 411, color: [66, 1],  pos: [7, 7, 5],  rot: 0, skin: 115 },
-  { id: "DrifterOff",  rec: "OffControl", route: "城市交界越野",  model: 411, color: [65, 1],  pos: [9, 9, 5],  rot: 0, skin: 115 },
-  { id: "DrifterFM",   rec: "FollowMe",   route: "综合线 1",      model: 411, color: [68, 1],  pos: [15, 9, 5], rot: 0, skin: 115 },
-  { id: "DrifterFM2",  rec: "FollowMe2",  route: "综合线 2",      model: 411, color: [70, 1],  pos: [18, 9, 5], rot: 0, skin: 115 },
+  {
+    id: "DrifterLDZ",
+    rec: "LXD",
+    route: "雷达站往返",
+    model: 541,
+    color: [6, 1],
+    pos: [-342.7927, 1540.4495, 75.1911],
+    rot: 178.9945,
+    skin: 115,
+  },
+  {
+    id: "DrifterSF",
+    rec: "Drift",
+    route: "SF 双环线",
+    model: 562,
+    color: [7, 1],
+    pos: [1, 1, 5],
+    rot: 0,
+    skin: 115,
+  },
+  {
+    id: "DrifterMadd",
+    rec: "RunInMadd",
+    route: "LS 山区",
+    model: 411,
+    color: [6, 1],
+    pos: [3, 3, 5],
+    rot: 0,
+    skin: 115,
+  },
+  {
+    id: "DrifterLS",
+    rec: "LSEyeOut",
+    route: "LS 市区",
+    model: 411,
+    color: [118, 1],
+    pos: [5, 5, 5],
+    rot: 0,
+    skin: 115,
+  },
+  {
+    id: "DrifterTD",
+    rec: "TestDrive",
+    route: "SF 市区",
+    model: 411,
+    color: [66, 1],
+    pos: [7, 7, 5],
+    rot: 0,
+    skin: 115,
+  },
+  {
+    id: "DrifterOff",
+    rec: "OffControl",
+    route: "城市交界越野",
+    model: 411,
+    color: [65, 1],
+    pos: [9, 9, 5],
+    rot: 0,
+    skin: 115,
+  },
+  {
+    id: "DrifterFM",
+    rec: "FollowMe",
+    route: "综合线 1",
+    model: 411,
+    color: [68, 1],
+    pos: [15, 9, 5],
+    rot: 0,
+    skin: 115,
+  },
+  {
+    id: "DrifterFM2",
+    rec: "FollowMe2",
+    route: "综合线 2",
+    model: 411,
+    color: [70, 1],
+    pos: [18, 9, 5],
+    rot: 0,
+    skin: 115,
+  },
 ];
 
 /** 单个 NPC 的运行态 */
@@ -262,24 +334,29 @@ function rideDrifter(player: Player, def: DrifterDef): void {
 
 /** /drift 选车面板（中文） */
 async function openDrifterMenu(player: Player): Promise<void> {
-  const info = DRIFTERS.map((d, i) => {
-    const ent = entities.get(d.id);
-    const free = ent ? ent.passengerSlots.filter((s) => s === null).length : 0;
-    // 自己已乘坐的车显示"已乘坐"而非"满员"（座位被自己占着不算满员）
-    const riding = ent?.passengerSlots.includes(player) ?? false;
-    const state = !ent || !ent.npc?.isValid()
-      ? " {808080}未就绪"
-      : riding
-        ? " {00FF00}已乘坐"
-        : free > 0
-          ? ""
-          : " {FF0000}满员";
-    return `{FFD700}${i + 1}. ${d.rec}{FFFFFF}（${d.route}）${state}`;
-  }).join("\n");
+  // TABLIST_HEADERS 多列：名称 / 路线 / 状态（表头不占行号，listItem 仍从数据行起算）
+  const info = [
+    "{FFD700}名称\t路线\t状态",
+    ...DRIFTERS.map((d) => {
+      const ent = entities.get(d.id);
+      const free = ent ? ent.passengerSlots.filter((s) => s === null).length : 0;
+      // 自己已乘坐的车显示"已乘坐"而非"满员"（座位被自己占着不算满员）
+      const riding = ent?.passengerSlots.includes(player) ?? false;
+      const state =
+        !ent || !ent.npc?.isValid()
+          ? "{808080}未就绪"
+          : riding
+            ? "{00FF00}已乘坐"
+            : free > 0
+              ? "{FFFFFF}可上车"
+              : "{FF0000}满员";
+      return `${d.rec}\t${d.route}\t${state}`;
+    }),
+  ].join("\n");
   const res = await showDialog(
     player,
     new Dialog({
-      style: DialogStylesEnum.LIST,
+      style: DialogStylesEnum.TABLIST_HEADERS,
       caption: "漂移 NPC 随行（NPC 开车，您当乘客）",
       info,
       button1: "上车",
@@ -322,10 +399,7 @@ export function initDrifterNpcs(): void {
   // 只要旧状态是乘客/司机就释放（removePassenger 幂等，未登记的玩家自动跳过）
   PlayerEvent.onStateChange(({ player, oldState, next }) => {
     if (player.isNpc()) return next();
-    if (
-      oldState === PlayerStateEnum.PASSENGER ||
-      oldState === PlayerStateEnum.DRIVER
-    ) {
+    if (oldState === PlayerStateEnum.PASSENGER || oldState === PlayerStateEnum.DRIVER) {
       removePassenger(player);
     }
     return next();
