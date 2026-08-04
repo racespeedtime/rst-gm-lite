@@ -1534,13 +1534,19 @@ export function initRaceSystem(): void {
       if (query) {
         void startRaceFlow(player, query);
       } else {
-        // 无参数：仅房主可开始（对齐原版——非房主提示等房主，不随机建房，
-        // 否则房间内成员误以为自己在开新赛）
+        // 无参数三分支（对齐原版）：
+        // - 房间内房主 → 开始比赛
+        // - 房间内非房主 → 等房主开始（不随机建房）
+        // - 不在房间 → 弹赛道列表选赛道建房（建房入口，列表首行有「全部随机」）
         const pr = playerRaces.get(player.id);
-        if (pr && rooms.get(pr.roomId)?.ownerId === player.id) {
-          void startRace(player);
+        if (pr) {
+          if (rooms.get(pr.roomId)?.ownerId === player.id) {
+            void startRace(player);
+          } else {
+            player.sendClientMessage(COLOR_RACE, "[赛车] 等待房主开始比赛");
+          }
         } else {
-          player.sendClientMessage(COLOR_RACE, "[赛车] 等待房主开始比赛，或 /r l 离开后自己建房");
+          void openRaceListDialog(player);
         }
       }
     } else if (cmd === "j") {
