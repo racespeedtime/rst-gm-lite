@@ -78,9 +78,16 @@ export interface ChallengeSession {
   /** 影子起始播放帧（= 录制发车帧；倒计时期间停在起始帧，GO 后从这里开始播） */
   startFrame: number;
   cps: { x: number; y: number; z: number; size: number }[];
-  /** 玩家已过的 CP 数（0 = 未过任何 CP） */
+  /** 赛道圈数（多圈挑战：玩家累计跑 laps×一圈CP 个检查点才结算） */
+  laps: number;
+  /** 玩家已过的 CP 数（累计，0 = 未过任何 CP；跨圈用 cps[cpIndex % cps.length] 取目标） */
   cpIndex: number;
+  /** 总 CP 数 = 圈数 × 一圈 CP 数（完成判定 cpIndex >= totalCp） */
   totalCp: number;
+  /** 影子已跨过的圈数（帧 cpProgress 每圈重置，播放时检测回退累计） */
+  shadowLapOffset: number;
+  /** 上一采样帧的圈内 cpProgress（-1 = 尚未采样；回退检测用） */
+  lastShadowCp: number;
   startAt: number;
   /** 实际发车时间（倒计时结束 GO 时刻；结算/超时用真实时间差，不用帧数累计防漂移） */
   goAt: number;
@@ -204,14 +211,21 @@ function renderGhost(ch: ChallengeSession): void {
   }
 }
 
-/** 影子当前已过的 CP 数（从帧读，事件无关） */
-/** 影子当前进度（已完成 CP 数 + 距其下一 CP 距离）——对齐真人排名算法：
- *  完成 CP 数降序，相同比"距下一 CP 距离"升序（近者领先） */
+/** 影子当前进度（累计 CP 数 + 距其下一 CP 距离）——对齐真人排名算法：
+ *  完成 CP 数降序，相同比"距下一 CP 距离"升序（近者领先）。
+ *  帧里 cpProgress 是圈内进度（每圈重置），影子跨圈需累计：
+ *  检测 cpProgress 回退（当前 < 上一帧 = 从一圈末尾跳回圈首）→ 影子圈数 +1。
+ *  影子播放时间单调递增（无 seek），回退检测可靠。 */
 function ghostProgress(ch: ChallengeSession): { cp: number; dist: number } {
   const s = sampleAt(ch.data, ch.ghost.playTime);
   if (!s) return { cp: 0, dist: Infinity };
-  const cp = Math.max(0, Math.min(ch.totalCp, s.cpProgress));
-  const next = ch.cps[cp]; // 影子已过 cp 个 CP，正朝第 cp+1 个（下标 cp）跑
+  if (ch.lastShadowCp !== -1 && s.cpProgress < ch.lastShadowCp) {
+    ch.shadowLapOffset++;
+  }
+  ch.lastShadowCp = s.cpProgress;
+  const lapCp = Math.max(0, Math.min(ch.cps.length, s.cpProgress));
+  const cp = ch.shadowLapOffset * ch.cps.length + lapCp; // 累计（跨圈）
+  const next = ch.cps[cp % ch.cps.length]; // 影子朝第 (圈内) 下一个 CP 跑
   if (!next) return { cp, dist: Infinity };
   return { cp, dist: Math.hypot(s.x - next.x, s.y - next.y, s.z - next.z) };
 }
@@ -267,15 +281,17 @@ function tickChallenge(ch: ChallengeSession): void {
 }
 
 /** 玩家过 CP（RaceCpEvent.onPlayerEnter 注册：进入 checkpoint 范围自动触发；
- * 进入后不再触发直到离开再进 → cpIndex 递增天然防重复计数） */
+ * 进入后不再触发直到离开再进 → cpIndex 递增天然防重复计数）。
+ * 多圈：cpIndex 累计（0..totalCp-1），目标 CP 按下标取模循环（跨圈箭头流转），
+ * 完成判定 cpIndex >= totalCp（跑满 laps 圈） */
 function onChallengePlayerEnter(player: Player): void {
   const ch = challenges.get(player.id);
   if (!ch || ch.finished) return;
-  // 目标 CP = 当前进度（RaceCheckpoint.set 维护的箭头流指向它）
-  const next = ch.cps[ch.cpIndex];
+  // 目标 CP = 当前进度（RaceCheckpoint.set 维护的箭头流指向它）；跨圈取模
+  const next = ch.cps[ch.cpIndex % ch.cps.length];
   if (!next) return;
   ch.cpIndex++;
-  const gp = ghostProgress(ch); // 影子进度（CP 数 + 距下一 CP 距离，对齐真人排名）
+  const gp = ghostProgress(ch); // 影子进度（累计 CP 数 + 距下一 CP 距离，对齐真人排名）
   if (ch.cpIndex >= ch.totalCp) {
     // 完成：结算
     ch.finished = true;
@@ -283,11 +299,11 @@ function onChallengePlayerEnter(player: Player): void {
     void finishChallenge(player, ch);
     return;
   }
-  // 下一个 CP 箭头（对齐比赛 showNextCheckpoint：type 0 箭头指向下一个 CP；
-  // 无下下个 CP 时用 type 1 终点在目标位置注册 checkpoint——否则最后一个 CP
-  // 没有 checkpoint，玩家永远无法触发进入事件完成挑战）
-  const nxt = ch.cps[ch.cpIndex];
-  const nxt2 = ch.cps[ch.cpIndex + 1];
+  // 下一个 CP 箭头（跨圈循环：nxt = 下一个累计 CP，nxt2 = 下下个；仅最后一圈
+  // 的最后一个 CP（cpIndex == totalCp-1）无下下个 → type 1 终点。否则玩家永远
+  // 无法触发完成；取模让中间点跨圈循环有值，但最后一点必须终点）
+  const nxt = ch.cps[ch.cpIndex % ch.cps.length];
+  const nxt2 = ch.cpIndex < ch.totalCp - 1 ? ch.cps[(ch.cpIndex + 1) % ch.cps.length] : undefined;
   if (nxt && nxt2) {
     RaceCheckpoint.set(player, 0, nxt.x, nxt.y, nxt.z, nxt2.x, nxt2.y, nxt2.z, nxt.size);
   } else if (nxt) {
@@ -295,7 +311,7 @@ function onChallengePlayerEnter(player: Player): void {
   }
   // 领先判定对齐真人排名算法：CP 数多者领先；相同则比"距下一 CP 距离"（近者领先）
   const pcp = ch.cpIndex;
-  const pnext = ch.cps[pcp];
+  const pnext = ch.cps[pcp % ch.cps.length];
   const ppos = player.getPos();
   const pdist = pnext ? Math.hypot(ppos.x - pnext.x, ppos.y - pnext.y, ppos.z - pnext.z) : Infinity;
   let ahead: string;
@@ -438,7 +454,12 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
     return false;
   }
-  return startChallengeCore(player, chosen, data, cps);
+  // 赛道圈数（多圈挑战：玩家累计跑 laps 圈才结算，与影子整场录像对比）
+  const raceRow = await prisma.race.findFirst({
+    where: { id: raceId },
+    select: { laps: true },
+  });
+  return startChallengeCore(player, chosen, data, cps, Math.max(1, raceRow?.laps ?? 1));
 }
 
 /**
@@ -483,10 +504,10 @@ export async function startChallengeWithReplay(player: Player, replayId: string)
     return false;
   }
   // 赛道可能已被软删/禁用：此时 cps 查出来为空会误报"至少需要 2 个检查点"，
-  // 先确认赛道状态再读检查点
+  // 先确认赛道状态再读检查点（laps 一并取出，供多圈挑战）
   const race = await prisma.race.findFirst({
     where: { id: replay.raceId, deletedAt: null, isEnabled: true },
-    select: { id: true },
+    select: { id: true, laps: true },
   });
   if (!race) {
     player.sendClientMessage(COLOR_ERROR, "该赛道已被删除或禁用，无法进行影子挑战");
@@ -500,15 +521,17 @@ export async function startChallengeWithReplay(player: Player, replayId: string)
     player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
     return false;
   }
-  return startChallengeCore(player, replay, data, cps);
+  return startChallengeCore(player, replay, data, cps, Math.max(1, race.laps ?? 1));
 }
 
-/** 影子挑战核心：建影子实体 + 放入玩家 + 倒计时（startChallengeFromRace/WithReplay 共用） */
+/** 影子挑战核心：建影子实体 + 放入玩家 + 倒计时（startChallengeFromRace/WithReplay 共用）。
+ * laps：赛道圈数（多圈挑战：玩家累计跑 laps 圈才结算，与影子整场录像对比） */
 async function startChallengeCore(
   player: Player,
   replay: { id: string; rank: number | null; raceName: string | null; recorderName: string },
   data: ReplayData,
   cps: { x: unknown; y: unknown; z: unknown; angle: unknown; size: unknown }[],
+  laps: number,
 ): Promise<boolean> {
   const worldId = allocReplayWorld();
 
@@ -607,8 +630,12 @@ async function startChallengeCore(
     ghost,
     startFrame: 0, // 录制发车帧（倒计时期间停在起始帧，GO 后从这里播）
     cps: cps.map((c) => ({ x: Number(c.x), y: Number(c.y), z: Number(c.z), size: Number(c.size) })),
+    laps,
     cpIndex: 0,
-    totalCp: cps.length,
+    // 多圈：总 CP = 圈数 × 一圈 CP 数（玩家累计跑满才结算，与影子整场时长对比）
+    totalCp: Math.max(1, laps) * cps.length,
+    shadowLapOffset: 0,
+    lastShadowCp: -1, // 首帧采样时初始化（-1 跳过首帧回退检测）
     startAt: Date.now(),
     goAt: Date.now(),
     finished: false,
