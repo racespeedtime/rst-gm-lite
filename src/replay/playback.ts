@@ -617,9 +617,13 @@ function tickSession(session: ReplaySession): void {
         }
       }
     }
-    // 倒计时期间：车停起始位置（发静止帧，速度/按键清零）
+    // 倒计时期间：车停起始位置（发静止帧，速度/按键清零）。与正常路径一样
+    // 30Hz 节流——位置恒定，60Hz 重发同样坐标纯浪费带宽（5 分身翻倍发包）
     for (const g of session.ghosts) {
       if (g.stopped) continue;
+      const now = Date.now();
+      if (now - g.lastEmulateAt < EMULATE_INTERVAL_MS) continue;
+      g.lastEmulateAt = now;
       const s = sampleAt(session.data, g.playTime);
       if (!s) continue;
       try {
@@ -633,10 +637,13 @@ function tickSession(session: ReplaySession): void {
   // 暂停：时间不推进，但每 tick 持续发一帧静止帧锚定位置——暂停时若只发
   // 一次，车停在斜坡/不平地形时客户端本地物理无持续校正会缓慢滑走。
   // lastTickAt 已在上面刷新：恢复播放时不会把暂停时长算进推进（否则
-  // 播放时间瞬移最多 250ms）
+  // 播放时间瞬移最多 250ms）。30Hz 节流：位置恒定，60Hz 重发同样坐标浪费
   if (session.paused) {
     for (const g of session.ghosts) {
       if (g.stopped) continue; // 播完停发的车保持静止（不发重复静止帧）
+      const now = Date.now();
+      if (now - g.lastEmulateAt < EMULATE_INTERVAL_MS) continue;
+      g.lastEmulateAt = now;
       const s = sampleAt(session.data, g.playTime);
       if (!s) continue;
       try {
