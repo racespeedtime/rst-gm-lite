@@ -688,12 +688,15 @@ export async function spawnReplay(
       npc.setVirtualWorld(worldId);
       npc.putInVehicle(vehicle, 0);
       npc.setInvulnerable(true);
-      // NPC 无 nametag：绑 3D 标签显示"本身身份（NPC 名）+ 扮演谁（录制者 + 分身编号）"
+      // NPC 无 nametag：绑 3D 标签显示"本身身份（NPC 名）+ 扮演谁（录制者 + 分身编号）"。
+      // 编号反序：所有 ghost 同速播同一文件，playTime 越大 = 位置越靠后 = 视觉跑最前
+      //（头车）；创建顺序 i=0 是 playTime 最小（视觉尾车）。故编号取 count-i：
+      // 头车（playTime 最大）= ghost 1/N，尾车 = ghost N/N，与视觉顺序一致
       const label = new Dynamic3DTextLabel({
         text:
           `{FFD700}${npc.getName()}` +
           `\n{FFFFFF}回放 · ${replay.recorderName}` +
-          (count > 1 ? `{808080} [ghost ${ghosts.length + 1}/${count}]` : ""),
+          (count > 1 ? `{808080} [ghost ${count - ghosts.length}/${count}]` : ""),
         color: "#ffffff",
         x: 0,
         y: 0,
