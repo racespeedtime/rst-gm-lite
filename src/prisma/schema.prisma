@@ -301,6 +301,7 @@ model SysUserSetting {
   hideAllGui         Boolean  @default(false) @map("hide_all_gui")
   showSpeed2d        Boolean  @default(false) @map("show_speed_2d")
   showSpeed3d        Boolean  @default(false) @map("show_speed_3d")
+  showDebugInfo      Boolean  @default(false) @map("show_debug_info")
   userId             String?  @unique @map("user_id") @db.Uuid
   defaultPlayerPresetId String? @map("default_player_preset_id") @db.Uuid
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)

@@ -220,6 +220,31 @@ export function getReplaySession(playerId: number): ReplaySession | undefined {
   return sessions.get(playerId);
 }
 
+/** 回放调试信息（调试 GUI 用）：当前播放时间/总时长、当前帧速度、帧率 */
+export interface ReplayDebugState {
+  playTimeMs: number;
+  durationMs: number;
+  frameIndex: number;
+  frameCount: number;
+  currentKmh: number;
+}
+
+/** 取玩家回放会话的调试状态（无会话返回 null） */
+export function getReplayDebugState(playerId: number): ReplayDebugState | null {
+  const s = sessions.get(playerId);
+  if (!s || s.ghosts.length === 0) return null;
+  const g = s.ghosts[0];
+  const sampled = sampleAt(s.data, g.playTime);
+  const interval = Math.max(1, s.data.header.frameIntervalMs);
+  return {
+    playTimeMs: g.playTime,
+    durationMs: s.data.header.frameCount * interval,
+    frameIndex: Math.floor(g.playTime / interval),
+    frameCount: s.data.header.frameCount,
+    currentKmh: sampled ? Math.hypot(sampled.vx, sampled.vy, sampled.vz) : 0,
+  };
+}
+
 /** 比赛信息 TD 样式（对齐原版 CreatePRaceTextDraw，与比赛房间一致） */
 function replayTdBase(player: Player, y: number, text: string): TextDraw {
   return new TextDraw({ player, x: 500, y, text })

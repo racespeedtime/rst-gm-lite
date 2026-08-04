@@ -32,11 +32,17 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     { name: "速度表 2d", value: toggleText(setting.showSpeed2d) },
     { name: "速度表 3d", value: toggleText(setting.showSpeed3d) },
     { name: "特技显示", value: toggleText(setting.showStunt) },
+    { name: "调试信息（位置/朝向/按键等）", value: toggleText(setting.showDebugInfo) },
   ];
-  const index = await pickOption(player, "界面个性化", rows.map((r) => r.name), {
-    headers: ["设置", "当前"],
-    format: (_o, i) => [rows[i].name, rows[i].value],
-  });
+  const index = await pickOption(
+    player,
+    "界面个性化",
+    rows.map((r) => r.name),
+    {
+      headers: ["设置", "当前"],
+      format: (_o, i) => [rows[i].name, rows[i].value],
+    },
+  );
   if (index < 0) return back?.();
 
   const again = () => openInterfaceMenu(player, back);
@@ -89,6 +95,11 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     await updateSetting(player, { showStunt: next });
     notifySaved(player, `特技显示已${next ? "开启" : "关闭"}`);
     syncStuntState(player, next);
+    return again();
+  }
+  if (index === 6) {
+    // 调试信息：全局开关（DB 持久化），GUI 200ms tick 检测后自动创建/销毁
+    await toggleSetting(player, "showDebugInfo", "调试信息");
     return again();
   }
 }

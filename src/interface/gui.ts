@@ -14,6 +14,12 @@ import {
 } from "./speedometer";
 import { createNetstat, destroyNetstat, updateNetstat } from "./netstat";
 import type { NetstatState } from "./netstat";
+import {
+  createDebugInfo,
+  destroyDebugInfo,
+  updateDebugInfo,
+  type DebugInfoState,
+} from "./debugInfo";
 import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUserSetting";
 
 /** 刷新频率（原版 updateSpeedometer 定时器为 200ms） */
@@ -26,6 +32,7 @@ interface PlayerGui {
   /** 3d 速度表当前 attach 到的车辆 id（换车时据此重建） */
   speedo3dVehId: number | null;
   netstat: NetstatState | null;
+  debugInfo: DebugInfoState | null;
   /** 上次更新网络面板的时间戳（网络面板每秒更新，与 200ms 速度表 tick 分离） */
   netstatAt: number;
 }
@@ -51,17 +58,22 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     speedo3d: null,
     speedo3dVehId: null,
     netstat: null,
+    debugInfo: null,
     netstatAt: 0,
   };
   guis.set(player.id, gui);
 
-  // hideAllGui 覆盖优先：全部隐藏
+  // hideAllGui 覆盖优先：全部隐藏（debugInfo 也隐藏）
   if (setting.hideAllGui) {
     gui.speedoTd.forEach((t) => t.hide(player));
     destroySpeed3d(gui.speedo3d);
     gui.speedo3d = null;
     gui.speedo3dVehId = null;
     gui.netstat?.tds.forEach((t) => t.hide(player));
+    if (gui.debugInfo) {
+      destroyDebugInfo(gui.debugInfo);
+      gui.debugInfo = null;
+    }
     return;
   }
 
@@ -98,6 +110,16 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   } else if (gui.netstat) {
     gui.netstat.tds.forEach((t) => t.show(player));
   }
+
+  // 调试信息 GUI（底部居中，数据库开关 showDebugInfo 控制）
+  if (setting.showDebugInfo && !gui.debugInfo) {
+    gui.debugInfo = createDebugInfo(player);
+  } else if (gui.debugInfo && !setting.showDebugInfo) {
+    destroyDebugInfo(gui.debugInfo);
+    gui.debugInfo = null;
+  } else if (gui.debugInfo) {
+    // 已创建：隐藏所有 GUI 关闭后重新显示
+  }
 }
 
 /** 刷新单个玩家 GUI 的文本 */
@@ -106,6 +128,7 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
   const kmh = getDisplaySpeed(player);
   if (gui.speedoTd.length > 0) updateSpeed2d(gui.speedoTd, kmh);
   if (gui.speedo3d) updateSpeed3d(player, gui.speedo3d, kmh);
+  if (gui.debugInfo) updateDebugInfo(player, gui.debugInfo, kmh);
   // 网络面板速率是每秒增量（KB/s），须每秒更新（对齐原版 network GUI）；
   // 不跟 200ms 速度表 tick 一起刷，否则速率数值偏小且刷新过快看不清
   if (gui.netstat && Date.now() - gui.netstatAt >= 1000) {
@@ -165,6 +188,7 @@ export function cleanupGui(playerId: number): void {
     destroySpeed2d(gui.speedoTd);
     destroySpeed3d(gui.speedo3d);
     if (gui.netstat) destroyNetstat(gui.netstat);
+    destroyDebugInfo(gui.debugInfo);
   } catch (e) {
     logger.error(`[gui] 清理 ${playerId} 的 GUI 失败`, e);
   }
