@@ -194,7 +194,7 @@ async function doLogin(player: Player, userId: string, name: string): Promise<st
       new Dialog({
         style: DialogStylesEnum.PASSWORD,
         caption: "登录",
-        info: "请输入密码：",
+        info: `当前昵称：{FFD700}${name}{FFFFFF}\n该昵称已有账号，请输入密码登录：`,
         button1: "确定",
         button2: "离开",
       }),
@@ -231,12 +231,14 @@ async function doLogin(player: Player, userId: string, name: string): Promise<st
 
 /**
  * 询问并确认新密码（设置密码 + 二次确认，最多 3 次）。
+ * banner 可选：对话框顶部的附加说明（如注册时提示当前昵称/账号名）。
  * 返回确认后的密码；玩家取消/中断返回 null。
  */
 export async function askNewPassword(
   player: Player,
   caption: string,
   hint: string,
+  banner?: string,
 ): Promise<string | null> {
   let pwd = "";
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -245,7 +247,9 @@ export async function askNewPassword(
       new Dialog({
         style: DialogStylesEnum.PASSWORD,
         caption,
-        info: `${hint}（${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN}位）：`,
+        info: [banner, `${hint}（${MIN_PASSWORD_LEN}-${MAX_PASSWORD_LEN}位）：`]
+          .filter((s) => s)
+          .join("\n"),
         button1: "确定",
         button2: "取消",
       }),
@@ -356,7 +360,12 @@ async function doRegister(
     player.kick();
     return null;
   }
-  const pwd = await askNewPassword(player, "注册", "设置密码");
+  const pwd = await askNewPassword(
+    player,
+    "注册",
+    "设置密码",
+    `当前昵称：{FFD700}${name}{FFFFFF}\n该昵称将注册为新账号，若非你本意请改名后再连接：`,
+  );
   if (!pwd) {
     return null;
   }
