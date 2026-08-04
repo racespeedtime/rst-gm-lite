@@ -350,10 +350,10 @@ export async function loadAllHouseObjects(): Promise<void> {
               respawnDelay: -1, // 静态车不重生
             });
             veh.create();
-            // 静态车不支持 worldId 数组：setVirtualWorld 逐个设置（关联赛道→含比赛世界）
-            for (const wid of worldIds) {
-              veh.setVirtualWorld(wid);
-            }
+            // 静态车固定公共战局世界：Vehicle 是单世界实体（setVirtualWorld 是
+            // 单值，循环铺多个世界既只有最后值生效、又让人误以为每个世界都占一辆
+            // 车槽）——干脆只放公共战局（房屋静态车只在战局区间可见）
+            veh.setVirtualWorld(PUBLIC_WORLD_ID);
             vehicles.push(veh);
             stats.vehicles++;
             break;
