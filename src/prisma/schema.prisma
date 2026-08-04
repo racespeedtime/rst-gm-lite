@@ -88,6 +88,7 @@ model Race {
 
   @@index([userId])
   @@index([deletedAt])
+  @@index([name, deletedAt])
   @@map("race")
 }
 
