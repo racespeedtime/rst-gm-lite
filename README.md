@@ -111,6 +111,23 @@ RST-GM-Lite 是 `open.mp + samp-node + @infernus/core` 纯 TypeScript 实现的�
 
 > 注：以上状态随业务演进可能调整，更新于本表。
 
+## 与原版命令的向下兼容
+
+虽定位不同，但**老玩家熟悉的 pawn-server 命令习惯尽量保留**（老服迁移玩家可无缝上手）。已兼容的命令按系统分组：
+
+| 系统 | 已兼容命令 |
+|---|---|
+| 传送 | `/vmake`（建 //用户点）· `/vsmake`（管理员建 /系统点）· `/telemenu`（系统点列表）· `/s` `/l`（含 `/sp` `/lp` 别名）· `/tpa` `/ta` `/td` + `/名字` `//名字` 未知命令兜底 |
+| 动作 | `/anim <1-21>`（21 号映射对齐原版 Action_Play）+ `/anim 0\|off\|无参` · `/fxq` 喷气背包 |
+| 赛车 | `/r`（无参弹列表）· `/r s [赛道名]` · `/r j` · `/r l\|leave` · `/r info` · `/r page` · `/r create` · `/r edit`（赛道名进编辑 / cp 放 CP / q 退出 / d 编辑菜单） |
+| 爱车 | `/cars` `/ac`（list / wode / lock / chepai / kick / color / 3d）· `/wdac`（管理菜单）· `/llac`（列表） |
+| 刷车 | `/c [车辆ID]` · `/c list` · `/c wode` · `/c lock` · `/cc` `/c color` · `/c chepai` · `/c kick` · `/c 3d` |
+| 车辆杂项 | `/f` 翻正 · `/fix` 修车 · `/kill`（比赛内重生） |
+
+**部分兼容**（不报错，给引导提示）：`/cars buy`、`/cars create`——gm-lite 无"购买/造车"概念（刷车即自动登记爱车），提示引导。
+
+**未做命令入口**（有面板等价功能或刻意不做）：`/wudi`（无敌）、`/dcar` `/autofix`（载具无敌）、`/hys`（变色龙）、`/stuck`（脱离卡死）、`/djs`（范围倒计时）、`/jetpack`（= /fxq 别名）、`/r edit cpsize\|trg`、`/infobj`（警灯尾翼）、`/aczb` `/cars buyobj`（装扮商店）、`/sz`（我的爱车）——上述多数在 `个性化 / 快捷操作 / 装扮` 面板中有等价功能。
+
 ## 起步
 
 ### 技术栈
