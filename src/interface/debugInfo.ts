@@ -60,12 +60,16 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
   const keys = player.getKeys();
   const health = player.getHealth();
   const armour = player.getArmour();
-  // 旋转四元数：车内取车辆（getRotationQuat 返回 {w,x,y,z,ret}），车外取玩家
+  // 旋转四元数：车内取车辆（完整三维姿态），车外取玩家（yaw 旋转，等价朝向角）。
+  // 带来源标记 v/p——车辆与玩家的 quat 数值完全不同（站立时玩家 quat 为恒等
+  // [0,0,0,1]），不加标记看不出是动态取数的
   const q = veh ? veh.getRotationQuat() : player.getRotationQuat();
   // 车内：位置/朝向/速度取车辆实体（车辆坐标即玩家位置，车朝向更精确）
   const displayPos = veh ? veh.getPos() : pos;
   const displayAngle = veh ? veh.getZAngle().angle : angle;
-  const quatText = q.ret ? `quat ${r2(q.x)} ${r2(q.y)} ${r2(q.z)} ${r2(q.w)}` : "quat --";
+  const quatText = q.ret
+    ? `quat(${veh ? "v" : "p"}) ${r2(q.x)} ${r2(q.y)} ${r2(q.z)} ${r2(q.w)}`
+    : "quat --";
   const lines: string[] = [
     `pos ${r2(displayPos.x)} ${r2(displayPos.y)} ${r2(displayPos.z)}  angle ${r2(displayAngle)}  world ${player.getVirtualWorld()}  int ${player.getInterior()}`,
     `${quatText}  hp ${Math.ceil(health.health)}  armor ${Math.ceil(armour.armour)}  skin ${player.getSkin()}`,
