@@ -16,6 +16,8 @@ import {
   type ReplayHeader,
 } from "./format";
 import { saveRecordingFile, deleteRecordingFile } from "./storage";
+import { getReplaySession } from "./playback";
+import { isInChallenge } from "./challenge";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
 
 /**
@@ -226,7 +228,8 @@ function captureVehicleFrame(player: Player, session?: RecordingSession): Replay
 /**
  * 开始录制：需已认证 + 在车内（v1 仅车内采集）+ 未在录制。
  * 车内指"玩家的爱车实体"（车辆采集源），不要求 putPlayerIn。
- * 挑战/回放中禁录由调用方（/rec start、面板）拦截（避免循环依赖）。
+ * 回放/影子挑战中禁录在此核心强制拦截（调用方 /rec start、面板也拦截，
+ * 双保险防遗漏路径）；比赛录制（type=race）不会在回放时触发，不受影响。
  */
 export async function startRecording(
   player: Player,
@@ -235,6 +238,14 @@ export async function startRecording(
   const auth = getAuthState(player.id);
   if (!auth) {
     player.sendClientMessage(COLOR_ERROR, "请先登录");
+    return false;
+  }
+  if (getReplaySession(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "回放中不能录制，先 /rp stop");
+    return false;
+  }
+  if (isInChallenge(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "影子挑战中不能录制，先 /challenge stop");
     return false;
   }
   if (sessions.has(player.id)) {
