@@ -86,6 +86,8 @@ export interface RecordingSession {
   suspended: boolean;
   /** 挂起时缓存的最近一帧（静止帧的数据源：位置/姿态/车型/时间天气血量保持，速度按键清零） */
   suspendFrame: ReplayFrame | null;
+  /** 挂起是否因掉线（true=掉线挂起标 online:false；false=主动退赛挂起保持 online） */
+  suspendedOffline: boolean;
 }
 
 const sessions = new Map<number, RecordingSession>();
@@ -315,6 +317,7 @@ export async function startRecording(
     lastRaknetAt: 0,
     suspended: false,
     suspendFrame: null,
+    suspendedOffline: false,
   };
   sessions.set(player.id, session);
   // 诊断：录制开始快照——车内=否时 DriverSync 包不会产生（onfoot 是另一个包），
@@ -496,13 +499,18 @@ export async function forceStopRecording(playerId: number): Promise<void> {
   await stopRecording(playerId, { quiet: true });
 }
 
-/** 掉线挂起录制（掉线进重连窗口时调用）：标记挂起 + 缓存最近帧作静止帧数据源，
- *  会话保持不落盘；挂起期间 fallbackSample 生成静止帧（车停在掉线位置）。 */
-export function suspendRecording(playerId: number): void {
+/**
+ * 挂起录制（掉线进重连窗口/退赛时调用）：标记挂起 + 缓存最近帧作静止帧数据源，
+ * 会话保持不落盘；挂起期间 fallbackSample 生成静止帧（车停在原地）。
+ * offline：true = 掉线挂起（静止帧标 online=false，回放显示红字"掉线"）；
+ * false = 主动退赛挂起（玩家仍在线，静止帧保持 online=true——标掉线会误导）。
+ */
+export function suspendRecording(playerId: number, offline = true): void {
   const session = sessions.get(playerId);
   if (!session) return;
   session.suspended = true;
   session.suspendFrame = session.last ?? null; // 最近采样帧（位置/姿态/车型/时间天气血量）
+  session.suspendedOffline = offline;
 }
 
 /** 重连成功续录：清除挂起标记，startWorld 更新为当前世界（重连后玩家已在比赛世界，
@@ -513,6 +521,7 @@ export function resumeRecording(playerId: number): void {
   const player = Player.getInstance(playerId);
   session.suspended = false;
   session.suspendFrame = null;
+  session.suspendedOffline = false;
   if (player && player.isConnected()) {
     session.startWorld = player.getVirtualWorld();
   }
@@ -531,6 +540,13 @@ function fallbackSample(): void {
     // 静止帧（位置/姿态/车型/时间天气血量保持掉线帧，速度/按键清零）。重连成功
     // 后 resume 续录，回放可看到"掉线后车停在原地那段的帧"（完整不中断）。
     if (session.suspended && session.suspendFrame) {
+      // 时长上限：挂起分支不执行 checkRecordingBoundary，这里单独校验——
+      // 挂起会话的静止帧以 10Hz 无限累积（掉线窗口可到 5 分钟，但房间可能
+      // 持续很久；防挂机超上限内存帧无限膨胀）
+      if (Date.now() - session.startAt > maxRecordMs(session)) {
+        void stopRecording(session.playerId, { quiet: true });
+        continue;
+      }
       if (Date.now() - session.lastSampleAt >= FALLBACK_GAP_MS) {
         const f = session.suspendFrame;
         sample(session, {
@@ -546,7 +562,9 @@ function fallbackSample(): void {
           sirenState: false,
           trailerId: 0,
           trainSpeed: 0,
-          online: false, // 掉线静止帧：标记玩家离线（回放据此识别掉线段）
+          // 掉线挂起标 online:false（回放据此识别掉线段）；主动退赛挂起（玩家仍
+          // 在线）保持 true——退赛标掉线会误导观看者
+          online: !session.suspendedOffline,
         });
       }
       continue;

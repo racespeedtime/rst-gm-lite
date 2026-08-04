@@ -131,15 +131,18 @@ export function raceRecordingStop(
  * 用于"房间销毁且无人完成"和"掉线重连成功删掉线段"——删除前留 800ms
  * 让刚触发的 stopRecording 落盘完成（断线走 forceStopRecording 是异步的，
  * 立即查可能查到旧记录）。raceId 限定该场比赛，防误删同用户其他比赛记录。
+ * userId 为可选快照（room.raceMembersLast 存）：掉线/重连超时玩家 auth 已清，
+ * 必须靠快照才能离线作废其未完成录像，否则文件 + DB 记录永久泄漏。
  */
-export function discardRaceReplay(playerId: number, raceId?: string | null): void {
+export function discardRaceReplay(playerId: number, raceId?: string | null, userId?: string): void {
   setTimeoutSafe(async () => {
-    const auth = getAuthState(playerId);
-    if (!auth) return;
+    // 优先用快照 userId；无快照（历史调用）回退在线 auth
+    const uid = userId ?? getAuthState(playerId)?.userId;
+    if (!uid) return;
     try {
       const row = await prisma.replay.findFirst({
         where: {
-          userId: auth.userId,
+          userId: uid,
           type: "race",
           deletedAt: null,
           ...(raceId ? { raceId } : {}),

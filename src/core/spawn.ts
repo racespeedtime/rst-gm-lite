@@ -132,9 +132,15 @@ async function saveAllOnlinePositions(): Promise<void> {
 /** 登录首次出生标记：spawnPlayer 已用 setSpawnInfo 定位，onSpawn 不再二次定位 */
 const loginSpawned = new Set<number>();
 
+/** onDeath 预计算的重生位置（playerId → 位置）：onSpawn 直接使用，避免死亡重生
+ *  双重随机——onDeath 预计算一个随机点写 spawnInfo，onSpawn 若再随机一次会先
+ *  出现在 A 点再瞬移到 B 点（客户端可见闪烁传送） */
+const pendingSpawnPos = new Map<number, { x: number; y: number; z: number; angle: number }>();
+
 /** 断线清理登录出生标记（防 playerId 复用残留跳过重生定位） */
 export function cleanupLoginSpawned(playerId: number): void {
   loginSpawned.delete(playerId);
+  pendingSpawnPos.delete(playerId);
 }
 
 /**
@@ -248,6 +254,8 @@ export function initSpawnSystem(): void {
       if (!player.isConnected()) return;
       const pos = await computeSpawnPos(setting);
       if (!pos || !player.isConnected()) return; // 无出生点配置，保持默认
+      // 记录预计算位置：onSpawn 直接用（防双重随机闪烁）
+      pendingSpawnPos.set(player.id, pos);
       player.setSpawnInfo(
         0,
         setting?.skinId ?? player.getSkin(),
@@ -296,8 +304,27 @@ export function initSpawnSystem(): void {
     if (getAuthState(player.id) && player.isSpectating()) {
       return next();
     }
-    // 正常死亡重生：按 spawnMode 自动定位（随机/上次位置）
-    void respawnBySetting(player);
+    // 死亡重生：onDeath 预计算的位置直接用（防双重随机闪烁）——apply 皮肤 +
+    // setPos 后不再走 respawnBySetting（否则又随机一次）。未预计算（onDeath
+    // 中断/竞态）才回退 respawnBySetting 的独立计算。
+    const pre = pendingSpawnPos.get(player.id);
+    if (pre) {
+      pendingSpawnPos.delete(player.id);
+      void (async () => {
+        const auth = getAuthState(player.id);
+        if (!auth) return;
+        const setting = await getSetting(player);
+        if (setting?.skinId != null && player.getSkin() !== setting.skinId) {
+          player.setSkin(setting.skinId);
+        }
+        if (!player.isConnected()) return;
+        player.setPos(pre.x, pre.y, pre.z);
+        player.setFacingAngle(pre.angle);
+      })();
+    } else {
+      // 正常死亡重生：按 spawnMode 自动定位（随机/上次位置）
+      void respawnBySetting(player);
+    }
     // 死亡重生后挂件会被 open.mp 清除：重新应用当前人物预设（对齐原版
     // OnPlayerSpawn → SpawnAttire）。编辑模式除外（编辑时是对象编辑/挂件操作，
     // 重应用会打断）。

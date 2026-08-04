@@ -1,4 +1,12 @@
-import { Dialog, DialogStylesEnum, GameText, Player, PlayerEvent, Vehicle, WeaponEnum } from "@infernus/core";
+import {
+  Dialog,
+  DialogStylesEnum,
+  GameText,
+  Player,
+  PlayerEvent,
+  Vehicle,
+  WeaponEnum,
+} from "@infernus/core";
 import { pickOption, notifySaved } from "./settings";
 import { COLOR_ERROR } from "@/utils/colors";
 import { setTimeoutSafe } from "@/core/timers";
@@ -182,7 +190,9 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
         return;
       }
       flipVehicle(vehicle, 2);
-      notifySaved(player, "车辆已翻正并修复");
+      // flipVehicle 只抬升+重置朝向（物理重新落正），不修车——文案如实，
+      // 修车由车辆自动的 autoFix（个人设置开启时）负责
+      notifySaved(player, "车辆已翻正");
     },
   });
 
@@ -331,7 +341,8 @@ export function initQuickCommands(): void {
       return next();
     }
     flipVehicle(vehicle, 2);
-    notifySaved(player, "车辆已翻正并修复");
+    // 同上：只翻正不修车，文案如实
+    notifySaved(player, "车辆已翻正");
     return next();
   });
 }

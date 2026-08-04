@@ -191,8 +191,20 @@ async function openClickPlayerMenu(player: Player, target: Player): Promise<void
   lockPlayer(player.id); // 菜单对话框流程期间锁定，防重复触发/覆盖当前对话框
   try {
     const name = target.getName().name;
+    // userId 在进入菜单前取出存闭包：菜单打开期间目标可能断线，届时
+    // getAuthState(target.id) 已清空，直接非空断言会崩（H4 类问题）
+    const targetUserId = getAuthState(target.id)?.userId;
     const rows: { label: string; run: () => void | Promise<void> }[] = [
-      { label: "查看个人信息", run: () => showProfile(player, getAuthState(target.id)!.userId, `${name} 的信息`) },
+      {
+        label: "查看个人信息",
+        run: () => {
+          if (!targetUserId) {
+            player.sendClientMessage(COLOR_ERROR, "对方已下线，无法查看信息");
+            return;
+          }
+          showProfile(player, targetUserId, `${name} 的信息`);
+        },
+      },
     ];
     const isSelf = player.id === target.id;
     if (!isSelf) {
@@ -219,7 +231,11 @@ async function openClickPlayerMenu(player: Player, target: Player): Promise<void
         });
       }
     }
-    const index = await pickOption(player, `${name} 的操作`, rows.map((r) => r.label));
+    const index = await pickOption(
+      player,
+      `${name} 的操作`,
+      rows.map((r) => r.label),
+    );
     if (index < 0) return; // 取消/关闭
     await rows[index].run();
   } finally {

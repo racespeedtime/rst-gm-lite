@@ -69,6 +69,9 @@ export async function enterRaceEdit(player: Player, raceId: string): Promise<voi
     player.sendClientMessage(COLOR_ERROR, "你无权编辑该赛道");
     return;
   }
+  // 防重复进入泄漏测试车：连续 /r edit A /r edit B 时上一辆测试车不销毁会成
+  // 世界幽灵车（进编辑时 destroyPlayerVehicle 已销毁爱车，旧车无主）
+  cleanupScriptVehicle(player.id);
   try {
     const cps = await prisma.raceCp.findMany({
       where: { raceId },

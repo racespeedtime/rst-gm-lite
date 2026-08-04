@@ -789,63 +789,78 @@ export async function spawnReplay(
         );
         break;
       }
-      const npcPlayer = npc.getPlayer();
-      const vehicle = new Vehicle({
-        modelId: data.header.vehicleModelId,
-        x: data.header.startX,
-        y: data.header.startY,
-        z: data.header.startZ,
-        zAngle: 0,
-        color: [-1, -1],
-        respawnDelay: 0,
-      });
-      vehicle.create();
-      vehicle.setVirtualWorld(worldId);
-      vehicle.linkToInterior(0);
-      vehicle.addComponent(1010); // 氮气（录制时玩家爱车带氮气，回放车一致）
-      // 锁门防玩家开走 ghost 车（回放车只可看不可开；NPC 已在车内不受影响）
-      vehicle.setParamsEx(true, false, false, true, false, false, false);
-      npc.setVirtualWorld(worldId);
-      npc.putInVehicle(vehicle, 0);
-      npc.setInvulnerable(true);
-      // NPC 无 nametag：绑 3D 标签显示"本身身份（NPC 名）+ 扮演谁（录制者 + 分身编号）"。
-      // 编号反序：所有 ghost 同速播同一文件，playTime 越大 = 位置越靠后 = 视觉跑最前
-      //（头车）；创建顺序 i=0 是 playTime 最小（视觉尾车）。故编号取 total-已建数：
-      // 头车（playTime 最大）= ghost 1/N，尾车 = ghost N/N，与视觉顺序一致
-      const labelNo = count - ghosts.length;
-      const label = new Dynamic3DTextLabel({
-        text: ghostLabelText(npc.getName(), replay.recorderName, labelNo, count, true),
-        color: "#ffffff",
-        x: 0,
-        y: 0,
-        z: 0.3, // 头顶上方（附着玩家时 x/y/z 为相对偏移）
-        drawDistance: 40,
-        testLOS: false,
-        attachedPlayer: npcPlayer.id, // IDynamic3DTextLabel.attachedPlayer 为 playerId（number）
-        worldId,
-        charset: DEFAULT_CHARSET, // 支持中文（录制者名可能为中文）
-      });
-      label.create();
-      // 登记 NPC playerId：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
-      // 但 NPC 自身/残留状态可能发真实 sync 会冲突）；同时记录 em
-      registerReplayNpc(npcPlayer.id);
-      // 登记为观战切换候选：回放/挑战玩家按左/右键可在各 ghost 车之间循环切换
-      registerObserveCandidate(vehicle.id, "vehicle");
-      ghosts.push({
-        npc,
-        vehicle,
-        label,
-        playTime: i * baseGap, // 错峰起始（相对文件起点）
-        staggerMs: i * baseGap, // 该分身的错峰偏移（seek 保持错峰用）
-        model: data.header.vehicleModelId,
-        npcPlayerId: npcPlayer.id,
-        lastEmulateAt: 0,
-        warnedEmulateFail: false,
-        stopped: false,
-        lastNitroAt: 0,
-        labelNo,
-        online: true,
-      });
+      // 迭代内 try：创建中途（putInVehicle/label.create/register 等）抛异常时
+      // 清理本次已建实体（外层 catch 只覆盖已 push 进 ghosts 的，循环局部变量
+      // 不清理会泄漏 NPC 槽位 + 车辆实体）
+      try {
+        const npcPlayer = npc.getPlayer();
+        const vehicle = new Vehicle({
+          modelId: data.header.vehicleModelId,
+          x: data.header.startX,
+          y: data.header.startY,
+          z: data.header.startZ,
+          zAngle: 0,
+          color: [-1, -1],
+          respawnDelay: 0,
+        });
+        vehicle.create();
+        vehicle.setVirtualWorld(worldId);
+        vehicle.linkToInterior(0);
+        vehicle.addComponent(1010); // 氮气（录制时玩家爱车带氮气，回放车一致）
+        // 锁门防玩家开走 ghost 车（回放车只可看不可开；NPC 已在车内不受影响）
+        vehicle.setParamsEx(true, false, false, true, false, false, false);
+        npc.setVirtualWorld(worldId);
+        npc.putInVehicle(vehicle, 0);
+        npc.setInvulnerable(true);
+        // NPC 无 nametag：绑 3D 标签显示"本身身份（NPC 名）+ 扮演谁（录制者 + 分身编号）"。
+        // 编号反序：所有 ghost 同速播同一文件，playTime 越大 = 位置越靠后 = 视觉跑最前
+        //（头车）；创建顺序 i=0 是 playTime 最小（视觉尾车）。故编号取 total-已建数：
+        // 头车（playTime 最大）= ghost 1/N，尾车 = ghost N/N，与视觉顺序一致
+        const labelNo = count - ghosts.length;
+        const label = new Dynamic3DTextLabel({
+          text: ghostLabelText(npc.getName(), replay.recorderName, labelNo, count, true),
+          color: "#ffffff",
+          x: 0,
+          y: 0,
+          z: 0.3, // 头顶上方（附着玩家时 x/y/z 为相对偏移）
+          drawDistance: 40,
+          testLOS: false,
+          attachedPlayer: npcPlayer.id, // IDynamic3DTextLabel.attachedPlayer 为 playerId（number）
+          worldId,
+          charset: DEFAULT_CHARSET, // 支持中文（录制者名可能为中文）
+        });
+        label.create();
+        // 登记 NPC playerId：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
+        // 但 NPC 自身/残留状态可能发真实 sync 会冲突）；同时记录 em
+        registerReplayNpc(npcPlayer.id);
+        // 登记为观战切换候选：回放/挑战玩家按左/右键可在各 ghost 车之间循环切换
+        registerObserveCandidate(vehicle.id, "vehicle");
+        ghosts.push({
+          npc,
+          vehicle,
+          label,
+          playTime: i * baseGap, // 错峰起始（相对文件起点）
+          staggerMs: i * baseGap, // 该分身的错峰偏移（seek 保持错峰用）
+          model: data.header.vehicleModelId,
+          npcPlayerId: npcPlayer.id,
+          lastEmulateAt: 0,
+          warnedEmulateFail: false,
+          stopped: false,
+          lastNitroAt: 0,
+          labelNo,
+          online: true,
+        });
+      } catch (e) {
+        // 本次迭代部分实体已建：销毁 npc/车辆（label 附 NPC 随 destroy 清理），
+        // 注销已登记的 sync 屏蔽/观战候选，再上抛交外层统一处理
+        try {
+          unregisterReplayNpc(npc.getPlayer().id);
+          npc.destroy();
+        } catch {
+          /* 已失效 */
+        }
+        throw e;
+      }
     }
     // 降级修正：实际创建数 < 请求数（某分身分配失败 break）时，已创建标签的
     // 分母仍写着请求 count，会显示"ghost 3/2"——统一重编号（labelNo 反序 1..N

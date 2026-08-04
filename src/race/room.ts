@@ -120,7 +120,7 @@ interface RaceRoom {
     size: number;
     scripts: string[];
   }[];
-  results: { playerId: number; time: number }[];
+  results: { playerId: number; time: number; name: string }[];
   /** CP 触发冷却：playerId -> 上次判定时间（防刷圈） */
   lastCpAt: Map<number, number>;
   countdownTimer?: NodeJS.Timeout;
@@ -148,8 +148,10 @@ interface RaceRoom {
       name: string;
     }
   >;
-  /** 本场比赛参与过录制的成员（房间销毁且无人完成时据此作废其未完成录像） */
-  raceMembersLast: Set<number>;
+  /** 本场比赛参与过录制的成员（playerId → userId 快照：房间销毁且无人完成时
+   *  据此作废其未完成录像。存 userId 而非在线查 auth——掉线/重连超时者 auth
+   *  已清，离线作废依赖此快照） */
+  raceMembersLast: Map<number, string>;
 }
 
 const rooms = new Map<number, RaceRoom>();
@@ -178,11 +180,25 @@ export function getRaceRoom(roomId: number): RaceRoom | undefined {
 
 /**
  * 比赛中允许的主命令白名单（对齐原版 GP:545-622）：
- * /r(race) 比赛管理 · /pm 私聊 · /kill 重生 · /tv(ob/spec) 观战
+ * /r(race) 比赛管理 · /pm 私聊 · /kill 重生 · /tv(ob/spec) 观战 · /p(panel) 万能面板
  * 匹配的是主命令（strictMainCmd），如 "/r l" 的主命令是 "r"。
  * 其余命令一律拒绝。
+ * p/panel 必须在白名单内：观战（spect）模式下客户端不发按键收不到 Y 键，
+ * 只能靠 /p 开面板——比赛结束自动观战的玩家若不放行 /p 将彻底打不开面板。
  */
-const RACE_SAFE_COMMANDS = new Set(["r", "race", "pm", "kill", "tv", "ob", "spec", "q", "quit"]);
+const RACE_SAFE_COMMANDS = new Set([
+  "r",
+  "race",
+  "pm",
+  "kill",
+  "tv",
+  "ob",
+  "spec",
+  "p",
+  "panel",
+  "q",
+  "quit",
+]);
 
 export function isRaceCommandAllowed(command: string): boolean {
   return RACE_SAFE_COMMANDS.has(command);
@@ -459,7 +475,7 @@ export async function createRaceRoom(
     createdAt: Date.now(),
     reconnectUntil: new Map(),
     reconnectSlots: new Map(),
-    raceMembersLast: new Set(),
+    raceMembersLast: new Map(),
   };
   rooms.set(room.id, room);
   await joinRoom(player, room);
@@ -586,7 +602,7 @@ export async function restartRace(player: Player): Promise<void> {
     await positionPlayerAtStart(m, room);
   }
   // 挂起中的掉线会话（掉线未重连）跨场丢弃：上一场已中止，静止段无续录意义
-  for (const pid of room.raceMembersLast) {
+  for (const pid of room.raceMembersLast.keys()) {
     if (!playerRaces.has(pid) && isRecording(pid)) {
       dropRecording(pid);
     }
@@ -613,7 +629,7 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
     stopObserve(player);
   }
   room.members.set(player.id, player);
-  room.raceMembersLast.add(player.id); // 登记本场录制成员（房间销毁时作废用）
+  room.raceMembersLast.set(player.id, getAuthState(player.id)?.userId ?? ""); // 登记本场录制成员（房间销毁作废用，userId 供离线作废）
   playerRaces.set(player.id, {
     roomId: room.id,
     cpIndex: -1,
@@ -808,10 +824,12 @@ function beginRace(room: RaceRoom): void {
       }
       // 发车（对齐原版 Race_Game_Start_s）：不把玩家传送到第一个 CP——加入房间时
       // 已在起点定位（joinRoom），倒计时/等待期间可在起点自由活动，发车瞬间不应被拉回起点。
-      if (!m.isInAnyVehicle()) {
+      if (!m.isInAnyVehicle() && !getOwnedVehicle(m.id)) {
         // 无车兜底（等待期间车辆被销毁等极端情况）：用默认比赛车型刷爱车
-        // （有该模型爱车则复用其外观，没有则自动创建成爱车——玩家始终用自己的
-        // 爱车），在玩家当前位置创建并放入，不移动玩家
+        //（有该模型爱车则复用其外观，没有则自动创建成爱车——玩家始终用自己的
+        // 爱车），在玩家当前位置创建并放入，不移动玩家。有爱车停在旁边时不动
+        //（spawnVehicle 内部会 destroyPlayerVehicle 销毁旧车再重建，会把停在
+        // 停车位/起飞点前的爱车无谓销毁）
         void spawnVehicle(m, getDefaultRaceModel(room.cps), true);
       }
       // 比赛自动录制：开赛即记录整个房间（回放/后续观战/影子挑战用）。
@@ -1040,7 +1058,8 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   RaceCheckpoint.disable(player);
   clearRaceMapIcons(player); // 完成：清比赛小地图图标
   const time = Date.now() - pr.startTime;
-  room.results.push({ playerId: player.id, time });
+  // name 快照：完成后玩家可能掉线/离开，endRoom 补计排名时 getName 已取不到
+  room.results.push({ playerId: player.id, time, name: player.getName().name });
   room.resultIndex.set(player.id, time);
   const rank = room.results.length; // 完成顺序 = 名次（同一起点同时开始）
   broadcastToRoom(room, `[赛车] ${player.getName().name} 完成比赛！耗时 ${formatTime(time)}`);
@@ -1196,6 +1215,20 @@ function endRoom(room: RaceRoom): void {
       dist: slot.dist,
     });
   }
+  // 完成后掉线/离开的玩家：不在 members 也不在 reconnectSlots（完成者不开
+  // 重连窗口），从 results 快照补计——否则冠军掉线后最终结算榜缺失他，且
+  // 其录像在兜底落盘时 rank 取不到被判"未完成"
+  for (const res of room.results) {
+    if (ranked.some((x) => x.playerId === res.playerId)) continue;
+    ranked.push({
+      playerId: res.playerId,
+      name: res.name,
+      time: res.time,
+      finished: true,
+      cp: 0,
+      dist: 0,
+    });
+  }
   ranked.sort((a, b) => {
     if (a.finished !== b.finished) return a.finished ? -1 : 1;
     if (a.finished) return a.time - b.time;
@@ -1243,11 +1276,17 @@ function endRoom(room: RaceRoom): void {
       .catch(() => {});
   }
   // 落盘挂起中的掉线会话（掉线未重连、录像含静止段）：比赛结束（有人完成）
-  // 统一保留（在线成员已在上面的 raceRecordingStop 带 rank 落盘；挂起成员
-  // 不在 members 循环里，这里补上，stopRecording 对已落盘的会话无副作用）
-  for (const pid of room.raceMembersLast) {
+  // 统一保留，并按排名补 rank/finished（在线成员已在上面的 raceRecordingStop
+  // 带 rank 落盘；挂起成员不在 members 循环里，这里补上——完成后掉线者也能
+  // 在录像里拿到名次，不再误标"未完成"。stopRecording 对已落盘的会话无副作用）
+  for (const pid of room.raceMembersLast.keys()) {
     if (isRecording(pid)) {
-      void stopRecording(pid, { quiet: true });
+      const r = ranked.find((x) => x.playerId === pid);
+      void stopRecording(pid, {
+        quiet: true,
+        rank: r ? ranked.indexOf(r) + 1 : null,
+        finished: r?.finished ?? false,
+      });
     }
   }
   destroyRaceTds(room);
@@ -1272,7 +1311,9 @@ function checkRoomState(room: RaceRoom): void {
           dropRecording(pid); // 挂起会话：丢弃（静止段无成绩价值）
         }
       } else if (!someoneFinished) {
-        discardRaceReplay(pid, room.raceId); // 已落盘未完成段：作废（限定本场比赛）
+        // 已落盘未完成段：作废（限定本场比赛；用 userId 快照——掉线/重连超时
+        // 者 auth 已清，传参兜底离线作废）
+        discardRaceReplay(pid, room.raceId, room.raceMembersLast.get(pid));
       }
     }
     room.raceMembersLast.clear();
@@ -1319,8 +1360,9 @@ export function leaveRace(player: Player): void {
   // 回放：中途退出也挂起会话（车停在原地、录像静止帧录到比赛结束落盘）——
   // 与掉线重连一致，整场回放完整（能看到退出者停在哪）。房间销毁（无人完成）
   // 或 endRoom（有人完成）时统一落盘处理；若房间仍有人继续跑，静止帧持续录。
+  // offline=false：退赛挂起，玩家仍在线，静止帧不标"掉线"（掉线挂起才标）。
   if (room && room.state === "RACING") {
-    suspendRecording(player.id);
+    suspendRecording(player.id, false);
   } else {
     // 非比赛状态（等待/倒计时中离开）：没有在跑，直接落盘（未完成，无名次）
     raceRecordingStop(player.id);
@@ -1767,6 +1809,12 @@ export async function openChangeTrackMenu(
 
 /** 加入房间流程 */
 function joinRoomFlow(player: Player): void {
+  // 已在比赛中：直接提示而非静默踢出——joinRoom 会对已参赛玩家 leaveRace，
+  // 正在跑的比赛进度/录像/排名会被无声放弃
+  if (isInRace(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "[赛车] 你已在比赛中，先 /r l 离开后再加入其他房间");
+    return;
+  }
   const room = [...rooms.values()].find((r) => r.state === "WAITING");
   if (!room) {
     player.sendClientMessage(COLOR_ERROR, "当前没有等待中的比赛房间");
@@ -1899,17 +1947,21 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     const until = room.reconnectUntil.get(player.id);
     if (until == null) continue;
     const slot = room.reconnectSlots.get(player.id);
-    // 窗口过期或房间已结束/解散 → 清理窗口，无法重连
+    // 窗口过期或房间已结束/解散 → 清理窗口，无法重连；对齐 cleanupExpiredReconnects
+    // 把挂起的录制落盘（不落盘则会话永久悬挂、静止帧无限累积内存）
     if (Date.now() >= until || room.state === "FINISHED") {
       room.reconnectUntil.delete(player.id);
       room.reconnectSlots.delete(player.id);
+      if (isRecording(player.id)) {
+        void stopRecording(player.id, { quiet: true });
+      }
       continue;
     }
     // 恢复：重新加入房间 + 恢复进度
     room.reconnectUntil.delete(player.id);
     room.reconnectSlots.delete(player.id);
     room.members.set(player.id, player);
-    room.raceMembersLast.add(player.id); // 重新登记本场录制成员
+    room.raceMembersLast.set(player.id, auth.userId); // 重新登记本场录制成员（userId 快照供离线作废）
     // 恢复战局归属：prevWorld 对应战局若仍存在则加回，否则回公共大世界并修正
     // prevWorld=0（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
     const prevWorld = slot?.prevWorld ?? player.getVirtualWorld();

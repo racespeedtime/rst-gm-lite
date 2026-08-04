@@ -266,6 +266,12 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
     await openPublicReplayMenu(player, () => openReplayMenuPanel(player, back));
   } else if (res.listItem === 2) {
     if (isRecording(player.id)) {
+      // 比赛中禁止手动停止：比赛自动录制由系统管理，提前停止会丢名次元数据
+      //（endRoom 的 raceRecordingStop 找不到会话，完赛录像永远缺 rank/finished）
+      if (isInRace(player.id)) {
+        player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中由系统自动录制，比赛结束后自动保存");
+        return back?.();
+      }
       await stopRecording(player.id);
       return back?.(); // 停止后回面板（可能继续查看列表等操作）
     }

@@ -52,6 +52,12 @@ export function initReplayCommands(): void {
       return next();
     }
     if (arg === "stop") {
+      // 比赛中禁止手动停止：比赛自动录制由系统管理，提前停止会丢名次元数据
+      //（endRoom 的 raceRecordingStop 找不到会话，完赛录像永远缺 rank/finished）
+      if (isInRace(player.id)) {
+        player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中由系统自动录制，比赛结束后自动保存");
+        return next();
+      }
       void (async () => {
         if (!isRecording(player.id)) {
           player.sendClientMessage(COLOR_ERROR, "你不在录制中");

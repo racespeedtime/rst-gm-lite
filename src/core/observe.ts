@@ -21,6 +21,12 @@ interface ObserveState {
   /** 观战前的 world/interior（停止时恢复） */
   prevWorld: number;
   prevInterior: number;
+  /**
+   * 最初跟踪的玩家 id（目标上车切到车辆后仍保留来源）：
+   * 目标下车/换车时按此重跟踪回玩家——否则 observeStates.kind 被覆盖成
+   * "vehicle" 后 onStateChange 的 kind=player 匹配永远不中，观察者卡在空车上
+   */
+  originPlayerId?: number;
 }
 
 const observeStates = new Map<number, ObserveState>();
@@ -136,7 +142,7 @@ export function startObservePlayer(observer: Player, target: Player): void {
   }
   if (target.isInAnyVehicle()) {
     const veh = target.getVehicle()!;
-    startObserveVehicle(observer, veh);
+    startObserveVehicle(observer, veh, target.id);
   } else {
     // 保留已有 prevWorld/prevInterior（重跟踪时不覆盖最初值）
     const existing = observeStates.get(observer.id);
@@ -145,6 +151,7 @@ export function startObservePlayer(observer: Player, target: Player): void {
       kind: "player",
       prevWorld: existing?.prevWorld ?? observer.getVirtualWorld(),
       prevInterior: existing?.prevInterior ?? observer.getInterior(),
+      originPlayerId: target.id,
     });
     observer.setVirtualWorld(target.getVirtualWorld());
     observer.setInterior(target.getInterior());
@@ -154,8 +161,12 @@ export function startObservePlayer(observer: Player, target: Player): void {
   }
 }
 
-/** 开始观战车辆 */
-export function startObserveVehicle(observer: Player, target: Vehicle): void {
+/** 开始观战车辆（originPlayerId：从观战玩家切入时保留来源玩家，下车后重跟踪用） */
+export function startObserveVehicle(
+  observer: Player,
+  target: Vehicle,
+  originPlayerId?: number,
+): void {
   if (!target.isValid()) return;
   const existing = observeStates.get(observer.id);
   observeStates.set(observer.id, {
@@ -163,6 +174,7 @@ export function startObserveVehicle(observer: Player, target: Vehicle): void {
     kind: "vehicle",
     prevWorld: existing?.prevWorld ?? observer.getVirtualWorld(),
     prevInterior: existing?.prevInterior ?? observer.getInterior(),
+    originPlayerId,
   });
   observer.setVirtualWorld(target.getVirtualWorld());
   observer.setInterior(target.getInterior());
@@ -196,6 +208,21 @@ export function cleanupObserve(playerId: number): void {
  * 目标失去跟踪（掉线/换车/重生等）时重新跟踪或提示。
  */
 function retracePlayer(observer: Player, state: ObserveState): void {
+  // 有最初跟踪玩家（目标上车切的车）→ 恢复为跟踪该玩家本人（下车/换车/重生后
+  // 目标仍在，重跟踪回玩家而非继续盯车）
+  if (state.originPlayerId != null) {
+    const origin = Player.getInstance(state.originPlayerId);
+    if (
+      origin &&
+      origin.isConnected() &&
+      ![PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(origin.getState())
+    ) {
+      startObservePlayer(observer, origin);
+      return;
+    }
+    suggestStop(observer);
+    return;
+  }
   if (state.kind === "player") {
     const target = Player.getInstance(state.targetId);
     if (
@@ -335,11 +362,13 @@ export function initObserve(): void {
   });
 
   PlayerEvent.onStateChange(({ player: target, next }) => {
-    // 遍历所有观察者重新跟踪。仅匹配 kind="player" 的观察者——targetId 可能是
-    // 车辆 id（kind="vehicle"，车辆目标的重跟踪由 onStreamOut 处理），玩家 id 与
-    // 车辆 id 是独立命名空间，数值上可能撞号，不做 kind 区分会误重跟踪
+    // 遍历所有观察者重新跟踪。匹配"最初跟踪的玩家"（originPlayerId）——含目标
+    // 上车后 kind 已是 vehicle 的情况（否则目标下车时 kind=vehicle 匹配不中，
+    // 观察者卡在被弃车辆上）。targetId 可能是车辆 id（kind="vehicle" 且无
+    // originPlayerId 的纯车辆目标由 onStreamOut 重跟踪），玩家 id 与车辆 id 是
+    // 独立命名空间，数值上可能撞号，须同时校验 originPlayerId 指向该玩家。
     for (const [pid, st] of observeStates) {
-      if (st.kind === "player" && st.targetId === target.id) {
+      if (st.originPlayerId === target.id) {
         const observer = Player.getInstance(pid);
         if (observer && observer.isConnected()) retracePlayer(observer, st);
       }

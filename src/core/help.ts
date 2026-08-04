@@ -30,7 +30,7 @@ const HELP_LINES = [
   "{FFFFFF}/challenge — 影子挑战（赛道详情进入 · /challenge stop 中途退出）",
   "{FFFFFF}/pm 玩家ID 消息 — 私聊（比赛中可用）",
   "{FFFFFF}/house list — 房屋列表 · /house goto 名称 传送",
-  "{FFFFFF}/s 传送到系统点（/ls 等）· //名称 传送到自己的点",
+  "{FFFFFF}/名字 — 系统传送点（如 /sf）· //名字 — 用户传送点（/vmake 创建）",
   "{808080}命令输入 /xxx 查看具体用法（如 /r、/c）",
 ];
 

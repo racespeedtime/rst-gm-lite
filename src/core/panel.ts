@@ -28,6 +28,7 @@ import {
 import { isEditing, exitEdit } from "@/race/editor";
 import { showMySessionLogs } from "@/auth/sessionLog";
 import { showMyProfile } from "@/core/profile";
+import { openHelp } from "@/core/help";
 import { openReplayMenuPanel } from "@/replay/menu";
 import { showDialog } from "@/utils/dialog";
 import { COLOR_ERROR, COLOR_INFO } from "@/utils/colors";
@@ -192,6 +193,8 @@ const panelGroups: PanelGroup[] = [
       { label: "修改密码", raceSafe: true, run: changeOwnPassword },
       { label: "快捷操作", raceSafe: true, run: openQuickActionsMenu },
       { label: "聊天范围", raceSafe: true, run: changeChatRangeFlow },
+      // 帮助：面板流程内无法用 /help 命令（isPlayerLocked 拦截），补面板入口
+      { label: "帮助", desc: "常用命令 / 玩法指引", raceSafe: true, run: openHelp },
     ],
   },
   {

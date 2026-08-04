@@ -29,7 +29,9 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 /** 60 色：色相 0-354（步进 6°），饱和 100%、亮度 45%（鲜艳且文字可读） */
-const GENERATED_COLORS: string[] = Array.from({ length: 60 }, (_, i) => hslToHex((i * 6) % 360, 1, 0.45));
+const GENERATED_COLORS: string[] = Array.from({ length: 60 }, (_, i) =>
+  hslToHex((i * 6) % 360, 1, 0.45),
+);
 
 /** 颜色选择条目：value = hex，label = 显示文本（渲染时用实际颜色） */
 interface ColorEntry {
@@ -62,9 +64,7 @@ function normalizeHexColor(input: string): string | null {
   if (rgba) {
     const [r, g, b] = [rgba[1], rgba[2], rgba[3]].map((n) => Math.min(255, Number(n)));
     const a = rgba[5] != null ? Math.min(255, Number(rgba[5])) : null;
-    const hexStr = [r, g, b]
-      .map((n) => n.toString(16).padStart(2, "0"))
-      .join("");
+    const hexStr = [r, g, b].map((n) => n.toString(16).padStart(2, "0")).join("");
     return a != null ? `#${hexStr}${a.toString(16).padStart(2, "0")}` : `#${hexStr}`;
   }
   return null;
@@ -91,16 +91,24 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
     { name: "跟随世界时间", value: toggleText(setting.syncGameTime) },
     { name: "跟随世界天气", value: toggleText(setting.syncWorldWeather) },
     { name: "个人时间流逝", value: toggleText(setting.timeFlow) },
-    { name: "个人时间天气", value: `${pad2(setting.timeHour)}:${pad2(setting.timeMinute)} · ${setting.weather}` },
+    {
+      name: "个人时间天气",
+      value: `${pad2(setting.timeHour)}:${pad2(setting.timeMinute)} · ${setting.weather}`,
+    },
     { name: "显示物件（obj）", value: toggleText(setting.showObject) },
     { name: "游戏内颜色", value: setting.playerColor || "#ffffff" },
     { name: "出生点设置", value: "" },
     { name: "接受传送", value: toggleText(setting.acceptTeleport) },
   ];
-  const index = await pickOption(player, "世界个性化", rows.map((r) => r.name), {
-    headers: ["设置", "当前"],
-    format: (_o, i) => [rows[i].name, rows[i].value],
-  });
+  const index = await pickOption(
+    player,
+    "世界个性化",
+    rows.map((r) => r.name),
+    {
+      headers: ["设置", "当前"],
+      format: (_o, i) => [rows[i].name, rows[i].value],
+    },
+  );
   if (index < 0) return back?.();
 
   const again = () => openWorldMenu(player, back);
@@ -117,7 +125,10 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
     return again();
   }
   if (index === 2) {
+    // 个人时间流逝：切换后立即重建冻结定时器（否则旧 60s interval 继续把
+    // 时间回退到旧设定值，开关表现为延迟到下次重生才生效）
     await toggleSetting(player, "timeFlow", "个人时间流逝");
+    await applyWorldEnv(player);
     return again();
   }
   if (index === 3) {
@@ -228,7 +239,9 @@ async function openTimeWeatherFlow(player: Player): Promise<void> {
       return;
     }
     await updateSetting(player, { timeHour: hour, timeMinute: minute });
-    player.setTime(hour, minute);
+    // 立即重建冻结定时器：applyWorldEnv 会清除旧 60s interval 并按新时刻重设
+    //（否则冻结模式下旧定时器把刚设的时间回退成旧值）
+    await applyWorldEnv(player);
     notifySaved(player, `个人时间已设为 ${pad2(hour)}:${pad2(minute)}`);
     return;
   }
