@@ -96,59 +96,107 @@ export async function openReplayMenu(player: Player, back?: MenuBack): Promise<v
     button2: "取消",
   });
   if (!r) return back?.();
-  const replay = r.item;
-  // 操作选择：观看 / 分身挑战 / 删除
+  // 我的录制：ghost（自定义）可删；race（比赛）为系统自动录制，用户不可删
+  await openReplayActions(player, r.item, {
+    back,
+    deleteBack: () => openReplayMenu(player, back), // 删除后回到刷新后的列表
+    allowDelete: r.item.type !== "race",
+  });
+}
+
+/** 分身挑战流程：选数量（2-5 台）→ 选错峰间隔（秒，留空/0 = 自动均分全程） */
+async function runGhostReplay(player: Player, replayId: string, back?: MenuBack): Promise<void> {
+  const cnt = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: "分身数量",
+      info: "1. 2 台\n2. 3 台\n3. 4 台\n4. 5 台",
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!cnt || cnt.response !== 1) return back?.();
+  const n = cnt.listItem + 2; // 2..5
+  const gap = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.INPUT,
+      caption: "错峰间隔",
+      info: "分身起步间隔（秒，留空或 0 = 自动均分全程）：",
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!gap || gap.response !== 1) return back?.();
+  const sec = Number(gap.inputText.trim());
+  const staggerMs = Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) : undefined;
+  await spawnReplay(player, replayId, { npcCount: n, staggerMs });
+  return back?.();
+}
+
+/** 回放操作菜单：观看 / 分身挑战 /（allowDelete 时）删除。我的录制与公开回放库共用 */
+async function openReplayActions(
+  player: Player,
+  replay: { id: string; type: string; fileName: string },
+  opts: { back?: MenuBack; deleteBack?: MenuBack; allowDelete: boolean },
+): Promise<void> {
+  const actions: { label: string; run: () => Promise<void> | void }[] = [
+    { label: "观看（1 台车）", run: () => void spawnReplay(player, replay.id, { npcCount: 1 }) },
+    {
+      label: "分身挑战（2-5 台错峰同跑）",
+      run: () => runGhostReplay(player, replay.id, opts.back),
+    },
+  ];
+  if (opts.allowDelete) {
+    actions.push({
+      label: "删除",
+      run: () => confirmDeleteReplay(player, replay.id, replay.fileName, opts.deleteBack),
+    });
+  }
   const op = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "回放操作",
-      info: "1. 观看（1 台车）\n2. 分身挑战（2-5 台错峰同跑）\n3. 删除",
+      info: actions.map((a, i) => `${i + 1}. ${a.label}`).join("\n"),
       button1: "执行",
       button2: "取消",
     }),
   );
-  if (!op) return back?.();
-  if (op.response !== 1) return back?.();
-  if (op.listItem === 0) {
-    await spawnReplay(player, replay.id, { npcCount: 1 });
+  if (!op || op.response !== 1) return opts.back?.();
+  const action = actions[op.listItem];
+  if (action) await action.run();
+}
+
+/** 打开"全部比赛回放"（所有玩家的 race 录制，公开回看库；只可看，无删除权） */
+export async function openPublicReplayMenu(player: Player, back?: MenuBack): Promise<void> {
+  const auth = getAuthState(player.id);
+  if (!auth) return back?.();
+  const list = await prisma.replay.findMany({
+    where: { type: "race", deletedAt: null },
+    orderBy: { createdAt: "desc" },
+  });
+  if (list.length === 0) {
+    player.sendClientMessage(COLOR_ERROR, "暂无比赛回放（跑一场比赛后自动生成）");
     return back?.();
   }
-  if (op.listItem === 1) {
-    // 分身挑战：选数量（2-5 台）→ 选错峰间隔（秒，留空/0 = 自动均分全程）
-    const cnt = await showDialog(
-      player,
-      new Dialog({
-        style: DialogStylesEnum.LIST,
-        caption: "分身数量",
-        info: "1. 2 台\n2. 3 台\n3. 4 台\n4. 5 台",
-        button1: "确定",
-        button2: "取消",
-      }),
-    );
-    if (!cnt || cnt.response !== 1) return back?.();
-    const n = cnt.listItem + 2; // 2..5
-    const gap = await showDialog(
-      player,
-      new Dialog({
-        style: DialogStylesEnum.INPUT,
-        caption: "错峰间隔",
-        info: "分身起步间隔（秒，留空或 0 = 自动均分全程）：",
-        button1: "确定",
-        button2: "取消",
-      }),
-    );
-    if (!gap || gap.response !== 1) return back?.();
-    const sec = Number(gap.inputText.trim());
-    const staggerMs = Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) : undefined;
-    await spawnReplay(player, replay.id, { npcCount: n, staggerMs });
-    return back?.();
-  }
-  if (op.listItem === 2) {
-    await confirmDeleteReplay(player, replay.id, replay.fileName, () =>
-      openReplayMenu(player, back),
-    );
-  }
+  const r = await showPagedDialog(player, {
+    caption: `全部比赛回放（${list.length}）`,
+    data: list,
+    headers: ["录者", "赛道", "名次", "时长", "时间"],
+    format: (v) => [
+      v.recorderName,
+      v.raceName || "—",
+      v.rank != null ? `No.${v.rank}` : "{FF0000}未完成",
+      fmtDur(v.durationMs),
+      fmtTime(v.createdAt),
+    ],
+    button1: "操作",
+    button2: "取消",
+  });
+  if (!r) return back?.();
+  await openReplayActions(player, r.item, { back, allowDelete: false });
 }
 
 /** OP：全部回放管理（列出含录者，可删除任意回放） */
@@ -194,8 +242,9 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
       caption: "回放",
       info: [
         "1. 我的录制（观看 / 分身挑战 / 删除）",
-        `2. ${isRecording(player.id) ? "停止录制（落盘）" : "开始录制（当前行驶）"}`,
-        "3. 回放控制（播放 / 暂停 / 倍速 / 跳转 / 停止）",
+        "2. 全部比赛回放（观看所有玩家的比赛录制）",
+        `3. ${isRecording(player.id) ? "停止录制（落盘）" : "开始录制（当前行驶）"}`,
+        "4. 回放控制（播放 / 暂停 / 倍速 / 跳转 / 停止）",
       ].join("\n"),
       button1: "执行",
       button2: "关闭",
@@ -206,6 +255,9 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
   if (res.listItem === 0) {
     await openReplayMenu(player, () => openReplayMenuPanel(player, back));
   } else if (res.listItem === 1) {
+    // 全部比赛回放：公开回看库（所有玩家的 race 录制），只可看不可删
+    await openPublicReplayMenu(player, () => openReplayMenuPanel(player, back));
+  } else if (res.listItem === 2) {
     if (isRecording(player.id)) {
       await stopRecording(player.id);
       return back?.(); // 停止后回面板（可能继续查看列表等操作）
@@ -236,7 +288,7 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
     // 录制已正式开始：不再回到面板（结束整个面板流程），提示录制中
     player.sendClientMessage(COLOR_SUCCESS, "录制中… 用 /rec stop 或 /p → 回放 停止并保存");
     return;
-  } else if (res.listItem === 2) {
+  } else if (res.listItem === 3) {
     await openReplayControlMenu(player, () => openReplayMenuPanel(player, back));
   }
 }
