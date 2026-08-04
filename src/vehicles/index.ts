@@ -13,6 +13,7 @@ import { getAuthState } from "@/auth/auth";
 import { cleanupAttire, applyVehiclePreset } from "@/attire";
 import { isInRace } from "@/race/room";
 import { isPlayerLocked } from "@/core/interaction";
+import { toggleSetting } from "@/personalize/settings";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { DEFAULT_CHARSET } from "@/utils/constants";
@@ -207,6 +208,97 @@ export function onPlayerDisconnectVehicle(player: Player): void {
  * /c <modelId> 刷车 · /c wode 召唤 · /cc c1 c2 换色
  * /c lock 锁车 · /c chepai 文字 · /c kick 踢乘客
  */
+/** 召唤当前爱车到身边并上车（/c wode · /cars wode 共用） */
+export function summonMyVehicle(player: Player): void {
+  const veh = playerVehs.get(player.id);
+  if (!veh) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先 /c 车辆ID 刷车");
+    return;
+  }
+  const pos = player.getPos();
+  const angle = player.isInAnyVehicle()
+    ? player.getVehicle()!.getZAngle().angle
+    : player.getFacingAngle().angle;
+  veh.setPos(pos.x, pos.y, pos.z);
+  veh.setZAngle(angle);
+  veh.setVirtualWorld(player.getVirtualWorld());
+  veh.linkToInterior(player.getInterior());
+  veh.addComponent(1010);
+  veh.putPlayerIn(player, 0);
+  player.sendClientMessage(COLOR_SUCCESS, "爱车已召唤到身边");
+}
+
+/** 锁/解锁当前爱车（/c lock · /cars lock 共用；状态落库） */
+export async function toggleMyVehicleLock(player: Player): Promise<void> {
+  const veh = playerVehs.get(player.id);
+  if (!veh) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有车");
+    return;
+  }
+  const { doors } = veh.getParamsEx();
+  const isLocked = doors < 1;
+  veh.toggleDoors(isLocked);
+  const auth = getAuthState(player.id);
+  if (auth) {
+    await prisma.userVehicle.updateMany({
+      where: { userId: auth.userId, modelId: veh.getModel() },
+      data: { isLocked },
+    });
+  }
+  player.sendClientMessage(COLOR_WHITE, isLocked ? "爱车已上锁" : "爱车已解锁");
+}
+
+/** 更换当前爱车颜色（/cc · /c color · /cars color 共用） */
+export function changeMyVehicleColor(player: Player, c1: number, c2: number): void {
+  const veh = playerVehs.get(player.id);
+  if (!veh) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有刷过车，先 /c 车辆ID 刷车");
+    return;
+  }
+  veh.changeColors(c1, c2);
+  player.sendClientMessage(COLOR_SUCCESS, `颜色已更换为 ${c1} / ${c2}`);
+}
+
+/** 更换当前爱车车牌（/c chepai · /cars chepai 共用；落库） */
+export async function setMyVehiclePlate(player: Player, plate: string): Promise<void> {
+  const veh = playerVehs.get(player.id);
+  if (!veh) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有车");
+    return;
+  }
+  veh.setNumberPlate(plate);
+  const auth = getAuthState(player.id);
+  if (auth) {
+    await prisma.userVehicle.updateMany({
+      where: { userId: auth.userId, modelId: veh.getModel() },
+      data: { plateNumber: plate },
+    });
+  }
+  player.sendClientMessage(COLOR_SUCCESS, "车牌已更换");
+}
+
+/** 踢出当前爱车内的乘客（/c kick · /cars kick 共用） */
+export function kickMyVehiclePassengers(player: Player): void {
+  const veh = playerVehs.get(player.id);
+  if (!veh) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有车");
+    return;
+  }
+  let kicked = 0;
+  for (const p of Player.getInstances()) {
+    if (p.isNpc() || !p.isConnected() || p.id === player.id) continue;
+    if (!p.isInAnyVehicle() || p.getVehicle() !== veh) continue;
+    const pos = p.getPos();
+    p.setPos(pos.x, pos.y, pos.z + 5);
+    p.sendClientMessage(COLOR_ERROR, "你被车主移出了车辆");
+    kicked++;
+  }
+  player.sendClientMessage(
+    COLOR_SUCCESS,
+    kicked > 0 ? `已踢出 ${kicked} 名乘客` : "车内没有其他乘客",
+  );
+}
+
 export function initVehicleCommands(): void {
   // 改装店装件存储：OnVehicleMod 在改装店装上 mod 时触发 → 存到该爱车的
   // 当前默认预设（vehicle_preset.mod_components，仅自己的车）。
@@ -250,7 +342,9 @@ export function initVehicleCommands(): void {
             });
           }
           const preset = await tx.vehiclePreset.findUnique({ where: { id: presetId } });
-          const list = (preset?.modComponents ? preset.modComponents.split(" ") : []).filter(Boolean);
+          const list = (preset?.modComponents ? preset.modComponents.split(" ") : []).filter(
+            Boolean,
+          );
           if (!list.includes(String(componentId))) {
             list.push(String(componentId));
             await tx.vehiclePreset.update({
@@ -281,7 +375,7 @@ export function initVehicleCommands(): void {
     if (!arg || Number.isNaN(+arg)) {
       player.sendClientMessage(
         COLOR_WHITE,
-        "刷车: /c [车辆ID400-611] · /c list 图片选车 · /c wode 召唤 · /cc 色1 色2 · /c lock · /c chepai 文字 · /c kick",
+        "刷车: /c [车辆ID400-611] · /c list 图片选车 · /c wode 召唤 · /cc 色1 色2 · /c lock · /c chepai 文字 · /c kick · /c 3d 速度表",
       );
       return next();
     }
@@ -295,53 +389,17 @@ export function initVehicleCommands(): void {
   });
 
   PlayerEvent.onCommandText(["c wode", "veh wode"], ({ player, next }) => {
-    const veh = playerVehs.get(player.id);
-    if (!veh) {
-      player.sendClientMessage(COLOR_ERROR, "你还没有刷过车，先 /c 车辆ID 刷车");
-      return next();
-    }
-    const pos = player.getPos();
-    const angle = player.isInAnyVehicle()
-      ? player.getVehicle()!.getZAngle().angle
-      : player.getFacingAngle().angle;
-    veh.setPos(pos.x, pos.y, pos.z);
-    veh.setZAngle(angle);
-    veh.setVirtualWorld(player.getVirtualWorld());
-    veh.linkToInterior(player.getInterior());
-    veh.addComponent(1010);
-    veh.putPlayerIn(player, 0);
-    player.sendClientMessage(COLOR_SUCCESS, "爱车已召唤到身边");
+    summonMyVehicle(player);
     return next();
   });
 
   PlayerEvent.onCommandText(["c lock", "veh lock"], async ({ player, next }) => {
-    const veh = playerVehs.get(player.id);
-    if (!veh) {
-      player.sendClientMessage(COLOR_ERROR, "你还没有车");
-      return next();
-    }
-    const { doors } = veh.getParamsEx();
-    const isLocked = doors < 1;
-    veh.toggleDoors(isLocked);
-    // 锁车状态落库（与面板菜单一致，重刷车保持锁定）
-    const auth = getAuthState(player.id);
-    if (auth) {
-      await prisma.userVehicle.updateMany({
-        where: { userId: auth.userId, modelId: veh.getModel() },
-        data: { isLocked },
-      });
-    }
-    player.sendClientMessage(COLOR_WHITE, isLocked ? "爱车已上锁" : "爱车已解锁");
+    await toggleMyVehicleLock(player);
     return next();
   });
 
   // /cc 色1 色2 换色（对齐原版 /cc，提示文案已多处引用）
   PlayerEvent.onCommandText(["cc", "c color", "veh color"], ({ player, subcommand, next }) => {
-    const veh = playerVehs.get(player.id);
-    if (!veh) {
-      player.sendClientMessage(COLOR_ERROR, "你还没有刷过车，先 /c 车辆ID 刷车");
-      return next();
-    }
     const c1 = +subcommand[0];
     const c2 = +subcommand[1];
     if (
@@ -355,17 +413,11 @@ export function initVehicleCommands(): void {
       player.sendClientMessage(COLOR_ERROR, "用法: /cc 颜色代码1 颜色代码2（0-255）");
       return next();
     }
-    veh.changeColors(c1, c2);
-    player.sendClientMessage(COLOR_SUCCESS, `颜色已更换为 ${c1} / ${c2}`);
+    changeMyVehicleColor(player, c1, c2);
     return next();
   });
 
   PlayerEvent.onCommandText(["c chepai", "veh chepai"], async ({ player, subcommand, next }) => {
-    const veh = playerVehs.get(player.id);
-    if (!veh) {
-      player.sendClientMessage(COLOR_ERROR, "你还没有车");
-      return next();
-    }
     const plate = subcommand.join(" ").trim();
     if (!plate) {
       player.sendClientMessage(COLOR_ERROR, "用法: /c chepai 车牌文字（≤10字符）");
@@ -375,40 +427,18 @@ export function initVehicleCommands(): void {
       player.sendClientMessage(COLOR_ERROR, "车牌文字最多 10 个字符");
       return next();
     }
-    veh.setNumberPlate(plate);
-    // 车牌落库（爱车列表从 user_vehicle 读取，不落库重刷车后车牌即丢失）
-    const auth = getAuthState(player.id);
-    if (auth) {
-      await prisma.userVehicle.updateMany({
-        where: { userId: auth.userId, modelId: veh.getModel() },
-        data: { plateNumber: plate },
-      });
-    }
-    player.sendClientMessage(COLOR_SUCCESS, "车牌已更换");
+    await setMyVehiclePlate(player, plate);
     return next();
   });
 
   PlayerEvent.onCommandText(["c kick", "veh kick"], ({ player, next }) => {
-    const veh = playerVehs.get(player.id);
-    if (!veh) {
-      player.sendClientMessage(COLOR_ERROR, "你还没有车");
-      return next();
-    }
-    let kicked = 0;
-    for (const p of Player.getInstances()) {
-      if (p.isNpc() || !p.isConnected() || p.id === player.id) continue;
-      if (!p.isInAnyVehicle()) continue;
-      if (p.getVehicle() !== veh) continue;
-      const pos = p.getPos();
-      p.setPos(pos.x, pos.y, pos.z + 5);
-      // U2：实际是车主主动踢人（车没锁），文案与动作一致
-      p.sendClientMessage(COLOR_ERROR, "你被车主移出了车辆");
-      kicked++;
-    }
-    player.sendClientMessage(
-      COLOR_SUCCESS,
-      kicked > 0 ? `已踢出 ${kicked} 名乘客` : "车内没有其他乘客",
-    );
+    kickMyVehiclePassengers(player);
+    return next();
+  });
+
+  // /c 3d 3D速度表开关（对齐原版 /c 3d；2d/3d 互斥，与界面菜单一致）
+  PlayerEvent.onCommandText(["c 3d", "veh 3d"], ({ player, next }) => {
+    void toggleSetting(player, "showSpeed3d", "3D速度表", { showSpeed2d: false });
     return next();
   });
 }

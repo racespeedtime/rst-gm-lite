@@ -5,7 +5,17 @@ import { isPlayerLocked } from "@/core/interaction";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
-import { spawnVehicle, getOwnedVehicle, destroyPlayerVehicle } from "./index";
+import {
+  spawnVehicle,
+  getOwnedVehicle,
+  destroyPlayerVehicle,
+  summonMyVehicle,
+  toggleMyVehicleLock,
+  changeMyVehicleColor,
+  setMyVehiclePlate,
+  kickMyVehiclePassengers,
+} from "./index";
+import { toggleSetting } from "@/personalize/settings";
 import { parseIntInRange } from "@/utils/parse";
 
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
@@ -248,39 +258,39 @@ export function initMyVehicleCommands(): void {
     if (arg === "list") {
       void listVehiclesFlow(player);
     } else if (arg === "wode") {
-      const veh = getOwnedVehicle(player.id);
-      if (!veh) {
-        player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先 /c 车辆ID 刷车");
-        return next();
-      }
-      const pos = player.getPos();
-      const angle = player.isInAnyVehicle()
-        ? player.getVehicle()!.getZAngle().angle
-        : player.getFacingAngle().angle;
-      veh.setPos(pos.x, pos.y, pos.z);
-      veh.setZAngle(angle);
-      veh.setVirtualWorld(player.getVirtualWorld());
-      veh.linkToInterior(player.getInterior());
-      veh.addComponent(1010);
-      veh.putPlayerIn(player, 0);
-      player.sendClientMessage(COLOR_SUCCESS, "爱车已召唤到身边");
+      summonMyVehicle(player);
     } else if (arg === "lock") {
-      const veh = getOwnedVehicle(player.id);
-      if (!veh) {
-        player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先 /c 车辆ID 刷车");
+      await toggleMyVehicleLock(player);
+    } else if (arg === "chepai") {
+      const plate = subcommand.slice(1).join(" ").trim();
+      if (!plate) {
+        player.sendClientMessage(COLOR_ERROR, "用法: /cars chepai 车牌文字（≤10字符）");
         return next();
       }
-      const { doors } = veh.getParamsEx();
-      const isLocked = doors < 1;
-      veh.toggleDoors(isLocked);
-      const auth = getAuthState(player.id);
-      if (auth) {
-        await prisma.userVehicle.updateMany({
-          where: { userId: auth.userId, modelId: veh.getModel() },
-          data: { isLocked },
-        });
+      if (plate.length > 10) {
+        player.sendClientMessage(COLOR_ERROR, "车牌文字最多 10 个字符");
+        return next();
       }
-      player.sendClientMessage(COLOR_WHITE, isLocked ? "爱车已上锁" : "爱车已解锁");
+      await setMyVehiclePlate(player, plate);
+    } else if (arg === "kick") {
+      kickMyVehiclePassengers(player);
+    } else if (arg === "color") {
+      const c1 = +subcommand[1];
+      const c2 = +subcommand[2];
+      if (
+        !Number.isInteger(c1) ||
+        c1 < 0 ||
+        c1 > 255 ||
+        !Number.isInteger(c2) ||
+        c2 < 0 ||
+        c2 > 255
+      ) {
+        player.sendClientMessage(COLOR_ERROR, "用法: /cars color 颜色代码1 颜色代码2（0-255）");
+        return next();
+      }
+      changeMyVehicleColor(player, c1, c2);
+    } else if (arg === "3d") {
+      void toggleSetting(player, "showSpeed3d", "3D速度表", { showSpeed2d: false });
     } else if (arg === "buy" || arg === "create") {
       player.sendClientMessage(
         COLOR_WHITE,
