@@ -238,18 +238,36 @@ export async function openActionMenu(player: Player, back?: MenuBack): Promise<v
 }
 
 /**
- * 动作清理钩子：玩家离开安全状态（进车/上下车过渡/死亡/观战）时静默清除动作——
+ * 动作清理钩子：玩家离开安全状态时静默清除动作——
  * 防止动作残留在车内/尸体/观战目标上（SA 客户端在车内/死亡后动作本就异常）。
  * 统一在 onStateChange 一处处理，各模式切换无需各自清动作。
+ *
+ * 注意区分状态：玩家上车会经历 ENTER_VEHICLE_DRIVER/PASSENGER（进车动画）→
+ * DRIVER/PASSENGER。此时若调 clearAnimations() 会**取消上车动画，把玩家弹回
+ * 车外**（原版 fixes.inc 也为此在车里对 ClearAnimations 做特殊处理）。故进车/
+ * 车内/下车过渡态只清特殊动作（舞蹈/尿尿等，setSpecialAction 安全），动画由
+ * 客户端上车时自动停止；死亡/观战等不在车里的状态才完整清除。
  */
 export function initActionCleanup(): void {
   PlayerEvent.onStateChange(({ player, newState, next }) => {
-    if (newState !== PlayerStateEnum.ONFOOT && newState !== PlayerStateEnum.SPAWNED) {
-      try {
+    if (player.isNpc()) return next();
+    try {
+      const inVehicleState =
+        newState === PlayerStateEnum.DRIVER ||
+        newState === PlayerStateEnum.PASSENGER ||
+        newState === PlayerStateEnum.ENTER_VEHICLE_DRIVER ||
+        newState === PlayerStateEnum.ENTER_VEHICLE_PASSENGER ||
+        newState === PlayerStateEnum.EXIT_VEHICLE;
+      if (inVehicleState) {
+        // 只清特殊动作，不清动画（clearAnimations 会取消上车/下车动画）
+        player.setSpecialAction(SpecialActionsEnum.NONE);
+        activeActions.delete(player.id);
+      } else if (newState !== PlayerStateEnum.ONFOOT && newState !== PlayerStateEnum.SPAWNED) {
+        // 死亡/观战等：不在车里，完整清除安全
         stopActionSilent(player);
-      } catch {
-        /* 断线瞬时的 native 调用可能已失效，忽略 */
       }
+    } catch {
+      /* 断线瞬时的 native 调用可能已失效，忽略 */
     }
     return next();
   });
