@@ -45,6 +45,7 @@ import { sessionManager } from "@/sessions/manager";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { formatTime } from "@/utils/format";
 import { showPagedDialog } from "@/utils/pagedDialog";
+import { pickOption } from "@/personalize/settings";
 import { showDialog } from "@/utils/dialog";
 import { MIN_Z } from "@/utils/map";
 import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR, COLOR_WHITE } from "@/utils/colors";
@@ -1533,12 +1534,13 @@ export function initRaceSystem(): void {
       if (query) {
         void startRaceFlow(player, query);
       } else {
-        // 无参数：房主在房间内则开始比赛，否则随机创建（全部随机）
+        // 无参数：仅房主可开始（对齐原版——非房主提示等房主，不随机建房，
+        // 否则房间内成员误以为自己在开新赛）
         const pr = playerRaces.get(player.id);
         if (pr && rooms.get(pr.roomId)?.ownerId === player.id) {
           void startRace(player);
         } else {
-          void startRaceFlow(player, "");
+          player.sendClientMessage(COLOR_RACE, "[赛车] 等待房主开始比赛，或 /r l 离开后自己建房");
         }
       }
     } else if (cmd === "j") {
@@ -1687,14 +1689,11 @@ export function respawnToLastCp(player: Player, pr: PlayerRace, room: RaceRoom):
   player.sendClientMessage(COLOR_RACE, "[赛车] 已重生回上一个检查点");
 }
 
-/** 开始比赛流程：按赛道名/ID 创建房间；无赛道名或不存在 → 全部随机 */
+/** 开始比赛流程：按赛道名/ID 创建房间；无赛道名或不存在 → 打开赛道列表（含排序） */
 async function startRaceFlow(player: Player, query: string): Promise<void> {
   if (!query) {
-    // 无赛道名 → 全部随机创建（用户选择"随机一张"）
-    const room = await createRaceRoom(player, null);
-    if (room) {
-      player.sendClientMessage(COLOR_RACE, "再输入 /r s 开始比赛，或用面板「更换赛道」换一张");
-    }
+    // 无赛道名 → 打开赛道列表（对齐面板「赛道列表」，含排序与「全部随机」首行）
+    void openRaceListDialog(player);
     return;
   }
   // 先按名字查（同名字符串，参数安全）；查不到且 query 形如 uuid 才按 id 查——
@@ -1710,12 +1709,10 @@ async function startRaceFlow(player: Player, query: string): Promise<void> {
         })
       : null);
   if (!race) {
-    // 指定赛道不存在 → 全部随机创建（对齐"名字不存在 = 全部随机"语义）
-    player.sendClientMessage(COLOR_RACE, `未找到赛道「${query}」，已随机创建比赛房间`);
-    const room = await createRaceRoom(player, null);
-    if (room) {
-      player.sendClientMessage(COLOR_RACE, "再输入 /r s 开始比赛，或用面板「更换赛道」换一张");
-    }
+    // 指定赛道不存在 → 打开赛道列表让玩家选（原版是弹列表；随机建房是
+    // gm-lite 旧行为，与面板/命令对齐后改为列表——列表首行即有「全部随机」）
+    player.sendClientMessage(COLOR_RACE, `未找到赛道「${query}」，请从列表选择`);
+    void openRaceListDialog(player);
     return;
   }
   const room = await createRaceRoom(player, race.id);
@@ -1728,8 +1725,16 @@ async function startRaceFlow(player: Player, query: string): Promise<void> {
 /** 全部随机的占位赛道 id（列表首行：随机抽一张创建） */
 const RANDOM_RACE_ID = "__RANDOM__";
 
-/** 查询启用赛道（分页选择共用：列表创建 + 换赛道） */
-async function fetchEnabledRaces(): Promise<
+/** 查询启用赛道（分页选择共用：列表创建 + 换赛道 + 命令列表排序）。
+ * orderBy 支持创建时间/名称/总长度 × 升降序（对齐面板「赛道列表」的排序） */
+async function fetchEnabledRaces(
+  orderBy:
+    | { createdAt: "asc" | "desc" }
+    | { name: "asc" | "desc" }
+    | { totalLength: "asc" | "desc" } = {
+    createdAt: "desc",
+  },
+): Promise<
   {
     id: string;
     name: string;
@@ -1740,17 +1745,34 @@ async function fetchEnabledRaces(): Promise<
 > {
   return prisma.race.findMany({
     where: { isEnabled: true, deletedAt: null },
-    orderBy: { createdAt: "desc" },
+    orderBy,
     include: { sysUser: true },
   });
 }
 
 /**
  * /r 无参数 → 赛道列表对话框（对齐原版 Race_ShowGameMainSel 分页列表）。
+ * 排序与面板「赛道列表」对齐：先选排序字段（创建时间/名称/总长度）→ 方向。
  * 首行「全部随机」→ 随机抽一张赛道创建房间；其余选中直接创建。
  */
 async function openRaceListDialog(player: Player): Promise<void> {
-  const races = await fetchEnabledRaces();
+  // 排序选择（对齐面板 raceListFlow：字段 + 方向，取消则返回不弹列表）
+  const fieldIndex = await pickOption(player, "赛道列表 · 排序", [
+    "按创建时间",
+    "按名称",
+    "按总长度",
+  ]);
+  if (fieldIndex < 0) return;
+  const dirIndex = await pickOption(player, "排序方向", ["升序", "降序"]);
+  if (dirIndex < 0) return;
+  const dir = dirIndex === 0 ? ("asc" as const) : ("desc" as const);
+  const orderBy =
+    fieldIndex === 0
+      ? ({ createdAt: dir } as const)
+      : fieldIndex === 1
+        ? ({ name: dir } as const)
+        : ({ totalLength: dir } as const);
+  const races = await fetchEnabledRaces(orderBy);
   if (races.length === 0) {
     player.sendClientMessage(COLOR_ERROR, "暂无可用赛道");
     return;
