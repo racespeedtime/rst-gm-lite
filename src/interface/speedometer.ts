@@ -17,12 +17,14 @@ const UNREACHED_HIGH = 0x9d4d4dff; // 未到达红区（半透明红）
 /**
  * 创建 2d 速度表：22 个 TextDraw 仪表盘
  * td[0] = "KM/H" 标签, td[1] = 速度数字, td[2..21] = 20 格刻度
+ * 整体 y 比原版上移 40px：避免底部调试信息栏（y=440 起，向上延伸约 3-5 行）
+ * 叠在刻度（原 y≈430）上方
  */
 export function createSpeed2d(player: Player): TextDraw[] {
   const tds: TextDraw[] = [];
 
   tds.push(
-    new TextDraw({ player, x: 517.0, y: 422.5, text: "KM/H" })
+    new TextDraw({ player, x: 517.0, y: 382.5, text: "KM/H" })
       .create()
       .setBackgroundColors(255)
       .setFont(1)
@@ -35,7 +37,7 @@ export function createSpeed2d(player: Player): TextDraw[] {
   );
 
   tds.push(
-    new TextDraw({ player, x: 516.0, y: 411.5, text: "-1" })
+    new TextDraw({ player, x: 516.0, y: 371.5, text: "-1" })
       .create()
       .setAlignment(3)
       .setBackgroundColors(255)
@@ -51,7 +53,7 @@ export function createSpeed2d(player: Player): TextDraw[] {
   // 20 格刻度（index 2..21）
   for (let i = 0; i < 20; i++) {
     tds.push(
-      new TextDraw({ player, x: i * 4 + 455.0, y: 430.5, text: "/" })
+      new TextDraw({ player, x: i * 4 + 455.0, y: 390.5, text: "/" })
         .create()
         .setBackgroundColors(255)
         .setFont(1)
