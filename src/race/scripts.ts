@@ -178,14 +178,14 @@ export function execCpScript(
         minute < 0 ||
         minute > 59
       ) {
-        return err("time 需要 时(0-24) 分(0-59)"), true;
+        return (err("time 需要 时(0-24) 分(0-59)"), true);
       }
       player.setTime(hour, minute);
       break;
     }
     case "weather": {
       const w = Number(args[0]);
-      if (!Number.isInteger(w) || w < 0 || w > 255) return err("weather ID 需 0-255"), true;
+      if (!Number.isInteger(w) || w < 0 || w > 255) return (err("weather ID 需 0-255"), true);
       player.setWeather(w);
       break;
     }
@@ -228,6 +228,7 @@ export function execCpScript(
       v.create();
       v.setVirtualWorld(player.getVirtualWorld());
       v.linkToInterior(player.getInterior());
+      v.addComponent(1010); // 氮气（对齐比赛默认车/编辑器车，cveh 换出的新车同样带）
       v.putPlayerIn(player, 0);
       // 恢复原速（司机/乘客一律恢复，对齐原版 SetVehicleVelocity 无条件执行）
       if (oldVelo) {

@@ -206,9 +206,11 @@ export function initObserve(): void {
   });
 
   PlayerEvent.onStateChange(({ player: target, next }) => {
-    // 遍历所有观察者重新跟踪
+    // 遍历所有观察者重新跟踪。仅匹配 kind="player" 的观察者——targetId 可能是
+    // 车辆 id（kind="vehicle"，车辆目标的重跟踪由 onStreamOut 处理），玩家 id 与
+    // 车辆 id 是独立命名空间，数值上可能撞号，不做 kind 区分会误重跟踪
     for (const [pid, st] of observeStates) {
-      if (st.targetId === target.id) {
+      if (st.kind === "player" && st.targetId === target.id) {
         const observer = Player.getInstance(pid);
         if (observer && observer.isConnected()) retracePlayer(observer, st);
       }
@@ -218,7 +220,7 @@ export function initObserve(): void {
 
   PlayerEvent.onSpawn(({ player: target, next }) => {
     for (const [pid, st] of observeStates) {
-      if (st.targetId === target.id) {
+      if (st.kind === "player" && st.targetId === target.id) {
         const observer = Player.getInstance(pid);
         if (observer && observer.isConnected()) retracePlayer(observer, st);
       }
@@ -229,7 +231,7 @@ export function initObserve(): void {
   // 目标进室内/换世界：观察者跟着进（主动追踪内部空间）
   PlayerEvent.onInteriorChange(({ player: target, next }) => {
     for (const [pid, st] of observeStates) {
-      if (st.targetId === target.id) {
+      if (st.kind === "player" && st.targetId === target.id) {
         const observer = Player.getInstance(pid);
         if (observer && observer.isConnected()) {
           observer.setInterior(target.getInterior());
@@ -241,7 +243,7 @@ export function initObserve(): void {
 
   PlayerEvent.onDisconnect(({ player: target, next }) => {
     for (const [pid, st] of observeStates) {
-      if (st.targetId === target.id) {
+      if (st.kind === "player" && st.targetId === target.id) {
         const observer = Player.getInstance(pid);
         if (observer && observer.isConnected()) retracePlayer(observer, st);
       }

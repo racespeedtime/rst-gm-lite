@@ -150,14 +150,12 @@ export function initChat(): void {
       return next();
     }
     const safeMsg = sanitizeChatText(msg);
-    target.sendClientMessage(
-      PM_COLOR,
-      `[pm] ${player.getName().name}(${player.id}) 对你说: ${safeMsg}`,
-    );
-    player.sendClientMessage(
-      PM_COLOR,
-      `[pm] 你对 ${target.getName().name}(${target.id}) 说: ${safeMsg}`,
-    );
+    // 昵称同样 sanitize：supportAllNickname 允许昵称含 {RRGGBB} 颜色码，
+    // 不处理会被注入伪造 PM 颜色/格式（公共聊天 onText 已对名字 sanitize，这里对齐）
+    const senderName = sanitizeChatText(player.getName().name);
+    const targetName = sanitizeChatText(target.getName().name);
+    target.sendClientMessage(PM_COLOR, `[pm] ${senderName}(${player.id}) 对你说: ${safeMsg}`);
+    player.sendClientMessage(PM_COLOR, `[pm] 你对 ${targetName}(${target.id}) 说: ${safeMsg}`);
     new GameText("Private message Sent", 1000, 3).forPlayer(player);
     new GameText("Private message Received", 1000, 3).forPlayer(target);
     target.playSound(1057);

@@ -339,14 +339,21 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
   const worldId = allocReplayWorld();
 
   // 影子（ghost）创建：复用回放的 NPC 池子边界（槽位检查 + isValid 校验）
+  // 实体句柄提升到 try 外：任何失败路径都要回收世界 id + 销毁已建实体
+  //（否则幽灵 NPC/车/标签留在世界、世界 id 只增不回收）
   let ghost: ChallengeGhost;
+  let npc: Npc | null = null;
+  let vehicle: Vehicle | null = null;
+  let label: Dynamic3DTextLabel | null = null;
   try {
-    const npc = allocReplayNpc(`CHA_${Date.now()}`.slice(0, 24));
-    if (!npc) {
+    const created = allocReplayNpc(`CHA_${Date.now()}`.slice(0, 24));
+    if (!created) {
+      freeReplayWorld(worldId); // 槽位不足即失败：回收已分配的世界 id
       player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足，影子挑战创建失败");
       return false;
     }
-    const vehicle = new Vehicle({
+    npc = created;
+    const veh = new Vehicle({
       modelId: data.header.vehicleModelId,
       // 影子起点 = 录制起始位置（与回放/玩家起点一致）
       x: data.header.startX,
@@ -356,15 +363,16 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
       color: [-1, -1],
       respawnDelay: 0,
     });
-    vehicle.create();
-    vehicle.setVirtualWorld(worldId);
-    vehicle.addComponent(1010); // 氮气（影子车与录制时玩家爱车一致）
+    veh.create();
+    veh.setVirtualWorld(worldId);
+    veh.addComponent(1010); // 氮气（影子车与录制时玩家爱车一致）
     // 锁门防玩家开走影子车（影子只可看不可开；NPC 已在车内不受影响）
-    vehicle.setParamsEx(true, false, false, true, false, false, false);
+    veh.setParamsEx(true, false, false, true, false, false, false);
     npc.setVirtualWorld(worldId);
-    npc.putInVehicle(vehicle, 0);
+    npc.putInVehicle(veh, 0);
     npc.setInvulnerable(true);
-    const label = new Dynamic3DTextLabel({
+    const shadowPlayer = npc.getPlayer();
+    const lab = new Dynamic3DTextLabel({
       text: `{FFD700}影子\n{FFFFFF}挑战 · ${replay.recorderName}`,
       color: "#ffffff",
       x: 0,
@@ -372,19 +380,20 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
       z: 0.3,
       drawDistance: 40,
       testLOS: false,
-      attachedPlayer: npc.getPlayer().id,
+      attachedPlayer: shadowPlayer.id,
       worldId,
       charset: DEFAULT_CHARSET,
     });
-    const shadowPlayer = npc.getPlayer();
-    label.create();
+    lab.create();
     // 登记影子 NPC：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
     // 防的是 NPC 自身/残留 sync 与模拟广播冲突）
     registerReplayNpcForReplay(shadowPlayer.id);
+    vehicle = veh;
+    label = lab;
     ghost = {
       npc,
-      vehicle,
-      label,
+      vehicle: veh,
+      label: lab,
       playTime: 0,
       npcPlayerId: shadowPlayer.id,
       lastEmulateAt: 0,
@@ -393,6 +402,18 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     };
   } catch (e) {
     logger.error(`[replay] 创建挑战影子失败`, e);
+    // 清理已创建的实体（NPC/车/标签）+ 回收世界 id，防幽灵实体与 id 泄漏
+    try {
+      if (npc) {
+        unregisterReplayNpcForReplay(npc.getPlayer().id);
+        npc.destroy();
+      }
+      if (vehicle) vehicle.destroy();
+      if (label) label.destroy();
+    } catch {
+      /* 已销毁/失效 */
+    }
+    freeReplayWorld(worldId);
     player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足或创建失败");
     return false;
   }

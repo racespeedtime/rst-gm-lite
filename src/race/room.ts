@@ -18,7 +18,13 @@ import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel }
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import { raceRecordingStart, raceRecordingStop, stopReplayForPlayer } from "@/replay";
 import { noteCpProgress } from "@/replay/recorder";
-import { startObservePlayer, stopObserve, isObserving, cleanupObserve, getObserverIdsOf } from "@/core/observe";
+import {
+  startObservePlayer,
+  stopObserve,
+  isObserving,
+  cleanupObserve,
+  getObserverIdsOf,
+} from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
 import { sessionManager } from "@/sessions/manager";
@@ -153,7 +159,7 @@ export function getRaceRoom(roomId: number): RaceRoom | undefined {
  * 匹配的是主命令（strictMainCmd），如 "/r l" 的主命令是 "r"。
  * 其余命令一律拒绝。
  */
-const RACE_SAFE_COMMANDS = new Set(["r", "race", "pm", "kill", "tv", "ob", "spec"]);
+const RACE_SAFE_COMMANDS = new Set(["r", "race", "pm", "kill", "tv", "ob", "spec", "q", "quit"]);
 
 export function isRaceCommandAllowed(command: string): boolean {
   return RACE_SAFE_COMMANDS.has(command);
@@ -296,17 +302,14 @@ function cleanupExpiredReconnects(room: RaceRoom): void {
  * 随机抽一张启用赛道（有 CP 的）。无可用返回 null。
  * 用 count + skip 均匀随机（findFirst orderBy 稳定 + 随机偏移）。
  */
-async function pickRandomRace(): Promise<
-  | {
-      id: string;
-      name: string;
-      laps: number | null;
-      isEnabled: boolean;
-      deletedAt: Date | null;
-      sysUser: { username: string } | null;
-    }
-  | null
-> {
+async function pickRandomRace(): Promise<{
+  id: string;
+  name: string;
+  laps: number | null;
+  isEnabled: boolean;
+  deletedAt: Date | null;
+  sysUser: { username: string } | null;
+} | null> {
   const count = await prisma.race.count({
     where: { isEnabled: true, deletedAt: null, cps: { some: {} } },
   });
@@ -321,9 +324,18 @@ async function pickRandomRace(): Promise<
 }
 
 /** 创建比赛房间并加入。raceId 为空 → 随机抽一张赛道（全部随机）。 */
-export async function createRaceRoom(player: Player, raceId: string | null): Promise<RaceRoom | null> {
+export async function createRaceRoom(
+  player: Player,
+  raceId: string | null,
+): Promise<RaceRoom | null> {
   if (isInRace(player.id)) {
     player.sendClientMessage(COLOR_ERROR, "你已在比赛中");
+    return null;
+  }
+  // 编辑模式（/redit 赛道编辑器）中禁止进比赛：编辑器脚本车/CP 状态与比赛
+  // 房间冲突，否则会卡在第一 CP 无法推进、编辑器车残留在世界
+  if (isEditing(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "赛道编辑中不能创建比赛，先 /redit 退出编辑");
     return null;
   }
   // 随机模式：抽到 <2 CP 的无效赛道最多重试 3 次（指定模式只查一次，失败即报错）
@@ -542,6 +554,11 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   // 进比赛：停止玩家正在播放的回放 + 影子挑战（比赛中 /rp 被白名单拦截无法
   // 主动停，挑战世界与比赛世界隔离——不清理会留下挂机 ghost）
   stopReplayForPlayer(player.id);
+  // 观战中进比赛：退出观战（spectating 状态下 putPlayerIn/切世界均无效，
+  // 否则整场比赛只能旁观无法开车，录制也采不到有效帧）
+  if (isObserving(player.id)) {
+    stopObserve(player);
+  }
   room.members.set(player.id, player);
   playerRaces.set(player.id, {
     roomId: room.id,
@@ -592,7 +609,10 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
     // （销毁旧车 + 懒创建，玩家始终以标准车参赛）
     if (owned.getModel() !== defaultModel) {
       await spawnVehicle(player, defaultModel, true);
-      player.sendClientMessage(COLOR_RACE, `[赛车] 本赛道标准车型为 ${defaultModel}，已切换为对应爱车`);
+      player.sendClientMessage(
+        COLOR_RACE,
+        `[赛车] 本赛道标准车型为 ${defaultModel}，已切换为对应爱车`,
+      );
     }
     const veh = getOwnedVehicle(player.id);
     if (veh && veh.isValid()) {
@@ -610,7 +630,10 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
       player.setFacingAngle(first.angle); // 车内旋转车辆后玩家朝向同步（防视角没跟上）
     } else {
       await spawnVehicle(player, defaultModel, true);
-      player.sendClientMessage(COLOR_RACE, `[赛车] 本赛道标准车型为 ${defaultModel}，已刷为对应爱车`);
+      player.sendClientMessage(
+        COLOR_RACE,
+        `[赛车] 本赛道标准车型为 ${defaultModel}，已刷为对应爱车`,
+      );
       const v = getOwnedVehicle(player.id);
       if (v && v.isValid()) {
         v.setPos(first.x, first.y, first.z);
@@ -714,8 +737,6 @@ function beginRace(room: RaceRoom): void {
       mp.finished = false;
       // 比赛中强制无碰撞（防他人车辆穿模阻挡），结束/离开时按个人设置恢复
       applyRaceNoCollision(m, true);
-      // 比赛自动录制：开赛即记录整个房间（回放/后续观战/影子挑战用）
-      raceRecordingStart(m.id, { raceId: room.raceId, raceName: room.raceName });
       // 切到比赛独立世界（车辆同步）
       m.setVirtualWorld(room.worldId);
       if (m.isInAnyVehicle()) {
@@ -729,6 +750,12 @@ function beginRace(room: RaceRoom): void {
         // 爱车），在玩家当前位置创建并放入，不移动玩家
         void spawnVehicle(m, getDefaultRaceModel(room.cps), true);
       }
+      // 比赛自动录制：开赛即记录整个房间（回放/后续观战/影子挑战用）。
+      // 必须在 setVirtualWorld 之后调用——startRecording 以调用时的世界为
+      // startWorld，若在切世界前开录，开赛后会被"已离开录制世界"边界检查
+      // 立即自动停止（首次 join 的玩家 startWorld 是原世界，上一场录制全丢，
+      // 影子挑战也因此永远没有该赛道的比赛回放）。
+      raceRecordingStart(m.id, { raceId: room.raceId, raceName: room.raceName });
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);
       // 比赛信息 UI（C P/TIME/BEST/RANK）已在加入房间时创建（joinRoom），
@@ -1111,7 +1138,10 @@ function endRoom(room: RaceRoom): void {
     clearRaceMapIcons(m); // 比赛结束：清每个成员的小地图图标
     // 回放：比赛结束停止录制并落盘（名次/完成态快照）
     const r = ranked.find((x) => x.playerId === m.id);
-    raceRecordingStop(m.id, { rank: r ? ranked.indexOf(r) + 1 : null, finished: r?.finished ?? false });
+    raceRecordingStop(m.id, {
+      rank: r ? ranked.indexOf(r) + 1 : null,
+      finished: r?.finished ?? false,
+    });
     // 脚本车辆（cveh）在比赛结束时统一清理，防残留比赛世界成为幽灵车
     cleanupScriptVehicle(m.id);
     const mp = playerRaces.get(m.id);
@@ -1216,6 +1246,10 @@ function tickRooms(): void {
       broadcastToRoom(room, "[赛车] 比赛房间因长时间未开始已解散");
       for (const m of room.members.values()) {
         playerRaces.delete(m.id);
+        // 解散时成员仍在各自原世界：清掉起点 CP 箭头与小地图图标，
+        // 否则留在公共/战局世界里永久残留红色箭头 + 地图图标
+        RaceCheckpoint.disable(m);
+        clearRaceMapIcons(m);
         cleanupScriptVehicle(m.id); // 等待期玩家可能在起点的比赛车上，解散一并清
       }
       destroyRaceTds(room);
@@ -1467,7 +1501,13 @@ const RANDOM_RACE_ID = "__RANDOM__";
 
 /** 查询启用赛道（分页选择共用：列表创建 + 换赛道） */
 async function fetchEnabledRaces(): Promise<
-  { id: string; name: string; totalLength: unknown; laps: number | null; sysUser: { username: string } | null }[]
+  {
+    id: string;
+    name: string;
+    totalLength: unknown;
+    laps: number | null;
+    sysUser: { username: string } | null;
+  }[]
 > {
   return prisma.race.findMany({
     where: { isEnabled: true, deletedAt: null },
@@ -1548,7 +1588,10 @@ async function showTrackPicker(
 }
 
 /** 面板「更换赛道」：随机换一张 / 从列表选择（房主 + WAITING） */
-export async function openChangeTrackMenu(player: Player, back?: () => void | Promise<void>): Promise<void> {
+export async function openChangeTrackMenu(
+  player: Player,
+  back?: () => void | Promise<void>,
+): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({

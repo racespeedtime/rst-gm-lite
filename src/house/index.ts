@@ -1,4 +1,13 @@
-import { Dialog, DialogStylesEnum, Dynamic3DTextLabel, DynamicArea, DynamicObject, Player, PlayerEvent, Vehicle } from "@infernus/core";
+import {
+  Dialog,
+  DialogStylesEnum,
+  Dynamic3DTextLabel,
+  DynamicArea,
+  DynamicObject,
+  Player,
+  PlayerEvent,
+  Vehicle,
+} from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
@@ -98,10 +107,22 @@ interface HouseLoadStats {
 export async function loadAllHouseObjects(): Promise<void> {
   // 防重复注册：若本函数被再次调用（重载），先销毁上一轮的碰撞注册
   clearObjectCollisions();
-  const stats: HouseLoadStats = { obj: 0, material: 0, materialtext: 0, removeobj: 0, labels: 0, vehicles: 0, areas: 0, skipped: 0, errors: 0 };
+  const stats: HouseLoadStats = {
+    obj: 0,
+    material: 0,
+    materialtext: 0,
+    removeobj: 0,
+    labels: 0,
+    vehicles: 0,
+    areas: 0,
+    skipped: 0,
+    errors: 0,
+  };
   try {
     const models = await prisma.houseModel.findMany({
-      where: { house: { isEnabled: true } },
+      // 只加载未软删且启用的房屋：软删房（deletedAt != null）若 isEnabled 仍为
+      // true 会残留模型/标签/车辆实体
+      where: { house: { isEnabled: true, deletedAt: null } },
       orderBy: [{ houseId: "asc" }, { index: "asc" }],
       include: { house: true },
     });
@@ -114,7 +135,8 @@ export async function loadAllHouseObjects(): Promise<void> {
     // 材质绑定目标：houseId -> (objIndex -> DynamicObject)，供 material/materialtext 查找
     const objByHouse = new Map<string, Map<number, DynamicObject>>();
     const skippedTypes = new Set<string>();
-    const houseName = (id: string | null, fallback: string): string => (id ? fallback : "(未关联房屋)");
+    const houseName = (id: string | null, fallback: string): string =>
+      id ? fallback : "(未关联房屋)";
 
     for (const m of models) {
       const hname = houseName(m.houseId, m.house?.name ?? "?");
@@ -147,7 +169,15 @@ export async function loadAllHouseObjects(): Promise<void> {
             obj.setNoCameraCollision();
             objs.push(obj);
             // 注册进 colandreas 碰撞网格：传送/出生定位可命中它（落在屋顶而非卡进屋里）
-            registerObjectCollision(args.modelId, args.x, args.y, args.z, args.rx, args.ry, args.rz);
+            registerObjectCollision(
+              args.modelId,
+              args.x,
+              args.y,
+              args.z,
+              args.rx,
+              args.ry,
+              args.rz,
+            );
             // 登记到该房屋的 obj 索引表（材质绑定目标）
             if (m.houseId) {
               let map = objByHouse.get(m.houseId);
@@ -193,7 +223,9 @@ export async function loadAllHouseObjects(): Promise<void> {
             const objIndex = num(parts[0]);
             const target = m.houseId ? objByHouse.get(m.houseId)?.get(objIndex ?? -1) : undefined;
             if (objIndex == null || !target) {
-              logger.warn(`[house] materialtext 未找到目标 obj house=${hname} objIndex=${parts[0]}`);
+              logger.warn(
+                `[house] materialtext 未找到目标 obj house=${hname} objIndex=${parts[0]}`,
+              );
               stats.errors++;
               break;
             }
@@ -234,7 +266,13 @@ export async function loadAllHouseObjects(): Promise<void> {
               stats.errors++;
               break;
             }
-            buildings.push({ modelId: parts[0], x: parts[1], y: parts[2], z: parts[3], radius: parts[4] });
+            buildings.push({
+              modelId: parts[0],
+              x: parts[1],
+              y: parts[2],
+              z: parts[3],
+              radius: parts[4],
+            });
             stats.removeobj++;
             break;
           }
@@ -299,7 +337,12 @@ export async function loadAllHouseObjects(): Promise<void> {
               stats.errors++;
               break;
             }
-            const area = new DynamicArea({ type: "circle", x: parts[0], y: parts[1], size: parts[2] });
+            const area = new DynamicArea({
+              type: "circle",
+              x: parts[0],
+              y: parts[1],
+              size: parts[2],
+            });
             area.create();
             areas.push(area);
             stats.areas++;

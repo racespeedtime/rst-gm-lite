@@ -265,7 +265,13 @@ export async function cleanupOrphanPresets(userId: string): Promise<void> {
     if (vehiclePresets.length > 0) {
       const usedIds = (
         await prisma.userVehicle.findMany({
-          where: { userId, defaultPresetId: { in: vehiclePresets.map((p) => p.id) } },
+          // 仅统计仍有效的车辆引用：已软删车辆（deletedAt != null）不再占用预设，
+          // 若其引用被计入会把空预设误判为"被使用"而漏删（残留）
+          where: {
+            userId,
+            deletedAt: null,
+            defaultPresetId: { in: vehiclePresets.map((p) => p.id) },
+          },
         })
       ).map((v) => v.defaultPresetId);
       const orphan = vehiclePresets.filter((p) => !usedIds.includes(p.id));
@@ -579,15 +585,15 @@ async function startEditPlayerAttire(
   const slotMap = playerSlotMap.get(player.id);
   const slot = slotMap ? [...slotMap.entries()].find(([, id]) => id === itemId)?.[0] : undefined;
   if (slot == null) {
-    player.sendClientMessage(
-      COLOR_ERROR,
-      "该装扮未穿戴在身上（先应用此预设），无法实时编辑",
-    );
+    player.sendClientMessage(COLOR_ERROR, "该装扮未穿戴在身上（先应用此预设），无法实时编辑");
     return false;
   }
   // 登记编辑态：onPlayerEditAttached 回调按 playerId 取到 presetId/itemId 落库
   playerEditing.set(player.id, { presetId, itemId });
-  player.sendClientMessage(COLOR_WHITE, "[装扮] 拖拽调整位置，按保存键确认（Enter/点击保存）保存，Esc 取消");
+  player.sendClientMessage(
+    COLOR_WHITE,
+    "[装扮] 拖拽调整位置，按保存键确认（Enter/点击保存）保存，Esc 取消",
+  );
   player.editAttachedObject(slot);
   return true;
 }
@@ -621,7 +627,10 @@ async function adjustPlayerPresetItem(
     ? res.inputText.trim().split(/\s+/).map(Number)
     : [item.x, item.y, item.z, item.rX, item.rY, item.rZ, item.sX, item.sY, item.sZ].map(Number);
   if (nums.length !== 9 || nums.some((n) => !Number.isFinite(n))) {
-    player.sendClientMessage(COLOR_ERROR, "需要 9 个数字（X Y Z 偏移 / 旋转 / 缩放），留空保持当前");
+    player.sendClientMessage(
+      COLOR_ERROR,
+      "需要 9 个数字（X Y Z 偏移 / 旋转 / 缩放），留空保持当前",
+    );
     return back?.();
   }
   await prisma.playerPresetItem.update({
@@ -661,7 +670,9 @@ async function changePlayerPresetBone(
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: `更换「${name}」骨骼`,
-      info: bones.map((o) => `${o}${Number(o.split(" ")[0]) === item.boneId ? "（当前）" : ""}`).join("\n"),
+      info: bones
+        .map((o) => `${o}${Number(o.split(" ")[0]) === item.boneId ? "（当前）" : ""}`)
+        .join("\n"),
       button1: "确定",
       button2: "取消",
     }),
@@ -705,7 +716,12 @@ async function addPlayerPresetItem(
     data: attires,
     // 多列：名称 | 模型 | 默认骨骼 | 类型
     headers: ["名称", "模型", "默认骨骼", "类型"],
-    format: (a) => [a.name, String(a.modelId), String(a.boneId), a.type === "COMMON" ? "通用" : "人物"],
+    format: (a) => [
+      a.name,
+      String(a.modelId),
+      String(a.boneId),
+      a.type === "COMMON" ? "通用" : "人物",
+    ],
     button1: "确定",
     button2: "取消",
   });
@@ -980,7 +996,10 @@ async function vehiclePresetDetail(
       return back?.();
     }
     if (owned.getModel() !== modelId) {
-      player.sendClientMessage(COLOR_ERROR, `该预设属于模型 ${modelId}，请先刷对应模型的爱车（/c ${modelId}）`);
+      player.sendClientMessage(
+        COLOR_ERROR,
+        `该预设属于模型 ${modelId}，请先刷对应模型的爱车（/c ${modelId}）`,
+      );
       return back?.();
     }
     await applyVehiclePreset(owned, presetId, player.id);
@@ -1043,10 +1062,7 @@ async function startEditVehicleAttire(
   const objMap = vehicleObjMap.get(player.id);
   const obj = objMap?.get(itemId);
   if (!obj || !obj.isValid()) {
-    player.sendClientMessage(
-      COLOR_ERROR,
-      "该挂件未挂载（先应用此预设或坐进车内），无法实时编辑",
-    );
+    player.sendClientMessage(COLOR_ERROR, "该挂件未挂载（先应用此预设或坐进车内），无法实时编辑");
     return false;
   }
   vehicleEditing.set(player.id, { presetId, itemId });
@@ -1065,9 +1081,7 @@ async function adjustVehiclePresetItem(
 ): Promise<void> {
   const item = await prisma.vehiclePresetItem.findUnique({ where: { id: itemId } });
   if (!item) return;
-  const cur = [item.x, item.y, item.z, item.rX, item.rY, item.rZ]
-    .map((v) => Number(v))
-    .join(" ");
+  const cur = [item.x, item.y, item.z, item.rX, item.rY, item.rZ].map((v) => Number(v)).join(" ");
   const res = await showDialog(
     player,
     new Dialog({
@@ -1106,8 +1120,15 @@ async function addVehiclePresetItem(
   modelId: number,
   back?: MenuBack,
 ): Promise<void> {
-  const count = await prisma.vehiclePresetItem.count({ where: { presetId } });
-  if (count >= MAX_VEHICLE_ATTIRE) {
+  // 新 slotId = 当前最大槽位 + 1：不能按 count 取——删除中间槽后（如删掉 slot 0）
+  // count < max+1，新建会与现存项撞 @@unique([presetId, slotId]) 唯一键
+  const maxSlot = await prisma.vehiclePresetItem.findFirst({
+    where: { presetId },
+    orderBy: { slotId: "desc" },
+    select: { slotId: true },
+  });
+  const nextSlot = (maxSlot?.slotId ?? -1) + 1;
+  if (nextSlot >= MAX_VEHICLE_ATTIRE) {
     player.sendClientMessage(COLOR_ERROR, `车辆预设最多 ${MAX_VEHICLE_ATTIRE} 个挂件`);
     return back?.();
   }
@@ -1161,7 +1182,7 @@ async function addVehiclePresetItem(
       data: {
         presetId,
         attireId: attire.id,
-        slotId: count,
+        slotId: nextSlot,
         x: nums[0],
         y: nums[1],
         z: nums[2],
@@ -1272,7 +1293,20 @@ function cleanupAttireEditing(playerId: number): void {
 export function initAttireEditor(): void {
   // 人物挂件编辑回调
   ObjectMpEvent.onPlayerEditAttached(
-    ({ player, response, fOffsetX, fOffsetY, fOffsetZ, fRotX, fRotY, fRotZ, fScaleX, fScaleY, fScaleZ, next }) => {
+    ({
+      player,
+      response,
+      fOffsetX,
+      fOffsetY,
+      fOffsetZ,
+      fRotX,
+      fRotY,
+      fRotZ,
+      fScaleX,
+      fScaleY,
+      fScaleZ,
+      next,
+    }) => {
       const st = playerEditing.get(player.id);
       if (!st) return next();
       // 拖拽期间会持续发 UPDATE 预览（不断改位置）；只有保存(FINAL)/取消(CANCEL)
@@ -1320,7 +1354,20 @@ export function initAttireEditor(): void {
 
   // 车辆挂件编辑回调（onPlayerEdit 只报全局对象编辑：obj.edit 的响应）
   ObjectMpEvent.onPlayerEdit(
-    ({ player, isGlobal, isPlayerObject, objectMp, response, fX, fY, fZ, fRotX, fRotY, fRotZ, next }) => {
+    ({
+      player,
+      isGlobal,
+      isPlayerObject,
+      objectMp,
+      response,
+      fX,
+      fY,
+      fZ,
+      fRotX,
+      fRotY,
+      fRotZ,
+      next,
+    }) => {
       const st = vehicleEditing.get(player.id);
       // 仅处理全局对象（车辆挂件是 DynamicObject），且编辑对象确实是我们登记的那个
       if (!st || !isGlobal || isPlayerObject) return next();

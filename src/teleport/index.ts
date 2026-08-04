@@ -393,6 +393,9 @@ export function updateTpTimeouts(): void {
         if (target) {
           target.sendClientMessage(COLOR_WHITE, "[TP] 传送请求已超时");
         }
+        // 双向清理：对方侧可能残留配对条目（tpFromId[tp] = pid）——只清 pid
+        // 会让对方之后 /tpa 被"你已有未处理的传送请求"卡住（initTp 只清自身）
+        initTp(targetId);
       }
       initTp(pid);
     }
