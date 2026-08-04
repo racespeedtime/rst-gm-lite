@@ -151,11 +151,13 @@ function renderGhost(ch: ChallengeSession): void {
         trainSpeed: s.trainSpeed,
       });
       bs.emulateIncomingPacket(ch.ghost.npcPlayerId);
-      // 发给能看到影子 NPC 车辆 stream 的玩家（独立挑战世界只有挑战者）
-      // ——sendPacketToPlayerStream(players, player) 的第二参是 stream 目标
-      const shadow = Player.getInstance(ch.ghost.npcPlayerId);
-      if (shadow) {
-        bs.sendPacketToPlayerStream(Player.getInstances(), shadow);
+      // 发给能看到影子车的玩家（独立挑战世界只有挑战者；车辆 stream 由
+      // 服务器维护，NPC 无 stream 不能用 sendPacketToPlayerStream——见 playback）
+      for (const p of Player.getInstances()) {
+        if (p.isNpc() || !p.isConnected()) continue;
+        if (ch.ghost.vehicle.isStreamedIn(p)) {
+          bs.sendPacket(p.id);
+        }
       }
     } finally {
       bs.delete();

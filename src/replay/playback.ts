@@ -407,12 +407,19 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
         trailerId: s.trailerId,
         trainSpeed: s.trainSpeed,
       });
-      // emulate 进服务器（按真实司机处理车辆状态），再显式 send 发给所有
-      // 玩家——玩家客户端本地物理驱动（车速表/氮气真实）。排除 NPC 自己
-      const npcPlayer = Player.getInstance(ghost.npcPlayerId);
+      // emulate 进服务器（按真实司机处理车辆状态），再显式把 DriverSync 包
+      // 发给能看到 ghost 车的玩家——客户端本地物理驱动（车速表/氮气真实）。
+      // 注意：不能用 sendPacketToPlayerStream(players, npcPlayer)——NPC 无客户端
+      // 实体，open.mp 的 Player::streamedFor_ 对 NPC 从不置位（源码确认
+      // streamInForPlayer 只在 Actor/Pickup/TextLabel/Vehicle 调用），
+      // isStreamedIn(npc) 恒 false → 一个玩家都收不到。
+      // 用车辆维度：Vehicle.isStreamedIn（服务器按世界+距离维护的真实可见性）
       bs.emulateIncomingPacket(ghost.npcPlayerId);
-      if (npcPlayer) {
-        bs.sendPacketToPlayerStream(Player.getInstances(), npcPlayer);
+      for (const p of Player.getInstances()) {
+        if (p.isNpc() || !p.isConnected()) continue;
+        if (ghost.vehicle.isStreamedIn(p)) {
+          bs.sendPacket(p.id);
+        }
       }
     } finally {
       bs.delete(); // 释放 BitStream 原生句柄
