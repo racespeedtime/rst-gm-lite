@@ -82,8 +82,9 @@ function cycleObserveTarget(observer: Player, forward: boolean): void {
 }
 
 /** 键盘方向键切换检测（getKeys 轮询）：方向键不触发 onKeyStateChange（SA-MP
- *  文档明确），需服务器主动读 leftAndRight（-128 左 / 128 右）。只响应观战者，
- *  按下瞬间（与上次读数变化）触发。 */
+ *  文档明确），需服务器主动读 getKeys().leftRight。只响应观战者，
+ *  按下瞬间（与上次读数变化）触发。leftRight 的位值即
+ *  KeysEnum.KEY_LEFT(-128) / KEY_RIGHT(128)。 */
 const observePrevLeftRight = new Map<number, number>();
 function pollObserveKeys(): void {
   for (const pid of observeStates.keys()) {
@@ -91,9 +92,9 @@ function pollObserveKeys(): void {
     if (!p || !p.isConnected()) continue;
     const lr = p.getKeys().leftRight;
     const prev = observePrevLeftRight.get(pid) ?? 0;
-    if (lr === -128 && prev !== -128) {
+    if (lr === KeysEnum.KEY_LEFT && prev !== KeysEnum.KEY_LEFT) {
       cycleObserveTarget(p, false); // ← 上一个
-    } else if (lr === 128 && prev !== 128) {
+    } else if (lr === KeysEnum.KEY_RIGHT && prev !== KeysEnum.KEY_RIGHT) {
       cycleObserveTarget(p, true); // → 下一个
     }
     observePrevLeftRight.set(pid, lr);
