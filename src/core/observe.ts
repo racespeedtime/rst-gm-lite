@@ -278,18 +278,34 @@ export function initObserve(): void {
     return next();
   });
 
-  // 键盘 ←/→ 方向键切换（getKeys 轮询 100ms；onKeyStateChange 收不到方向键）
+  // 键盘 ←/→ 方向键切换（getKeys 轮询 100ms；onKeyStateChange 收不到方向键）。
+  // 注意：观战中玩家不发 sync 包，服务器按键缓存可能为空，轮询未必可靠——
+  // 主切换路径是聊天命令（/tv next|prev，观战中命令明确可用）
   setIntervalSafe(() => pollObserveKeys(), 100);
 
-  // /tv <ID> 观战玩家，/tv off 关闭
+  // /tv <ID> 观战玩家 · /tv off 关闭 · /tv next|prev 切换上一个/下一个观战目标。
+  // 聊天命令在观战中不受限制（对齐 /p 面板原理），是切换的可靠入口——
+  // 观战模式下客户端只同步左键（FIRE），Q/E（LOOK_LEFT/RIGHT）与右键（瞄准）
+  // 均为本地镜头键不发送，按键切换依赖客户端同步不可靠。
   PlayerEvent.onCommandText(["tv", "ob", "spec"], ({ player, subcommand, next }) => {
     const arg = subcommand[0];
     if (!arg) {
-      player.sendClientMessage(COLOR_ORANGE, "[TV] 用法: /tv 玩家ID 观战 · /tv off 关闭");
+      player.sendClientMessage(
+        COLOR_ORANGE,
+        "[TV] 用法: /tv 玩家ID 观战 · /tv off 关闭 · /tv next 下一个 · /tv prev 上一个",
+      );
       return next();
     }
     if (arg === "off") {
       stopObserve(player);
+      return next();
+    }
+    if (arg === "next" || arg === "prev") {
+      if (!observeStates.has(player.id)) {
+        player.sendClientMessage(COLOR_ORANGE, "[TV] 你不在观战中，先 /tv 玩家ID 开始观战");
+        return next();
+      }
+      cycleObserveTarget(player, arg === "next");
       return next();
     }
     const target = Player.getInstance(+arg);
