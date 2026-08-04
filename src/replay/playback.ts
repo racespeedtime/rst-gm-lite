@@ -480,12 +480,29 @@ function tickSession(session: ReplaySession): void {
     stopReplaySession(session.ownerId);
     return;
   }
-  if (!session.playing || session.paused) return;
+  if (!session.playing) return;
   // 用真实流逝时间推进播放（固定 16ms/tick 在定时器节流时偏慢 → 慢倍速感）。
   // clamp 250ms：服务器卡顿/断线恢复等单次大延迟不跳变（最多跳 0.25s 播放）
   const now = Date.now();
   const elapsed = Math.min(250, now - session.lastTickAt);
   session.lastTickAt = now;
+  // 暂停：时间不推进，但每 tick 持续发一帧静止帧锚定位置——暂停时若只发
+  // 一次，车停在斜坡/不平地形时客户端本地物理无持续校正会缓慢滑走。
+  // lastTickAt 已在上面刷新：恢复播放时不会把暂停时长算进推进（否则
+  // 播放时间瞬移最多 250ms）
+  if (session.paused) {
+    for (const g of session.ghosts) {
+      if (g.stopped) continue; // 播完停发的车保持静止（不发重复静止帧）
+      const s = sampleAt(session.data, g.playTime);
+      if (!s) continue;
+      try {
+        emulateDriverSync(g.npcPlayerId, g.vehicle, s, true); // atEnd=true → 速度/按键清零
+      } catch {
+        /* 暂停锚定帧失败忽略：恢复播放后正常发包 */
+      }
+    }
+    return;
+  }
   const dt = elapsed * session.speed;
   const lastIdx = session.data.header.frameCount - 1;
   const maxTime = lastIdx * session.data.header.frameIntervalMs;
@@ -755,10 +772,8 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
   switch (action) {
     case "pause": {
       session.paused = true;
-      // 暂停瞬间发一帧"静止帧"（速度/按键清零 + 强制发包，绕过 30Hz 节流）：
-      // 与播完停发同理——否则暂停时最后一帧带非零速度，客户端物理会继续滑行，
-      // 车辆从暂停点滑走（甚至撞地形翻车）。暂停是临时停：不设 stopped，
-      // 恢复播放（play）后 tick 正常继续驱动。
+      // 立即发一帧静止帧（即时反馈，不等下一个 tick）；暂停期间 tickSession
+      // 会持续发静止帧锚定位置（防斜坡/物理干扰滑走），恢复播放后正常推进
       for (const g of session.ghosts) {
         const s = sampleAt(session.data, g.playTime);
         if (!s) continue;
