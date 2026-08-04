@@ -206,6 +206,7 @@ function captureVehicleFrame(player: Player, session?: RecordingSession): Replay
     sirenState: false,
     trailerId: 0,
     trainSpeed: 0,
+    online: true, // 兜底采样/补帧均为在线帧
   };
 }
 
@@ -507,6 +508,7 @@ function fallbackSample(): void {
           sirenState: false,
           trailerId: 0,
           trainSpeed: 0,
+          online: false, // 掉线静止帧：标记玩家离线（回放据此识别掉线段）
         });
       }
       continue;
@@ -581,6 +583,7 @@ export function initRecorder(): void {
                 sirenState: !!sync.sirenState,
                 trailerId: sync.trailerId ?? 0,
                 trainSpeed: sync.trainSpeed ?? 0,
+                online: true, // RakNet 拦截帧 = 玩家在线
               });
             }
           } catch (e) {

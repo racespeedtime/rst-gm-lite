@@ -32,8 +32,10 @@ const MAGIC = "RSTREP01";
  * - v5 再追加 lrKey/udKey/additionalKey/landingGearState/sirenState/
  *   trailerId/trainSpeed——DriverSync 完整字段（emulate 回放需要原样写回），
  *   旧 v4/v3/v2 文件照读（这些字段取 0/false）
+ * - v6 再追加 online(u8)——该帧玩家是否在线（掉线重连的静止帧标 false，
+ *   回放/挑战据此识别掉线段）。旧 v5 及以下文件照读（默认在线）
  */
-export const FORMAT_VERSION = 5;
+export const FORMAT_VERSION = 6;
 
 /** 录制类型（recorder 写 header 用） */
 export const REPLAY_TYPE_GHOST = 0;
@@ -45,13 +47,15 @@ const FRAME_BYTES_V2 = 55;
 const FRAME_BYTES_V4 = FRAME_BYTES_V2 + 2;
 /** v5：帧 68B = v4 帧 + lrKey1 + udKey1 + additionalKey1 + landingGear1 + siren1 + trailerId2 + trainSpeed4 */
 const FRAME_BYTES_V5 = FRAME_BYTES_V4 + 11;
+/** v6：帧 69B = v5 帧 + online1（该帧玩家是否在线；掉线静止帧 false） */
+const FRAME_BYTES_V6 = FRAME_BYTES_V5 + 1;
 /** v2：头 72B = magic8 + ver1 + type1 + interval2 + model4 + pos12 + quat16 + vel12 + count4 + dur4 + totalCp4 + bestMs4 */
 const HEADER_BYTES_V2 = 72;
 /** v3+：头 76B = v2 头 + frameBytes4（自描述，未来帧字段追加零破坏） */
 const HEADER_BYTES_V3 = HEADER_BYTES_V2 + 4;
 
-/** 当前帧字节数（v5） */
-export const FRAME_BYTES = FRAME_BYTES_V5;
+/** 当前帧字节数（v6） */
+export const FRAME_BYTES = FRAME_BYTES_V6;
 /** 当前头字节数（v3+ 头布局不变） */
 export const HEADER_BYTES = HEADER_BYTES_V3;
 
@@ -89,6 +93,8 @@ export interface ReplayFrame {
   sirenState: boolean;
   trailerId: number;
   trainSpeed: number;
+  /** 该帧玩家是否在线（掉线重连的静止帧 false；旧文件默认 true） */
+  online: boolean;
 }
 
 export interface ReplayHeader {
@@ -199,6 +205,7 @@ export function encodeFrame(f: ReplayFrame): Buffer {
   buf.writeUInt8(f.sirenState ? 1 : 0, 61); // v5：警笛
   buf.writeUInt16LE((f.trailerId | 0) & 0xffff, 62); // v5：拖挂
   buf.writeFloatLE(V(f.trainSpeed), 64); // v5：火车速度
+  buf.writeUInt8(f.online ? 1 : 0, 68); // v6：在线标记（掉线静止帧 false）
   return buf;
 }
 
@@ -244,7 +251,26 @@ export function parseHeader(buf: Buffer): ReplayHeader {
   const bestMs = buf.readInt32LE(o);
   // 版本分支：v3 起末尾多 4B frameBytes（自描述）；v2 无该字段用固定 55
   const frameBytes = version >= 3 ? buf.readUInt32LE(o + 4) : FRAME_BYTES_V2;
-  return { type, frameIntervalMs, vehicleModelId, startX, startY, startZ, qx, qy, qz, qw, vx, vy, vz, frameCount, durationMs, totalCp, bestMs, frameBytes };
+  return {
+    type,
+    frameIntervalMs,
+    vehicleModelId,
+    startX,
+    startY,
+    startZ,
+    qx,
+    qy,
+    qz,
+    qw,
+    vx,
+    vy,
+    vz,
+    frameCount,
+    durationMs,
+    totalCp,
+    bestMs,
+    frameBytes,
+  };
 }
 
 /** 读取并解析回放文件（整文件入内存；帧体切片供 O(1) 随机访问）。损坏抛 Error。 */
@@ -293,18 +319,20 @@ export function decodeFrame(buf: Buffer, index: number, frameBytes: number): Rep
     sirenState: frameBytes >= FRAME_BYTES_V5 ? buf.readUInt8(o + 61) === 1 : false,
     trailerId: frameBytes >= FRAME_BYTES_V5 ? buf.readUInt16LE(o + 62) : 0,
     trainSpeed: frameBytes >= FRAME_BYTES_V5 ? buf.readFloatLE(o + 64) : 0,
+    // v6 起读在线标记；旧文件（frameBytes<69）视为全程在线
+    online: frameBytes >= FRAME_BYTES_V6 ? buf.readUInt8(o + 68) === 1 : true,
   };
 }
 
 /** 四元数归一化：线性插值两个单位四元数得到的中间值长度 <1（仅 t=0/1 时为单位），
  *  直接喂进欧拉换算（假设单位四元数）会算出错误朝向 → 回放轨迹车头乱摆。
  *  插值后必须归一化（slerp 更严谨，归一化已足够消除视觉抖动）。 */
-function normalizeQuat(q: {
+function normalizeQuat(q: { x: number; y: number; z: number; w: number }): {
   x: number;
   y: number;
   z: number;
   w: number;
-}): { x: number; y: number; z: number; w: number } {
+} {
   const n = Math.sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
   if (n === 0 || !Number.isFinite(n)) return { x: 0, y: 0, z: 0, w: 1 }; // 非法 → 单位四元数
   return { x: q.x / n, y: q.y / n, z: q.z / n, w: q.w / n };
@@ -345,5 +373,6 @@ export function lerpFrame(a: ReplayFrame, b: ReplayFrame, t: number): ReplayFram
     sirenState: t < 0.5 ? a.sirenState : b.sirenState,
     trailerId: t < 0.5 ? a.trailerId : b.trailerId,
     trainSpeed: t < 0.5 ? a.trainSpeed : b.trainSpeed,
+    online: t < 0.5 ? a.online : b.online, // 在线标记离散取最近帧
   };
 }

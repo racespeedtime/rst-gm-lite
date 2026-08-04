@@ -227,6 +227,8 @@ export interface ReplayDebugState {
   frameIndex: number;
   frameCount: number;
   currentKmh: number;
+  /** 当前帧玩家是否在线（掉线重连的静止帧 false） */
+  online: boolean;
 }
 
 /** 取玩家回放会话的调试状态（无会话返回 null） */
@@ -242,6 +244,7 @@ export function getReplayDebugState(playerId: number): ReplayDebugState | null {
     frameIndex: Math.floor(g.playTime / interval),
     frameCount: s.data.header.frameCount,
     currentKmh: sampled ? Math.hypot(sampled.vx, sampled.vy, sampled.vz) : 0,
+    online: sampled ? sampled.online : true,
   };
 }
 
@@ -324,6 +327,8 @@ export interface SampledState {
   sirenState: boolean;
   trailerId: number;
   trainSpeed: number;
+  /** 该帧玩家是否在线（掉线重连的静止帧 false） */
+  online: boolean;
 }
 
 /** 按播放时间取插值帧（帧序保证前后一致性；超出范围 clamp 到边界帧）。（challenge 复用） */
@@ -362,6 +367,7 @@ export function sampleAt(data: ReplayData, playTime: number): SampledState | nul
       sirenState: f.sirenState,
       trailerId: f.trailerId,
       trainSpeed: f.trainSpeed,
+      online: f.online,
     };
   };
   if (idx >= lastIdx) {

@@ -65,11 +65,11 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
   if (st) {
     lines.push(`watch ${st.kind === "vehicle" ? "v" : "p"} #${st.targetId}`);
   }
-  // 回放中：叠加当前播放时长/总时长、帧号
+  // 回放中：叠加当前播放时长/总时长、帧号；掉线静止段标记 offline
   const rep = getReplayDebugState(player.id);
   if (rep) {
     lines.push(
-      `rep ${fmtMs(rep.playTimeMs)}/${fmtMs(rep.durationMs)}  f ${rep.frameIndex}/${rep.frameCount}`,
+      `rep ${fmtMs(rep.playTimeMs)}/${fmtMs(rep.durationMs)}  f ${rep.frameIndex}/${rep.frameCount}${rep.online ? "" : "  {FF0000}offline"}`,
     );
   }
   const text = lines.join("\n");
