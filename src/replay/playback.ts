@@ -755,6 +755,20 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
   switch (action) {
     case "pause": {
       session.paused = true;
+      // 暂停瞬间发一帧"静止帧"（速度/按键清零 + 强制发包，绕过 30Hz 节流）：
+      // 与播完停发同理——否则暂停时最后一帧带非零速度，客户端物理会继续滑行，
+      // 车辆从暂停点滑走（甚至撞地形翻车）。暂停是临时停：不设 stopped，
+      // 恢复播放（play）后 tick 正常继续驱动。
+      for (const g of session.ghosts) {
+        const s = sampleAt(session.data, g.playTime);
+        if (!s) continue;
+        try {
+          ensureGhostVehicle(session, g, s.vehicleModel); // 暂停点模型对齐（cveh 换车帧）
+          emulateDriverSync(g.npcPlayerId, g.vehicle, s, true); // atEnd=true → 速度/按键清零
+        } catch {
+          /* 暂停帧失败不影响：恢复播放后下一帧会重发 */
+        }
+      }
       player.sendClientMessage(COLOR_RACE, "回放已暂停");
       break;
     }
