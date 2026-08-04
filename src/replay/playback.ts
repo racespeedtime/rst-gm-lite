@@ -220,7 +220,7 @@ export function loadReplayData(fileName: string): ReplayData {
 }
 
 /**
- * NPC 池子边界（回放/挑战共用，对齐 config.json max_bots=100）：
+ * NPC 池子边界（回放/挑战共用，代码写死 100 槽）：
  * - 用 Npc.getInstances() 实时统计已用槽位（服务器权威，destroy 后自动减少，
  *   无需自维护计数）
  * - 创建前检查剩余槽位；创建后校验 isValid（open.mp 的 npc_create 失败

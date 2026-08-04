@@ -144,7 +144,7 @@ const panelGroups: PanelGroup[] = [
     label: "赛道编辑",
     desc: "退出编辑模式",
     noAutoExpand: true,
-    // 仅在赛道编辑模式中显示；其余玩法组在编辑中自动隐藏（编辑用 F5 交互，避免干扰）
+    // 仅在赛道编辑模式中显示；其余玩法组在编辑中自动隐藏（编辑是对话框交互，避免干扰）
     visible: (player) => isEditing(player.id),
     items: [
       {

@@ -45,7 +45,7 @@ pnpm serve              # 生产模式
 3. **字符集**：`DEFAULT_CHARSET = "gbk"`（`src/utils/constants.ts`），必须统一用它、不要手写 `"gbk"`。**e-selection 用 TextDraw 渲染、不支持中文**（3D 选车/选肤界面一律英文标题）；`TextLabel` 可 `charset: DEFAULT_CHARSET` 显示中文；`TextDraw`/`GameText` 不支持中文。
 4. **GTA 角度是逆时针的**：0=北、90=**西**、180=南、270=东（与真实罗盘相反，open.mp 文档明确 "Angles are reversed in GTA:SA"）。车前方向（世界坐标）= `(-sinθ, -cosθ)`；位置偏移同式。CP 脚本 `speed`/`speedex` 是独立坐标系：x=速度·cos(na)、y=速度·sin(na)、角度基准=玩家朝向+90、`|` 模式=角度+90、角度 0=正东、只设速度不设朝向（`src/race/scripts.ts:setVehicleSpeed`）。
 5. **世界 id**：公共大世界 `PUBLIC_WORLD_ID = 0`（用常量，禁手写 0）；战局 1..1000；比赛房间独立世界从 `RACE_WORLD_BASE = 1001` 起（至 2000）；回放/挑战世界从 `REPLAY_WORLD_BASE = 2001` 起——三区间独立不叠加。
-6. **人数**：玩家上限 1000、NPC 槽位 100（config.json `max_players`/`max_npcs`）。所有事件回调统一排除 NPC。
+6. **人数**：玩家上限 1000（config.json `max_players`）；NPC 槽位 100 为代码写死的 `MAX_REPLAY_NPC`（`src/replay/playback.ts`，回放/挑战共用，config.json 无此字段）。所有事件回调统一排除 NPC。
 7. **config.json 现代键**：服务器名/模式用顶层 `name` 与 `game.mode`（UTF-8）；**不要**用 rcon legacy 键 `hostname`/`gamemodetext`（触发 "Legacy key supplied" 警告）。
 8. **对话框**：`TABLIST_HEADERS` 表头不占 listItem 行号（从 0 起）；e-selection `maxItemPerPage` 布局 = 第一行 6 + 第二行 8（一页 14 格铺满）。
 9. **colandreas**：`findZ_For2DCoord` 水域返回海底；`getSafeGroundZ` fallback -100；水中找陆地以 `SEA_LEVEL = 0` 以上 1.5 判陆地。

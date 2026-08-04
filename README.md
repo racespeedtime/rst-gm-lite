@@ -49,7 +49,7 @@ RST-GM-Lite 是 `open.mp + samp-node + @infernus/core` 纯 TypeScript 实现的�
 | 模块 | 玩家视角 | 开发者视角 |
 |------|---------|-----------|
 | `race/` | 比赛房间：创建 / 加入 / 倒计时 / 实时排名 / 掉线重连 | 房间状态机（WAITING→COUNTDOWN→RACING→FINISHED），CP 脚本解析执行，赛道编辑器，爱车入场 |
-| `race/editor.ts` | 赛道编辑器（F5） | 3D 放置 CP / 脚本点，落库赛道数据 |
+| `race/editor.ts` | 赛道编辑器（/redit 命令 + 面板入口） | 对话框交互：放 CP / 管理 CP / 圈数 / 测试 / 保存，落库赛道数据 |
 
 ### 回放与挑战
 
@@ -62,14 +62,14 @@ RST-GM-Lite 是 `open.mp + samp-node + @infernus/core` 纯 TypeScript 实现的�
 | 模块 | 玩家视角 | 开发者视角 |
 |------|---------|-----------|
 | `core/panel.ts` | 万能面板（Y 键 / /p） | 分组菜单结构，条件可见性（比赛/编辑中自动收起），层级记忆 |
-| `core/observe.ts` | 观战与观战切换 | /tv、左右键循环切换观战对象，候选登记/注销 |
+| `core/observe.ts` | 观战与观战切换 | /tv 命令（ID 观战 / off 停止 / next prev 切换），候选登记/注销 |
 | `core/spawn.ts` | 出生 / 重生定位 | onRequestSpawn 同步门禁，登录大厅出生方式 |
 | `core/timers.ts` | — | 登记式计时器：一律用 setIntervalSafe/setTimeoutSafe，服务器退出统一清理 |
 | `core/vehicleAuto.ts` | 翻车自动翻正 / 自动修复 / 换色 / 氮气 | 定时器 + 状态同步，比赛中由比赛系统接管 |
 | `core/invincible.ts` | 无敌模式（按个人设置） | 伤害回血 + RakNet 子弹包拦截 |
 | `core/` 其余 | 世界时间天气、人物预设、信息查看、防刷屏等 | colandreas 碰撞、armor 护甲、money 无限金钱、loginCamera 登录镜头、interaction 流程锁、playerStyle 标识缓存、profile 信息汇总、ban 封禁、help 帮助 |
 | `interface/` | 速度表 / 网络信息 / 调试面板 | GUI 定时刷新；调试面板由数据库控制开关，可显示坐标四元数等原始数据 |
-| `admin/` | OP 命令与管理员面板 | /op 面板驱动，封禁 / 传送 / 比赛管理等 |
+| `admin/` | OP 命令与管理员面板 | /op 面板驱动（重置密码 / 玩家信息 / 登录记录 / 回放删除），封禁命令（/ban /unban /banip /unbanip） |
 | `utils/` | — | 常量（gbk 字符集）、颜色、格式化、对话框封装、分页列表、解析与排序工具 |
 | `prisma/` | — | Prisma 7 schema + 迁移 + 生成客户端；数据不动线上（只读参考 public.sql） |
 
