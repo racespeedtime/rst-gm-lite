@@ -601,6 +601,16 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
     prevWorld: player.getVirtualWorld(),
   });
   await positionPlayerAtStart(player, room);
+  // 加入即切到房间世界（等待期/倒计时都在房间世界活动，发车不再临时切）。
+  // beginRace 的 setVirtualWorld 幂等（已在房间世界则无操作）。
+  player.setVirtualWorld(room.worldId);
+  if (player.isInAnyVehicle()) {
+    player.getVehicle()!.setVirtualWorld(room.worldId);
+  }
+  const owned = getOwnedVehicle(player.id);
+  if (owned && owned.isValid() && owned !== player.getVehicle()) {
+    owned.setVirtualWorld(room.worldId); // 爱车一并切（防留在原世界成幽灵车）
+  }
   // 提示：房主（创建者）不需要"等待房主开始"；无车兜底说明已刷默认比赛车
   const noCarHint = !getOwnedVehicle(player.id) ? "（无车已自动刷默认比赛车，可用 /c 换爱车）" : "";
   if (room.ownerId === player.id) {
@@ -1270,8 +1280,15 @@ export function leaveRace(player: Player): void {
   RaceCheckpoint.disable(player);
   clearRaceMapIcons(player); // 离开：清比赛小地图图标
   playerRaces.delete(player.id);
-  // 回放：中途离开比赛仍停止录制落盘（未完成，无名次）
-  raceRecordingStop(player.id);
+  // 回放：中途退出也挂起会话（车停在原地、录像静止帧录到比赛结束落盘）——
+  // 与掉线重连一致，整场回放完整（能看到退出者停在哪）。房间销毁（无人完成）
+  // 或 endRoom（有人完成）时统一落盘处理；若房间仍有人继续跑，静止帧持续录。
+  if (room && room.state === "RACING") {
+    suspendRecording(player.id);
+  } else {
+    // 非比赛状态（等待/倒计时中离开）：没有在跑，直接落盘（未完成，无名次）
+    raceRecordingStop(player.id);
+  }
   // 脚本车辆（cveh）在离开比赛时销毁，防残留
   cleanupScriptVehicle(player.id);
   // 先退出观战（避免 stopObserve 覆盖世界回比赛世界），再恢复原世界
@@ -1297,9 +1314,18 @@ function tickRooms(): void {
     if (room.state === "WAITING" && now - room.createdAt > 10 * 60 * 1000) {
       broadcastToRoom(room, "[赛车] 比赛房间因长时间未开始已解散");
       for (const m of room.members.values()) {
+        const mp = playerRaces.get(m.id);
+        // 加入即切到房间世界：解散时恢复成员原世界（防留在房间世界成幽灵）
+        if (mp) {
+          m.setVirtualWorld(mp.prevWorld);
+          if (m.isInAnyVehicle()) m.getVehicle()!.setVirtualWorld(mp.prevWorld);
+          const owned = getOwnedVehicle(m.id);
+          if (owned && owned.isValid() && owned !== m.getVehicle()) {
+            owned.setVirtualWorld(mp.prevWorld);
+          }
+        }
         playerRaces.delete(m.id);
-        // 解散时成员仍在各自原世界：清掉起点 CP 箭头与小地图图标，
-        // 否则留在公共/战局世界里永久残留红色箭头 + 地图图标
+        // 清掉起点 CP 箭头与小地图图标，防留在公共/战局世界里永久残留
         RaceCheckpoint.disable(m);
         clearRaceMapIcons(m);
         cleanupScriptVehicle(m.id); // 等待期玩家可能在起点的比赛车上，解散一并清

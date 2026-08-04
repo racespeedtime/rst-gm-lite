@@ -404,6 +404,68 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
     return false;
   }
+  return startChallengeCore(player, chosen, data, cps);
+}
+
+/**
+ * 影子挑战（任意玩家的比赛回放）：公开回放库入口——选一条别人的 race 回放当影子。
+ * 校验后直接开挑战（不限本人录像）。
+ */
+export async function startChallengeWithReplay(player: Player, replayId: string): Promise<boolean> {
+  const auth = getAuthState(player.id);
+  if (!auth) {
+    player.sendClientMessage(COLOR_ERROR, "请先登录");
+    return false;
+  }
+  if (challenges.has(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "你已在影子挑战中，先 /challenge stop");
+    return false;
+  }
+  if (getReplaySession(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "你正在播放回放中，先 /rp stop");
+    return false;
+  }
+  if (isInRace(player.id)) {
+    player.sendClientMessage(COLOR_ERROR, "比赛中不能进入影子挑战");
+    return false;
+  }
+  const replay = await prisma.replay.findFirst({
+    where: { id: replayId, type: "race", deletedAt: null }, // 任意玩家
+  });
+  if (!replay) {
+    player.sendClientMessage(COLOR_ERROR, "回放不存在或已删除");
+    return false;
+  }
+  if (!replay.raceId) {
+    player.sendClientMessage(COLOR_ERROR, "该回放没有关联赛道，无法影子挑战");
+    return false;
+  }
+  let data: ReplayData;
+  try {
+    data = loadReplayData(replay.fileName); // 只读缓存（与回放共享文件数据）
+  } catch (e) {
+    logger.error(`[replay] 挑战回放读取失败 ${replay.fileName}`, e);
+    player.sendClientMessage(COLOR_ERROR, "回放文件损坏或不存在");
+    return false;
+  }
+  const cps = await prisma.raceCp.findMany({
+    where: { raceId: replay.raceId },
+    orderBy: { index: "asc" },
+  });
+  if (cps.length < 2) {
+    player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
+    return false;
+  }
+  return startChallengeCore(player, replay, data, cps);
+}
+
+/** 影子挑战核心：建影子实体 + 放入玩家 + 倒计时（startChallengeFromRace/WithReplay 共用） */
+async function startChallengeCore(
+  player: Player,
+  replay: { id: string; rank: number | null; raceName: string | null; recorderName: string },
+  data: ReplayData,
+  cps: { x: unknown; y: unknown; z: unknown; angle: unknown; size: unknown }[],
+): Promise<boolean> {
   const worldId = allocReplayWorld();
 
   // 影子（ghost）创建：复用回放的 NPC 池子边界（槽位检查 + isValid 校验）

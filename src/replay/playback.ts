@@ -1,4 +1,12 @@
-import { Dynamic3DTextLabel, KeysEnum, Npc, Player, TextDraw, Vehicle } from "@infernus/core";
+import {
+  Dynamic3DTextLabel,
+  GameText,
+  KeysEnum,
+  Npc,
+  Player,
+  TextDraw,
+  Vehicle,
+} from "@infernus/core";
 import { InCarSync, IncomingBitStream } from "@infernus/raknet";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
@@ -139,6 +147,10 @@ export interface ReplaySession {
   playing: boolean;
   paused: boolean;
   speed: number; // 倍速 0.5~4
+  /** 开场倒计时剩余毫秒（>0 = 车停起始帧，3-2-1-GO 模拟比赛开场；0 = 已发车） */
+  countdownMs: number;
+  /** 上次显示的数字（防重复发 GameText） */
+  lastCountdownDisplay: number;
   timer?: NodeJS.Timeout;
   /** 上次播放推进时间（真实流逝计时）：
    *  固定 16ms/tick 推进在事件循环繁忙/定时器节流时实际间隔 >16ms → 播放时间
@@ -525,6 +537,41 @@ function tickSession(session: ReplaySession): void {
   const now = Date.now();
   const elapsed = Math.min(250, now - session.lastTickAt);
   session.lastTickAt = now;
+  // 开场倒计时：模拟比赛 3-2-1-GO（录像从发车帧开始，倒计时是回放系统生成）。
+  // 倒计时期间车停在起始位置（发静止帧锚定），数字/GO 给所有观战者。
+  if (session.countdownMs > 0) {
+    session.countdownMs -= elapsed;
+    const display = Math.max(0, Math.ceil(session.countdownMs / 1000));
+    if (display !== session.lastCountdownDisplay) {
+      session.lastCountdownDisplay = display;
+      const msg =
+        display > 0
+          ? new GameText(`~y~${display}`, 850, 3)
+          : new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
+      const sound = display > 0 ? 1056 : 1057; // 对齐比赛倒计时音效
+      // 显示对象：发起人 + 观战者（ghost 回放发起人未观战时也显示）
+      const targets = new Set([session.ownerId, ...session.watchers]);
+      for (const pid of targets) {
+        const w = Player.getInstance(pid);
+        if (w && w.isConnected()) {
+          msg.forPlayer(w);
+          w.playSound(sound);
+        }
+      }
+    }
+    // 倒计时期间：车停起始位置（发静止帧，速度/按键清零）
+    for (const g of session.ghosts) {
+      if (g.stopped) continue;
+      const s = sampleAt(session.data, g.playTime);
+      if (!s) continue;
+      try {
+        emulateDriverSync(g.npcPlayerId, g.vehicle, s, true);
+      } catch {
+        /* 忽略 */
+      }
+    }
+    return;
+  }
   // 暂停：时间不推进，但每 tick 持续发一帧静止帧锚定位置——暂停时若只发
   // 一次，车停在斜坡/不平地形时客户端本地物理无持续校正会缓慢滑走。
   // lastTickAt 已在上面刷新：恢复播放时不会把暂停时长算进推进（否则
@@ -549,12 +596,24 @@ function tickSession(session: ReplaySession): void {
     // 播放时间推进并 clamp 到 [0, maxTime]（播到结尾停在边界，不循环；seek 可回看）
     g.playTime = Math.min(maxTime, Math.max(0, g.playTime + dt));
   }
-  // 播完提示（一次）：播放到达结尾 → 提示用户可 seek 继续看
+  // 播完提示（一次）：播放到达结尾 → 比赛回放提示"比赛结束"（对齐冲线仪式感），
+  // 否则提示可 seek 回看
   if (!session.endedNotified && session.ghosts.every((g) => g.playTime >= maxTime)) {
     session.endedNotified = true;
-    const owner = Player.getInstance(session.ownerId);
-    if (owner && owner.isConnected()) {
-      owner.sendClientMessage(COLOR_RACE, "回放已播完（/rp seek 可回看）");
+    const targets = new Set([session.ownerId, ...session.watchers]);
+    for (const pid of targets) {
+      const w = Player.getInstance(pid);
+      if (w && w.isConnected()) {
+        if (session.replayType === "race") {
+          new GameText("~r~比 赛 结 束~w~!", 3000, 3).forPlayer(w);
+        }
+        w.sendClientMessage(
+          COLOR_RACE,
+          session.replayType === "race"
+            ? "比赛回放已播完（/rp seek 可回看）"
+            : "回放已播完（/rp seek 可回看）",
+        );
+      }
     }
   }
   for (const g of session.ghosts) renderGhost(session, g);
@@ -787,6 +846,8 @@ export async function spawnReplay(
     playing: true,
     paused: false,
     speed: 1,
+    countdownMs: 3000, // 开场 3-2-1-GO（模拟比赛；倒计时期间车停起始帧）
+    lastCountdownDisplay: 4,
     lastTickAt: Date.now(),
     endedNotified: false,
     tds: new Map(),
@@ -916,6 +977,9 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       }
       // seek 离开结尾 → 重置"已播完"提示标记（再次正放播完会重新提示）
       if (target < max) session.endedNotified = false;
+      // seek 跳过开场倒计时（用户主动定位到某时刻，不再 3-2-1 等待）
+      session.countdownMs = 0;
+      session.lastCountdownDisplay = 4;
       for (const g of session.ghosts) renderGhost(session, g);
       syncObserverTds(session); // seek 后 TD 状态与时间线一致
       player.sendClientMessage(COLOR_RACE, `已跳转到 ${(target / 1000).toFixed(1)}s`);

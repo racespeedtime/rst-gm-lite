@@ -7,7 +7,7 @@ import { isSuperAdmin } from "@/admin/op";
 import { deleteRecordingFile } from "./storage";
 import { spawnReplay, controlReplay, getReplaySession, REPLAY_SPEEDS } from "./playback";
 import { startRecording, stopRecording, isRecording } from "./recorder";
-import { isInChallenge } from "./challenge";
+import { isInChallenge, startChallengeWithReplay } from "./challenge";
 import { isInRace } from "@/race/room";
 import type { MenuBack } from "@/core/panel";
 import { COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
@@ -148,6 +148,13 @@ async function openReplayActions(
       run: () => runGhostReplay(player, replay.id, opts.back),
     },
   ];
+  // 比赛回放可当影子（公开库选任意玩家的比赛回放挑战；我的录制限本人）
+  if (replay.type === "race") {
+    actions.push({
+      label: "影子挑战（与录像者比一场）",
+      run: () => void startChallengeWithReplay(player, replay.id),
+    });
+  }
   if (opts.allowDelete) {
     actions.push({
       label: "删除",
