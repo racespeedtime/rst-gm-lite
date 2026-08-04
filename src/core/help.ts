@@ -19,7 +19,7 @@ export function sendWelcomeMessage(player: Player): void {
 /** 常用命令帮助内容（Dialog 支持中文） */
 const HELP_LINES = [
   "{FFD700}Y 键 / /p — 万能面板（主要入口：赛车/爱车/战局/个性化/装扮；观战中 Y 键收不到，用 /p）",
-  "{FFFFFF}/r — 赛车：无参数打开赛道列表，/r s 创建比赛 · /r j 加入 · /r l 离开",
+  "{FFFFFF}/r — 赛车：无参数打开赛道列表（选赛道建房）· /r s 房主开始/非房主等待 · /r s 赛道名 直接建房 · /r j 加入 · /r l 离开",
   "{FFFFFF}/c — 刷车（/c 车辆ID · /c list 图片选车 · /c wode 召唤）",
   "{FFFFFF}/skin — 3D 选皮肤（/skin 打开菜单 · /skin ID 直接切换）",
   "{FFFFFF}/drift — 乘坐漂移 NPC 随行观光（NPC 开车，您当乘客）",
