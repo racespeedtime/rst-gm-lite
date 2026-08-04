@@ -302,11 +302,13 @@ export async function startRecording(
 
 /**
  * 停止录制：写回放文件 + replay 元数据入库。quiet=true 时不发提示（比赛结束等批量场景）。
+ * discard=true 时作废：落盘后直接删文件、不建 DB 记录（整场无人完成/重开时用，
+ * 原子处理避免与"先落盘再查删"的竞态）。
  * 返回创建的记录（含文件名）；失败返回 null。
  */
 export async function stopRecording(
   playerId: number,
-  opts?: { quiet?: boolean; rank?: number | null; finished?: boolean | null },
+  opts?: { quiet?: boolean; rank?: number | null; finished?: boolean | null; discard?: boolean },
 ): Promise<{ id: string; fileName: string } | null> {
   const session = sessions.get(playerId);
   if (!session) return null;
@@ -370,6 +372,14 @@ export async function stopRecording(
     if (player && player.isConnected() && !opts?.quiet) {
       player.sendClientMessage(COLOR_ERROR, "回放保存失败（磁盘错误）");
     }
+    return null;
+  }
+
+  // discard 作废：整场无人完成/重开——落盘即删文件、不建 DB 记录（原子，
+  // 避免"先落盘再异步查删"的竞态与孤儿残留）
+  if (opts?.discard) {
+    deleteRecordingFile(fileName);
+    logger.info(`[replay] 作废比赛回放 ${fileName}（playerId=${playerId}）`);
     return null;
   }
 

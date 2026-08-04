@@ -67,6 +67,8 @@ export interface ChallengeSession {
   replayName: string | null;
   data: ReplayData;
   ghost: ChallengeGhost;
+  /** 影子起始播放帧（= 录制发车帧；倒计时期间停在起始帧，GO 后从这里开始播） */
+  startFrame: number;
   cps: { x: number; y: number; z: number; size: number }[];
   /** 玩家已过的 CP 数（0 = 未过任何 CP） */
   cpIndex: number;
@@ -129,11 +131,16 @@ export function destroyAllChallenges(): void {
 function renderGhost(ch: ChallengeSession): void {
   const s = sampleAt(ch.data, ch.ghost.playTime);
   if (!s) return;
+  const maxTime = (ch.data.header.frameCount - 1) * Math.max(1, ch.data.header.frameIntervalMs);
+  // 倒计时期间：playTime 停在起始帧（startFrame=录制发车帧）→ 按静止帧渲染
+  //（速度/按键清零，影子停在起点等发车；GO 后 tick 推进 playTime 才离开
+  // startFrame，恢复正常驱动）。起始帧如果是换车帧，ensureGhostVehicle 只在
+  // 创建渲染时执行一次，不会反复换车。
+  const atStart = ch.ghost.playTime <= ch.startFrame;
   // 影子播完（playTime 到最后一帧）→ 速度/按键清零：影子停在终点，挑战者
   // 仍要看见它作参照（不能停发）。否则尾帧非零速度会让影子在终点持续滑行
   // 抖动，按键残留还会原地转向抖动（emulateDriverSync 的 atEnd 分支处理）。
-  const maxTime = (ch.data.header.frameCount - 1) * Math.max(1, ch.data.header.frameIntervalMs);
-  const atEnd = ch.ghost.playTime >= maxTime;
+  const atEnd = ch.ghost.playTime >= maxTime || atStart;
   try {
     // 30Hz 发包节流
     const now = Date.now();
@@ -142,7 +149,7 @@ function renderGhost(ch: ChallengeSession): void {
     // 氮气跟随录制者按键：SA 氮气有容量、喷完即消失，录制时由 vehicleAuto
     // 定时补充，挑战影子车无人补——检测到 keys.SPRINT 置位就补一个氮气
     // 组件（500ms 节流防高频 addComponent），保证该喷的时刻有氮气可喷
-    // （与回放 playback renderGhost 同一套逻辑；播完后 atEnd 不再补）
+    // （与回放 playback renderGhost 同一套逻辑；起始/播完后 atEnd 不再补）
     if (s.keys & KeysEnum.SPRINT && !atEnd && now - ch.ghost.lastNitroAt >= 500) {
       ch.ghost.lastNitroAt = now;
       ch.ghost.vehicle.addComponent(1010);
@@ -182,7 +189,8 @@ function tickChallenge(ch: ChallengeSession): void {
     cleanupChallenge(ch.playerId);
     return;
   }
-  const dur = ch.data.header.frameCount * ch.data.header.frameIntervalMs;
+  // 影子播完时间 = 播放终点 (frameCount-1)×interval（对齐 playback）
+  const dur = (ch.data.header.frameCount - 1) * ch.data.header.frameIntervalMs;
   // 影子播完 + 宽限后玩家未完成 → 自动结束（真实时间差，不用帧数累计防漂移）
   if (Date.now() - ch.goAt > dur + CHALLENGE_GRACE_MS) {
     if (p && p.isConnected()) {
@@ -448,6 +456,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     replayName: replay.raceName ?? null,
     data,
     ghost,
+    startFrame: 0, // 录制发车帧（倒计时期间停在起始帧，GO 后从这里播）
     cps: cps.map((c) => ({ x: Number(c.x), y: Number(c.y), z: Number(c.z), size: Number(c.size) })),
     cpIndex: 0,
     totalCp: cps.length,
@@ -457,6 +466,9 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     lastTickAt: Date.now(),
   };
   challenges.set(player.id, ch);
+  // 倒计时期间：影子停在起始帧（playTime==startFrame → atStart 静止帧渲染），
+  // 只渲染一次（起点车可见）；GO 后 tick 启动、playTime 才离开 startFrame 正常播
+  renderGhost(ch);
 
   // 玩家放入（有爱车则用（模型不符也直接用——挑战自由），无则刷标准车型）
   const owned = getOwnedVehicle(player.id);

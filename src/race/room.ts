@@ -17,7 +17,7 @@ import { isEditing } from "./editor";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import { raceRecordingStart, raceRecordingStop, stopReplayForPlayer } from "@/replay";
-import { noteCpProgress } from "@/replay/recorder";
+import { noteCpProgress, stopRecording, isRecording } from "@/replay/recorder";
 import {
   startObservePlayer,
   stopObserve,
@@ -533,9 +533,10 @@ export async function restartRace(player: Player): Promise<void> {
     mp.lap = 0;
     mp.startTime = 0;
     mp.finished = false;
-    // 比赛中止重开：停止上一段的比赛自动录制（对齐 leaveRace/endRoom 落盘），
-    // 下一场开赛（beginRace）会重新开始录制，避免两场成绩混进同一段回放
-    raceRecordingStop(m.id);
+    // 比赛中止重开：停止上一段的比赛自动录制并作废（整场无人完成，无成绩
+    // 保留价值；discard 原子落盘即删文件不建 DB 记录），下一场开赛（beginRace）
+    // 重新开始录制，两场成绩互不混入
+    void stopRecording(m.id, { quiet: true, discard: true });
     await positionPlayerAtStart(m, room);
   }
   if (wasRunning) {
@@ -1178,6 +1179,13 @@ function checkRoomState(room: RaceRoom): void {
     if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
     if (room.endTimer) clearTimeoutSafe(room.endTimer);
     destroyRaceTds(room);
+    // 房间销毁（全员离开/断线）：整场无人完成 → 该段比赛回放原子作废
+    //（discard 落盘即删文件不建 DB 记录；有 rank 的已完成场景不会走到这）
+    for (const pid of room.members.keys()) {
+      if (isRecording(pid)) {
+        void stopRecording(pid, { quiet: true, discard: true });
+      }
+    }
     freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id
     rooms.delete(room.id);
   }
