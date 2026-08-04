@@ -3,9 +3,27 @@ import { IPacket, PacketIdList } from "@infernus/raknet";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { initReplayCommands } from "./commands";
-import { initRecorder, cleanupRecorder, forceStopRecording, isRecording, startRecording, stopRecording } from "./recorder";
-import { cleanupPlayback, destroyAllPlaybacks, stopReplaySession, getReplaySession, isReplayNpc } from "./playback";
-import { initChallenge, destroyAllChallenges, challengeDisconnect, cleanupChallenge } from "./challenge";
+import {
+  initRecorder,
+  cleanupRecorder,
+  forceStopRecording,
+  isRecording,
+  startRecording,
+  stopRecording,
+} from "./recorder";
+import {
+  cleanupPlayback,
+  destroyAllPlaybacks,
+  stopReplaySession,
+  getReplaySession,
+  isReplayNpc,
+} from "./playback";
+import {
+  initChallenge,
+  destroyAllChallenges,
+  challengeDisconnect,
+  cleanupChallenge,
+} from "./challenge";
 import { ensureRecordingDir, cleanupOrphanFiles } from "./storage";
 
 /**
@@ -81,15 +99,25 @@ export function stopReplayForPlayer(playerId: number): void {
  * 比赛自动录制钩子（room.ts 调用）：
  * startRace/beginRace 时对每个成员开启录制（type=race）；endRoom 时停止。
  */
-export function raceRecordingStart(playerId: number, opts?: { raceId?: string; raceName?: string }): void {
+export function raceRecordingStart(
+  playerId: number,
+  opts?: { raceId?: string; raceName?: string },
+): void {
   void forceStopRecording(playerId); // 防残留（重复开赛/重连）
   const p = Player.getInstance(playerId);
   if (!p || !p.isConnected()) return;
-  void startRecording(p, { type: "race", raceId: opts?.raceId ?? null, raceName: opts?.raceName ?? null });
+  void startRecording(p, {
+    type: "race",
+    raceId: opts?.raceId ?? null,
+    raceName: opts?.raceName ?? null,
+  });
 }
 
 /** 比赛结束/离开时停止录制（落盘 + 元数据含名次） */
-export function raceRecordingStop(playerId: number, meta?: { rank?: number | null; finished?: boolean | null }): void {
+export function raceRecordingStop(
+  playerId: number,
+  meta?: { rank?: number | null; finished?: boolean | null },
+): void {
   if (isRecording(playerId)) {
     void stopRecording(playerId, { quiet: true, ...meta });
   }
