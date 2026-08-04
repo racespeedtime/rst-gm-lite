@@ -60,12 +60,15 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
   const keys = player.getKeys();
   const health = player.getHealth();
   const armour = player.getArmour();
+  // 旋转四元数：车内取车辆（getRotationQuat 返回 {w,x,y,z,ret}），车外取玩家
+  const q = veh ? veh.getRotationQuat() : player.getRotationQuat();
   // 车内：位置/朝向/速度取车辆实体（车辆坐标即玩家位置，车朝向更精确）
   const displayPos = veh ? veh.getPos() : pos;
   const displayAngle = veh ? veh.getZAngle().angle : angle;
+  const quatText = q.ret ? `quat ${r2(q.x)} ${r2(q.y)} ${r2(q.z)} ${r2(q.w)}` : "quat --";
   const lines: string[] = [
     `pos ${r2(displayPos.x)} ${r2(displayPos.y)} ${r2(displayPos.z)}  angle ${r2(displayAngle)}  world ${player.getVirtualWorld()}  int ${player.getInterior()}`,
-    `hp ${Math.ceil(health.health)}  armor ${Math.ceil(armour.armour)}  skin ${player.getSkin()}`,
+    `${quatText}  hp ${Math.ceil(health.health)}  armor ${Math.ceil(armour.armour)}  skin ${player.getSkin()}`,
     `veh ${veh ? veh.id : "-"}  ${Math.floor(kmh)} km/h  keys 0x${(keys.keys & 0xffff).toString(16)} ${pressedKeys(keys.keys)}`,
   ];
   // 观战中：显示被观战对象（玩家/车辆）
