@@ -75,6 +75,10 @@ export interface RecordingSession {
   interceptHits: number;
   /** 诊断：最后一次 RakNet 拦截采样的时间（停止时打印，判断拦截是否"从头到尾都在"） */
   lastRaknetAt: number;
+  /** 掉线挂起标记（掉线重连：会话保持不落盘，挂起期间生成静止帧，重连成功续录） */
+  suspended: boolean;
+  /** 挂起时缓存的最近一帧（静止帧的数据源：位置/姿态/车型/时间天气血量保持，速度按键清零） */
+  suspendFrame: ReplayFrame | null;
 }
 
 const sessions = new Map<number, RecordingSession>();
@@ -274,6 +278,8 @@ export async function startRecording(
     raknetFrames: 0,
     interceptHits: 0,
     lastRaknetAt: 0,
+    suspended: false,
+    suspendFrame: null,
   };
   sessions.set(player.id, session);
   // 诊断：录制开始快照——车内=否时 DriverSync 包不会产生（onfoot 是另一个包），
@@ -442,16 +448,69 @@ export async function stopRecording(
   }
 }
 
-/** 强制停止录制（断线/离开比赛时调用；断线玩家无提示） */
+/** 强制停止录制（断线/离开比赛时调用；断线玩家无提示）。
+ *  掉线挂起中的会话跳过不落盘（保持挂起等重连续录）；需要落盘挂起会话的
+ *  路径（重连超时/服务器退出）直接调 stopRecording。 */
 export async function forceStopRecording(playerId: number): Promise<void> {
-  if (sessions.has(playerId)) {
-    await stopRecording(playerId, { quiet: true });
+  const session = sessions.get(playerId);
+  if (!session || session.suspended) return;
+  await stopRecording(playerId, { quiet: true });
+}
+
+/** 掉线挂起录制（掉线进重连窗口时调用）：标记挂起 + 缓存最近帧作静止帧数据源，
+ *  会话保持不落盘；挂起期间 fallbackSample 生成静止帧（车停在掉线位置）。 */
+export function suspendRecording(playerId: number): void {
+  const session = sessions.get(playerId);
+  if (!session) return;
+  session.suspended = true;
+  session.suspendFrame = session.last ?? null; // 最近采样帧（位置/姿态/车型/时间天气血量）
+}
+
+/** 重连成功续录：清除挂起标记，startWorld 更新为当前世界（重连后玩家已在比赛世界，
+ *  否则 checkRecordingBoundary 的"已离开录制世界"会立即误触发自动停止）。 */
+export function resumeRecording(playerId: number): void {
+  const session = sessions.get(playerId);
+  if (!session) return;
+  const player = Player.getInstance(playerId);
+  session.suspended = false;
+  session.suspendFrame = null;
+  if (player && player.isConnected()) {
+    session.startWorld = player.getVirtualWorld();
   }
+}
+
+/** 丢弃录制会话（不落盘、不建 DB 记录）：挂起中的 race 会话在房间销毁/房主重开时
+ *  直接清掉，防挂起会话永久悬挂。 */
+export function dropRecording(playerId: number): void {
+  sessions.delete(playerId);
 }
 
 /** 兜底采样定时器（每 500ms）：RakNet 中断时补帧，防播放卡顿 */
 function fallbackSample(): void {
   for (const session of sessions.values()) {
+    // 掉线挂起：玩家不在线，车停在掉线位置，时间继续流逝——每 100ms 生成一帧
+    // 静止帧（位置/姿态/车型/时间天气血量保持掉线帧，速度/按键清零）。重连成功
+    // 后 resume 续录，回放可看到"掉线后车停在原地那段的帧"（完整不中断）。
+    if (session.suspended && session.suspendFrame) {
+      if (Date.now() - session.lastSampleAt >= FALLBACK_GAP_MS) {
+        const f = session.suspendFrame;
+        sample(session, {
+          ...f, // 位置/姿态/车型/CP/时间天气/血量保持（车没动）
+          vx: 0,
+          vy: 0,
+          vz: 0, // 速度清零：车停在原地
+          keys: 0,
+          lrKey: 0,
+          udKey: 0,
+          additionalKey: 0,
+          landingGearState: false,
+          sirenState: false,
+          trailerId: 0,
+          trainSpeed: 0,
+        });
+      }
+      continue;
+    }
     if (Date.now() - session.lastSampleAt < FALLBACK_GAP_MS) continue; // 有 RakNet 采样则跳过
     const player = Player.getInstance(session.playerId);
     if (!player || !player.isConnected()) continue;
@@ -544,8 +603,10 @@ export async function cleanupRecorder(): Promise<void> {
     clearIntervalSafe(fallbackTimer);
     fallbackTimer = undefined;
   }
+  // 服务器退出：全部落盘（含挂起中的掉线会话——保留静止段；forceStopRecording
+  // 会跳过挂起会话，这里直接用 stopRecording）
   const ids = [...sessions.keys()];
   for (const id of ids) {
-    await forceStopRecording(id);
+    await stopRecording(id, { quiet: true });
   }
 }

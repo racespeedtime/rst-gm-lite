@@ -22,7 +22,14 @@ import {
   stopReplayForPlayer,
   discardRaceReplay,
 } from "@/replay";
-import { noteCpProgress, stopRecording } from "@/replay/recorder";
+import {
+  noteCpProgress,
+  stopRecording,
+  isRecording,
+  suspendRecording,
+  resumeRecording,
+  dropRecording,
+} from "@/replay/recorder";
 import {
   startObservePlayer,
   stopObserve,
@@ -248,6 +255,10 @@ export function cleanupRacePlayer(playerId: number): void {
         });
         room.members.delete(playerId);
         playerRaces.delete(playerId);
+        // 录制挂起：会话保持、掉线期间 fallbackSample 生成静止帧（车停在掉线
+        // 位置、时间流逝），重连成功后 resume 续录——回放完整不中断，能看到
+        // 掉线后车原地不动那段的帧。不落盘（forceStopRecording 会跳过挂起）。
+        suspendRecording(playerId);
         // 断线期间脚本车辆销毁（重连后玩家自己重新刷车/用脚本）
         cleanupScriptVehicle(playerId);
         // 房主断线：窗口内不转移房主（重连恢复），但保留窗口
@@ -290,6 +301,11 @@ function cleanupExpiredReconnects(room: RaceRoom): void {
     if (now >= until) {
       room.reconnectUntil.delete(pid);
       room.reconnectSlots.delete(pid);
+      // 重连超时：挂起中的录制落盘保留（未完成段，含掉线静止帧——玩家没回来，
+      // 录像停在原地；无人完成则由房间销毁路径作废）
+      if (isRecording(pid)) {
+        void stopRecording(pid, { quiet: true });
+      }
       // 房主重连窗口过期 → 转移房主
       if (room.ownerId === pid) {
         const next = [...room.members.keys()][0];
@@ -546,6 +562,12 @@ export async function restartRace(player: Player): Promise<void> {
     // 重新开始录制，两场成绩互不混入
     void stopRecording(m.id, { quiet: true, discard: true });
     await positionPlayerAtStart(m, room);
+  }
+  // 挂起中的掉线会话（掉线未重连）跨场丢弃：上一场已中止，静止段无续录意义
+  for (const pid of room.raceMembersLast) {
+    if (!playerRaces.has(pid) && isRecording(pid)) {
+      dropRecording(pid);
+    }
   }
   if (wasRunning) {
     broadcastToRoom(room, `[赛车] 房主重开了比赛（赛道不变「${room.raceName}」），成员已回到起点`);
@@ -1177,6 +1199,14 @@ function endRoom(room: RaceRoom): void {
       .show(m)
       .catch(() => {});
   }
+  // 落盘挂起中的掉线会话（掉线未重连、录像含静止段）：比赛结束（有人完成）
+  // 统一保留（在线成员已在上面的 raceRecordingStop 带 rank 落盘；挂起成员
+  // 不在 members 循环里，这里补上，stopRecording 对已落盘的会话无副作用）
+  for (const pid of room.raceMembersLast) {
+    if (isRecording(pid)) {
+      void stopRecording(pid, { quiet: true });
+    }
+  }
   destroyRaceTds(room);
   room.members.clear();
   freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id（供后续房间复用）
@@ -1189,10 +1219,15 @@ function checkRoomState(room: RaceRoom): void {
     if (room.endTimer) clearTimeoutSafe(room.endTimer);
     destroyRaceTds(room);
     // 房间销毁（最后成员离开/断线）：整场无人完成 → 该段比赛回放作废删除。
-    // 掉线重连窗口的玩家不在 members（掉线即删），其录像不在这里作废——
-    // 若重连成功由 tryReconnectRace 删掉线段，重连超时则保留（未完成可回看）。
+    // 挂起中的掉线会话（掉线未重连）直接丢弃（不落盘，静止段无成绩价值）；
+    // 已落盘的未完成段作废（delayed discard 等落盘完成）。
+    // 掉线重连窗口的玩家不在 members（掉线即删），其挂起会话在这里处理。
     for (const pid of room.raceMembersLast.keys()) {
-      discardRaceReplay(pid);
+      if (isRecording(pid)) {
+        dropRecording(pid); // 挂起会话：丢弃
+      } else {
+        discardRaceReplay(pid); // 已落盘段：作废
+      }
     }
     room.raceMembersLast.clear();
     freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id
@@ -1667,9 +1702,6 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     room.reconnectSlots.delete(player.id);
     room.members.set(player.id, player);
     room.raceMembersLast.add(player.id); // 重新登记本场录制成员
-    // 重连成功：作废掉线前那段"未完成"录像（断线瞬间已落盘，无 rank 噪音），
-    // 下面 raceRecordingStart 会新开一段续录（完成时保留）
-    discardRaceReplay(player.id);
     // 恢复战局归属：prevWorld 对应战局若仍存在则加回，否则回公共大世界并修正
     // prevWorld=0（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
     const prevWorld = slot?.prevWorld ?? player.getVirtualWorld();
@@ -1686,8 +1718,13 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     // 切回比赛世界 + 恢复 CP 显示
     player.setVirtualWorld(room.worldId);
     if (room.state === "RACING") {
-      // 回放：重连玩家继续录制（断线时已强制落盘，重连后新开一段）
-      raceRecordingStart(player.id, { raceId: room.raceId, raceName: room.raceName });
+      // 回放：恢复挂起的录制（同一会话续录，掉线静止帧衔接无缝；若挂起会话
+      // 已被其他路径处理——超时落盘/房间销毁/重开丢弃——resume 无会话可恢复，
+      // 则新开一段录制兜底）
+      resumeRecording(player.id);
+      if (!isRecording(player.id)) {
+        raceRecordingStart(player.id, { raceId: room.raceId, raceName: room.raceName });
+      }
       const tds = createRaceTd(player, room);
       // 恢复 BEST TD（房间缓存已有，无则查询）
       void updateBestTd(player, room, tds);
