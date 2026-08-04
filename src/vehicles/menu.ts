@@ -1,4 +1,11 @@
-import { Dialog, DialogStylesEnum, Player, PlayerEvent } from "@infernus/core";
+import {
+  Dialog,
+  DialogStylesEnum,
+  Player,
+  PlayerEvent,
+  Vehicle,
+  VehicleParamsEnum,
+} from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { isPlayerLocked } from "@/core/interaction";
@@ -116,7 +123,7 @@ export async function listVehiclesFlow(player: Player, back?: MenuBack): Promise
   return back?.();
 }
 
-/** 当前爱车管理：锁车/车牌/改色/踢乘客（操作后停留本菜单，取消返回上一层；/wdac 入口） */
+/** 当前爱车管理：锁车/车牌/改色/踢乘客/车灯/引擎盖/行李箱（操作后停留本菜单，取消返回上一层；/wdac 入口） */
 export async function manageCurrentVehicle(player: Player, back?: MenuBack): Promise<void> {
   const veh = getOwnedVehicle(player.id);
   if (!veh) {
@@ -128,7 +135,7 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "当前爱车管理",
-      info: "1. 锁车/解锁\n2. 更换车牌\n3. 更换颜色\n4. 踢出乘客\n5. 回收车辆",
+      info: "1. 锁车/解锁\n2. 更换车牌\n3. 更换颜色\n4. 踢出乘客\n5. 回收车辆\n6. 车灯开关\n7. 引擎盖开关\n8. 行李箱开关",
       button1: "确定",
       button2: "关闭",
     }),
@@ -228,7 +235,48 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
     destroyPlayerVehicle(player.id);
     player.sendClientMessage(COLOR_SUCCESS, "已回收车辆");
     return back?.(); // 回收后车没了，回上一层
+  } else if (res.listItem === 5) {
+    toggleVehicleParam(player, veh, "lights", "车灯");
+    return toThis();
+  } else if (res.listItem === 6) {
+    toggleVehicleParam(player, veh, "bonnet", "引擎盖");
+    return toThis();
+  } else if (res.listItem === 7) {
+    toggleVehicleParam(player, veh, "boot", "行李箱");
+    return toThis();
   }
+}
+
+/**
+ * 翻转车辆开关参数（车灯/引擎盖/行李箱）：读当前参数 → 翻转目标项 → 写回，
+ * 其余参数（引擎/车门/警报等）保持不变。纯临时操作，不落库（重刷车/换车即重置）。
+ */
+function toggleVehicleParam(
+  player: Player,
+  veh: Vehicle,
+  key: "lights" | "bonnet" | "boot",
+  label: string,
+): void {
+  const p = veh.getParamsEx();
+  if (!p.ret) {
+    player.sendClientMessage(COLOR_ERROR, "车辆参数读取失败，请重试");
+    return;
+  }
+  const cur = p[key];
+  const next = cur === VehicleParamsEnum.ON ? VehicleParamsEnum.OFF : VehicleParamsEnum.ON;
+  veh.setParamsEx(
+    p.engine,
+    key === "lights" ? next : p.lights,
+    p.alarm,
+    p.doors,
+    key === "bonnet" ? next : p.bonnet,
+    key === "boot" ? next : p.boot,
+    p.objective,
+  );
+  player.sendClientMessage(
+    COLOR_SUCCESS,
+    `${label}已${next === VehicleParamsEnum.ON ? "开启" : "关闭"}`,
+  );
 }
 
 /**
