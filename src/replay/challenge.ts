@@ -3,6 +3,7 @@ import {
   DialogStylesEnum,
   Dynamic3DTextLabel,
   GameText,
+  KeysEnum,
   Npc,
   Player,
   RaceCheckpoint,
@@ -50,6 +51,8 @@ interface ChallengeGhost {
   lastEmulateAt: number;
   /** emulate/send 失败是否已警告过（一次性防刷屏） */
   warnedEmulateFail: boolean;
+  /** 上次补氮气时刻（SA 氮气有容量，按录制者按键补，500ms 节流防高频 addComponent） */
+  lastNitroAt: number;
 }
 
 export interface ChallengeSession {
@@ -124,11 +127,24 @@ export function destroyAllChallenges(): void {
 function renderGhost(ch: ChallengeSession): void {
   const s = sampleAt(ch.data, ch.ghost.playTime);
   if (!s) return;
+  // 影子播完（playTime 到最后一帧）→ 速度/氮气清零：影子停在终点，挑战者
+  // 仍要看见它作参照（不能停发）。否则尾帧非零速度会让影子在终点持续滑行
+  // 抖动，keys 残留 SPRINT 还会原地喷氮。
+  const maxTime = (ch.data.header.frameCount - 1) * Math.max(1, ch.data.header.frameIntervalMs);
+  const atEnd = ch.ghost.playTime >= maxTime;
   try {
     // 30Hz 发包节流
     const now = Date.now();
     if (now - ch.ghost.lastEmulateAt < 33) return;
     ch.ghost.lastEmulateAt = now;
+    // 氮气跟随录制者按键：SA 氮气有容量、喷完即消失，录制时由 vehicleAuto
+    // 定时补充，挑战影子车无人补——检测到 keys.SPRINT 置位就补一个氮气
+    // 组件（500ms 节流防高频 addComponent），保证该喷的时刻有氮气可喷
+    // （与回放 playback renderGhost 同一套逻辑；播完后 atEnd 不再补）
+    if (s.keys & KeysEnum.SPRINT && !atEnd && now - ch.ghost.lastNitroAt >= 500) {
+      ch.ghost.lastNitroAt = now;
+      ch.ghost.vehicle.addComponent(1010);
+    }
     const bs = new IncomingBitStream();
     try {
       const sync = new InCarSync(bs);
@@ -136,10 +152,10 @@ function renderGhost(ch: ChallengeSession): void {
         vehicleId: ch.ghost.vehicle.id,
         lrKey: s.lrKey,
         udKey: s.udKey,
-        keys: s.keys,
-        quaternion: [s.qx, s.qy, s.qz, s.qw],
+        keys: atEnd ? 0 : s.keys,
+        quaternion: [s.qw, s.qx, s.qy, s.qz], // InCarSync quaternion 序 = [w,x,y,z]
         position: [s.x, s.y, s.z],
-        velocity: [s.vx, s.vy, s.vz],
+        velocity: atEnd ? [0, 0, 0] : [s.vx, s.vy, s.vz], // 播完静止停在终点
         vehicleHealth: s.vehicleHealth,
         playerHealth: 100,
         armour: 0,
@@ -237,8 +253,12 @@ function onChallengePlayerEnter(player: Player): void {
   if (nxt && nxt2) {
     RaceCheckpoint.set(player, 0, nxt.x, nxt.y, nxt.z, nxt2.x, nxt2.y, nxt2.z, nxt.size);
   }
-  const ahead = ch.cpIndex > ghostCp ? "领先影子" : ch.cpIndex < ghostCp ? "落后影子" : "与影子持平";
-  player.sendClientMessage(COLOR_RACE, `[影子] CP ${ch.cpIndex}/${ch.totalCp}（影子 ${ghostCp}/${ch.totalCp}）${ahead}`);
+  const ahead =
+    ch.cpIndex > ghostCp ? "领先影子" : ch.cpIndex < ghostCp ? "落后影子" : "与影子持平";
+  player.sendClientMessage(
+    COLOR_RACE,
+    `[影子] CP ${ch.cpIndex}/${ch.totalCp}（影子 ${ghostCp}/${ch.totalCp}）${ahead}`,
+  );
 }
 
 /** 完成结算（玩家用时 vs 影子用时 = 录制时长） */
@@ -247,12 +267,7 @@ async function finishChallenge(player: Player, ch: ChallengeSession): Promise<vo
   const playerMs = Math.max(0, Date.now() - ch.goAt);
   const ghostMs = ch.data.header.durationMs;
   const diff = playerMs - ghostMs;
-  const verdict =
-    diff <= -500
-      ? "你赢了！"
-      : diff >= 500
-        ? "影子赢了"
-        : "势均力敌！";
+  const verdict = diff <= -500 ? "你赢了！" : diff >= 500 ? "影子赢了" : "势均力敌！";
   await showDialog(
     player,
     new Dialog({
@@ -317,20 +332,24 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     return false;
   }
   // 多场回放可选：跟"哪一场比赛"比由玩家决定（默认最近完成的一场）
-  const chosen = races.length === 1
-    ? races[0]
-    : await showDialog(
-        player,
-        new Dialog({
-          style: DialogStylesEnum.LIST,
-          caption: "选择影子（比赛回放）",
-          info: races
-            .map((r, i) => `${i + 1}. ${r.rank != null ? `No.${r.rank}` : "未完成"} · ${new Date(r.createdAt).toLocaleString("zh-CN", { hour12: false })}`)
-            .join("\n"),
-          button1: "确定",
-          button2: "取消",
-        }),
-      ).then((res) => (res && res.response === 1 ? races[res.listItem] : undefined));
+  const chosen =
+    races.length === 1
+      ? races[0]
+      : await showDialog(
+          player,
+          new Dialog({
+            style: DialogStylesEnum.LIST,
+            caption: "选择影子（比赛回放）",
+            info: races
+              .map(
+                (r, i) =>
+                  `${i + 1}. ${r.rank != null ? `No.${r.rank}` : "未完成"} · ${new Date(r.createdAt).toLocaleString("zh-CN", { hour12: false })}`,
+              )
+              .join("\n"),
+            button1: "确定",
+            button2: "取消",
+          }),
+        ).then((res) => (res && res.response === 1 ? races[res.listItem] : undefined));
   if (!chosen) return false; // 取消选择
   const replay = chosen;
   let data: ReplayData;
@@ -394,7 +413,16 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     // 登记影子 NPC：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
     // 防的是 NPC 自身/残留 sync 与模拟广播冲突）
     registerReplayNpcForReplay(shadowPlayer.id);
-    ghost = { npc, vehicle, label, playTime: 0, npcPlayerId: shadowPlayer.id, lastEmulateAt: 0, warnedEmulateFail: false };
+    ghost = {
+      npc,
+      vehicle,
+      label,
+      playTime: 0,
+      npcPlayerId: shadowPlayer.id,
+      lastEmulateAt: 0,
+      warnedEmulateFail: false,
+      lastNitroAt: 0,
+    };
   } catch (e) {
     logger.error(`[replay] 创建挑战影子失败`, e);
     player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足或创建失败");
@@ -428,7 +456,11 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     owned.setVirtualWorld(worldId);
     owned.putPlayerIn(player, 0);
   } else {
-    await spawnVehicle(player, getDefaultRaceModel(cps.map(() => ({ scripts: [] as string[] }))), true);
+    await spawnVehicle(
+      player,
+      getDefaultRaceModel(cps.map(() => ({ scripts: [] as string[] }))),
+      true,
+    );
     if (!player.isConnected()) {
       cleanupChallenge(player.id); // await 期间断线 → 清理 ghost
       return false;
@@ -445,8 +477,21 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
   player.setPos(ch.cps[0].x, ch.cps[0].y, ch.cps[0].z);
   // 第一个 CP 箭头（指向第二个）
   const nxt2 = ch.cps[1];
-  RaceCheckpoint.set(player, 0, ch.cps[0].x, ch.cps[0].y, ch.cps[0].z, nxt2.x, nxt2.y, nxt2.z, ch.cps[0].size);
-  player.sendClientMessage(COLOR_SUCCESS, `影子挑战开始！目标 ${replay.raceName ?? "该赛道"}，跑完自动结算（中途 /challenge stop 可退出）`);
+  RaceCheckpoint.set(
+    player,
+    0,
+    ch.cps[0].x,
+    ch.cps[0].y,
+    ch.cps[0].z,
+    nxt2.x,
+    nxt2.y,
+    nxt2.z,
+    ch.cps[0].size,
+  );
+  player.sendClientMessage(
+    COLOR_SUCCESS,
+    `影子挑战开始！目标 ${replay.raceName ?? "该赛道"}，跑完自动结算（中途 /challenge stop 可退出）`,
+  );
 
   // 发车倒计时 3 秒（对齐比赛：~y~N + 音效 1056；倒计时期间 ghost 停在起点、不计玩家用时）。
   // 倒计时结束才启动 ghost 推进定时器（登记制）。

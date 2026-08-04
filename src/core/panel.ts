@@ -344,9 +344,9 @@ async function showGroupMenu(player: Player, group: PanelGroup, back: MenuBack):
 
 /** 注册万能面板入口：
  * - Y 键（按下瞬间触发）
- * - /panel 命令：观战（spectator）模式下客户端收不到按键事件（open.mp 文档
+ * - /p 命令：观战（spectator）模式下客户端收不到按键事件（open.mp 文档
  *   明确 "This key can not be detected when the player is in spectator mode"），
- *   但聊天框命令不受 spect 限制——观战中可用 /panel 打开面板 */
+ *   但聊天框命令不受 spect 限制——观战中可用 /p 打开面板 */
 export function initPanel(): void {
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     const pressed = isPressed(newKeys, oldKeys, KeysEnum.YES); // 按下瞬间（旧没按、新按下）
@@ -360,18 +360,26 @@ export function initPanel(): void {
     return next();
   });
 
-  PlayerEvent.onCommandText("panel", ({ player, next }) => {
-    // 与 Y 键同样的前置校验：未认证 / 在其它流程中（对话框互斥）时不打开，
-    // 避免覆盖当前对话框或把别人的流程锁解开
+  // 命令打开面板（与 Y 键同样的前置校验：未认证 / 在其它流程中（对话框互斥）
+  // 时不打开，避免覆盖当前对话框或把别人的流程锁解开）
+  const openPanelByCommand = (player: Player): void => {
     if (!getAuthState(player.id)) {
       player.sendClientMessage(COLOR_ERROR, "请先完成登录");
-      return next();
+      return;
     }
     if (isPlayerLocked(player.id)) {
       player.sendClientMessage(COLOR_INFO, "当前正在其他流程中，请稍后再试");
-      return next();
+      return;
     }
     void openPanel(player); // openPanel 内部自行 lock/unlock
+  };
+  // /p 为主命令（短），/panel 保留兼容别名（老玩家习惯/旧文档）
+  PlayerEvent.onCommandText("p", ({ player, next }) => {
+    openPanelByCommand(player);
+    return next();
+  });
+  PlayerEvent.onCommandText("panel", ({ player, next }) => {
+    openPanelByCommand(player);
     return next();
   });
 }

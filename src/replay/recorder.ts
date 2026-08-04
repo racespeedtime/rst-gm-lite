@@ -5,7 +5,16 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
-import { encodeHeader, encodeFrame, HEADER_BYTES, FRAME_BYTES, REPLAY_TYPE_GHOST, REPLAY_TYPE_RACE, type ReplayFrame, type ReplayHeader } from "./format";
+import {
+  encodeHeader,
+  encodeFrame,
+  HEADER_BYTES,
+  FRAME_BYTES,
+  REPLAY_TYPE_GHOST,
+  REPLAY_TYPE_RACE,
+  type ReplayFrame,
+  type ReplayHeader,
+} from "./format";
 import { saveRecordingFile, deleteRecordingFile } from "./storage";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
 
@@ -305,9 +314,9 @@ export async function stopRecording(
 
   const player = Player.getInstance(playerId);
   // 停止瞬间无条件补一帧当前车辆状态：保证尾帧 = 录制结束位置。
-  // 原条件（距上次采样 > 兜底间隔才补）会漏补——最后一段采样间隔较短时
-  // 尾帧停留在最后一次采样的旧位置，回放终点与结束位置不一致（ghost 停在
-  // 录制中途的位置）。停止帧是播放终点的锚点，必须无条件落盘。
+  // （补帧用 getRotationQuat 的 {w,x,y,z} 成员序，与 RakNet 拦截帧的
+  // quaternion [w,x,y,z] 统一写帧为 qx=x/qy=y/qz=z/qw=w，两路数据同约定，
+  // 不会错位。）
   if (player && player.isConnected()) {
     const f = captureVehicleFrame(player, session);
     if (f) sample(session, f);
@@ -383,7 +392,10 @@ export async function stopRecording(
       },
     });
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage(COLOR_SUCCESS, `录制完成：${(durationMs / 1000).toFixed(1)}s / ${session.frames.length} 帧`);
+      player.sendClientMessage(
+        COLOR_SUCCESS,
+        `录制完成：${(durationMs / 1000).toFixed(1)}s / ${session.frames.length} 帧`,
+      );
     }
     // 采样来源诊断（定位录制帧数少/0.1s 问题）：
     // - interceptHits=0 → DriverSync 回调从未触发（插件未转发/包未到达）
@@ -392,7 +404,8 @@ export async function stopRecording(
     // - raknetFrames>0 但总量少 → 玩家没在开车（DriverSync 只在司机位产生）
     // - lastRaknetAt 距停止很远 → 录制中后期拦截中断
     const elapsed = durationMs / 1000;
-    const lastHitAgo = session.lastRaknetAt > 0 ? ((Date.now() - session.lastRaknetAt) / 1000).toFixed(1) : "无";
+    const lastHitAgo =
+      session.lastRaknetAt > 0 ? ((Date.now() - session.lastRaknetAt) / 1000).toFixed(1) : "无";
     logger.info(
       `[replay] 录制落盘 ${fileName} ${elapsed.toFixed(1)}s/${session.frames.length}帧` +
         `（RakNet=${session.raknetFrames} 拦截=${session.interceptHits} 兜底=${session.frames.length - session.raknetFrames} 最后拦截于${lastHitAgo}s前）`,
@@ -464,10 +477,12 @@ export function initRecorder(): void {
                 x: p[0],
                 y: p[1],
                 z: p[2],
-                qx: q[0],
-                qy: q[1],
-                qz: q[2],
-                qw: q[3],
+                // InCarSync quaternion 为 [w,x,y,z]（packet 序），写帧统一
+                // 为 qx=x/qy=y/qz=z/qw=w，与 getRotationQuat 补帧同约定
+                qw: q[0],
+                qx: q[1],
+                qy: q[2],
+                qz: q[3],
                 vx: v[0],
                 vy: v[1],
                 vz: v[2],

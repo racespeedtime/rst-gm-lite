@@ -11,7 +11,7 @@ import { COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
 /**
  * 回放命令：
  * /rec start|stop|list — 自定义录制（562 漂移等，赛车系统外）
- * /rp play|pause|forward|back|speed|seek|stop — 回放控制
+ * /rp play|pause|speed|seek|stop — 回放控制（只支持正放）
  */
 
 function guard(player: Player, next: () => unknown): boolean {
@@ -64,7 +64,10 @@ export function initReplayCommands(): void {
       void openReplayMenu(player);
       return next();
     }
-    player.sendClientMessage(COLOR_INFO, "用法: /rec start 开始录制 · /rec stop 停止 · /rec list 我的录制");
+    player.sendClientMessage(
+      COLOR_INFO,
+      "用法: /rec start 开始录制 · /rec stop 停止 · /rec list 我的录制",
+    );
     return next();
   });
 
@@ -85,8 +88,6 @@ export function initReplayCommands(): void {
         return next();
       }
       case "pause":
-      case "forward":
-      case "back":
       case "speed":
       case "seek":
       case "watch":
@@ -94,12 +95,23 @@ export function initReplayCommands(): void {
         controlReplay(player, action, arg);
         return next();
       }
-      default:
+      case "help":
+      default: {
         player.sendClientMessage(
           COLOR_INFO,
-          "用法: /rp play 开始/继续 · /rp pause 暂停 · /rp forward [2|4] 快进 · /rp back [0.5|1|2|4] 倒放 · /rp speed [0.5|1|2|4] 倍速 · /rp seek 秒 跳转 · /rp stop 停止",
+          [
+            "用法: /rp <指令> [参数]",
+            "  play      开始/继续播放（暂停后恢复；未在播放则打开我的录制）",
+            "  pause     暂停",
+            "  speed [0.5|0.75|1|1.25|1.5|2|4]  倍速（不填则提示当前倍速）",
+            "  seek <秒|mm:ss>  跳转（多分身保持错峰）",
+            "  watch     观看回放视角（比赛回放带 C P/TIME/BEST）",
+            "  stop      停止回放",
+            "面板入口：/p → 回放 分组，功能与命令一致",
+          ].join("\n"),
         );
         return next();
+      }
     }
   });
 

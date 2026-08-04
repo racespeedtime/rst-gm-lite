@@ -50,12 +50,14 @@ export function deleteRecordingFile(fileName: string): void {
 
 /**
  * 清理孤儿回放文件 + .tmp 残留：
- * - orphanNames：有文件但 DB 无记录（录制写文件后 DB 失败等历史残留）→ 删除
+ * - knownNames：DB 中仍有效（deletedAt=null）的文件名集合 = 磁盘上应保留的合法文件
+ * - 磁盘文件不在 knownNames 里 → 孤儿（录制写文件后 DB 失败、软删时删文件失败等
+ *   历史残留）→ 删除；在 knownNames 里的合法文件一律保留
  * - 所有 .tmp：上次写文件中断留下的半成品 → 删除
  * 服务器启动时调用（GameMode.onInit）。
  */
-export function cleanupOrphanFiles(orphanNames: string[]): void {
-  const orphan = new Set(orphanNames);
+export function cleanupOrphanFiles(knownNames: string[]): void {
+  const known = new Set(knownNames);
   try {
     if (!existsSync(RECORDING_DIR)) return;
     for (const f of readdirSync(RECORDING_DIR)) {
@@ -63,7 +65,7 @@ export function cleanupOrphanFiles(orphanNames: string[]): void {
       if (f.endsWith(".tmp")) {
         rmSync(full, { force: true });
         logger.warn(`[replay] 清理残留临时文件 ${f}`);
-      } else if (orphan.has(f)) {
+      } else if (!known.has(f)) {
         rmSync(full, { force: true });
         logger.warn(`[replay] 清理孤儿回放文件 ${f}`);
       }

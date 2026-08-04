@@ -1,4 +1,4 @@
-import { Dynamic3DTextLabel, Npc, Player, TextDraw, Vehicle } from "@infernus/core";
+import { Dynamic3DTextLabel, KeysEnum, Npc, Player, TextDraw, Vehicle } from "@infernus/core";
 import { InCarSync, IncomingBitStream } from "@infernus/raknet";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
@@ -8,7 +8,13 @@ import { isInChallenge } from "./challenge";
 import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import { startObserveVehicle, stopObserve, isObserving } from "@/core/observe";
-import { parseReplayFile, decodeFrame, lerpFrame, type ReplayData, type ReplayFrame } from "./format";
+import {
+  parseReplayFile,
+  decodeFrame,
+  lerpFrame,
+  type ReplayData,
+  type ReplayFrame,
+} from "./format";
 import { join } from "node:path";
 import { RECORDING_DIR } from "./storage";
 import { DEFAULT_CHARSET } from "@/utils/constants";
@@ -24,7 +30,8 @@ import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/co
  *   CP 脚本是离散事件，NPC 不触发 onPlayerReachCp——seek/回退时"恢复状态而非
  *   重放事件"，天然无事件顺序问题。观战者的比赛 TD（C P/TIME/BEST）也从帧状态
  *   渲染（事件无关），NPC 的 TextDraw 状态观战者完整可见。
- * - 控制：播放/暂停/快进/后退/倍速/seek（时间线变动，前后一致性由帧序插值保证）
+ * - 控制：播放/暂停/正放/倍速/seek（只支持正放——倒放时帧间速度插值方向与
+ *   录制速度矛盾，客户端物理按正向速度处理，车辆会一抽一抽，故不支持）
  * - 多分身：同一数据错峰起始（每 ghost 独立 playTime，控制同步作用于全部）
  * - 观看：发起人自动 startObserveVehicle(ghost 车)（复用观战系统）
  * - 清理：/rp stop / 发起人断线 / onExit 全路径销毁
@@ -79,6 +86,8 @@ export function freeReplayWorld(worldId: number): void {
 
 /** 播放推进帧间隔（60fps） */
 const TICK_MS = 16;
+/** 支持的倍速档位（/rp speed、面板倍速输入共用校验） */
+const REPLAY_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4];
 /** emulate 发包节流：对齐 open.mp in_vehicle_sync_rate=30（30Hz）——60fps tick
  *  每 2 tick 发一个 DriverSync 模拟包（发太多服务器会合并/浪费） */
 const EMULATE_INTERVAL_MS = 33;
@@ -90,6 +99,7 @@ interface Ghost {
   label: Dynamic3DTextLabel;
   /** 该分身的播放时间（毫秒，从文件起点；错峰起始） */
   playTime: number;
+  /** 该分身的错峰偏移（毫秒，相对文件起点；seek 时叠加保持错峰） */
   staggerMs: number;
   /** 当前车辆模型（帧车型变化时重建） */
   model: number;
@@ -99,6 +109,10 @@ interface Ghost {
   lastEmulateAt: number;
   /** emulate/send 失败是否已警告过（一次性防刷屏） */
   warnedEmulateFail: boolean;
+  /** 已播完（playTime 到终点）：停止 emulate 驱动标志（seek 回看时重置） */
+  stopped: boolean;
+  /** 上次补氮气时刻（SA 氮气有容量，按录制者按键补，500ms 节流防高频 addComponent） */
+  lastNitroAt: number;
 }
 
 export interface ReplaySession {
@@ -118,7 +132,6 @@ export interface ReplaySession {
   /** 会话级播放状态（作用于所有 ghost） */
   playing: boolean;
   paused: boolean;
-  direction: 1 | -1;
   speed: number; // 倍速 0.5~4
   timer?: NodeJS.Timeout;
   /** 上次播放推进时间（真实流逝计时）：
@@ -373,15 +386,34 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
  * 录制帧，客户端物理驱动平滑。30Hz 节流（对齐 in_vehicle_sync_rate）。
  */
 function renderGhost(session: ReplaySession, ghost: Ghost): void {
+  // 已停发（播完）：不再 emulate，车辆静止停在终点
+  if (ghost.stopped) return;
   const s = sampleAt(session.data, ghost.playTime);
   if (!s) return;
+  const maxTime =
+    (session.data.header.frameCount - 1) * Math.max(1, session.data.header.frameIntervalMs);
+  // 播完判定：playTime 已 clamp 到终点 → 发完这一帧即停止驱动。否则会持续
+  // 重发"位置恒定、速度非零"的尾帧——客户端物理每帧按速度跑动又被服务器拉回，
+  // 车辆原地抖动/朝向乱转（终点地面起伏或碰撞干扰时更明显）。
+  const atEnd = ghost.playTime >= maxTime;
+  if (atEnd) ghost.stopped = true;
   try {
     ensureGhostVehicle(session, ghost, s.vehicleModel);
     // 30Hz 发包节流（60fps tick 每 2 tick 一次；seek/快进时播放时间跳变，
-    // 首帧/跳转帧立即发一次保证位置同步）
+    // 首帧/跳转帧立即发一次保证位置同步）。atEnd 帧必须强制发——它是
+    // 客户端收到的最后一帧（含速度清零），若被节流跳过则停发前最后发的是
+    // 带非零速度的旧帧，车辆在终点仍会滑行。
     const now = Date.now();
-    if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS) return;
+    if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS && !atEnd) return;
     ghost.lastEmulateAt = now;
+    // 氮气跟随录制者按键：SA 氮气有容量、喷完即消失，录制时由 vehicleAuto
+    // 定时补充，回放 NPC 车无人补——检测到 keys.SPRINT 置位就给车补一个氮气
+    // 组件（500ms 节流防高频 addComponent），保证该喷的时刻有氮气可喷
+    // （否则氮气耗尽后 keys 仍按住却不喷，表现断断续续像点按）。
+    if (s.keys & KeysEnum.SPRINT && now - ghost.lastNitroAt >= 500) {
+      ghost.lastNitroAt = now;
+      ghost.vehicle.addComponent(1010);
+    }
     // 血量：emulate 的 DriverSync 包已带 vehicleHealth，服务器按真实司机
     // 处理时会应用到车辆实体并广播，无需显式 setHealth（重复操作）
     // 构造 DriverSync 包并模拟 NPC 传入（incoming 上下文 → 包内不含 playerId，
@@ -394,9 +426,11 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
         lrKey: s.lrKey,
         udKey: s.udKey,
         keys: s.keys, // SPRINT=氮气，客户端据此在对应时刻喷氮
-        quaternion: [s.qx, s.qy, s.qz, s.qw],
+        quaternion: [s.qw, s.qx, s.qy, s.qz], // InCarSync quaternion 序 = [w,x,y,z]
         position: [s.x, s.y, s.z],
-        velocity: [s.vx, s.vy, s.vz], // 录制 SA 速度单位（getVelocity 值）
+        // atEnd 速度清零：尾帧非零速度会让客户端物理在停发后继续滑行，
+        // 撞上终点地形/物体 → 翻车、朝向乱转。清零后车辆静止停在终点。
+        velocity: atEnd ? [0, 0, 0] : [s.vx, s.vy, s.vz],
         vehicleHealth: s.vehicleHealth,
         playerHealth: 100,
         armour: 0,
@@ -449,27 +483,19 @@ function tickSession(session: ReplaySession): void {
   const now = Date.now();
   const elapsed = Math.min(250, now - session.lastTickAt);
   session.lastTickAt = now;
-  const dt = elapsed * session.speed * session.direction;
+  const dt = elapsed * session.speed;
   const lastIdx = session.data.header.frameCount - 1;
   const maxTime = lastIdx * session.data.header.frameIntervalMs;
-  // 倒放/后退离开结尾 → 重置"已播完"提示标记（back/seek 后再次正放播完会重新提示）
-  if (session.direction === -1 && session.endedNotified) {
-    session.endedNotified = false;
-  }
   for (const g of session.ghosts) {
-    // 播放时间推进并 clamp 到 [0, maxTime]（播到头/退到头停在边界，不循环）
+    // 播放时间推进并 clamp 到 [0, maxTime]（播到结尾停在边界，不循环；seek 可回看）
     g.playTime = Math.min(maxTime, Math.max(0, g.playTime + dt));
   }
-  // 播完提示（一次）：正向播放到达结尾 → 提示用户可后退/seek 继续看
-  if (
-    !session.endedNotified &&
-    session.direction === 1 &&
-    session.ghosts.every((g) => g.playTime >= maxTime)
-  ) {
+  // 播完提示（一次）：播放到达结尾 → 提示用户可 seek 继续看
+  if (!session.endedNotified && session.ghosts.every((g) => g.playTime >= maxTime)) {
     session.endedNotified = true;
     const owner = Player.getInstance(session.ownerId);
     if (owner && owner.isConnected()) {
-      owner.sendClientMessage(COLOR_RACE, "回放已播完（/rp back 或 /rp seek 可回看）");
+      owner.sendClientMessage(COLOR_RACE, "回放已播完（/rp seek 可回看）");
     }
   }
   for (const g of session.ghosts) renderGhost(session, g);
@@ -483,7 +509,9 @@ function syncObserverTds(session: ReplaySession): void {
   if (session.tds.size === 0 || session.ghosts.length === 0) return;
   const s = sampleAt(session.data, session.ghosts[0].playTime);
   if (!s) return;
-  const idx = Math.floor(session.ghosts[0].playTime / Math.max(1, session.data.header.frameIntervalMs));
+  const idx = Math.floor(
+    session.ghosts[0].playTime / Math.max(1, session.data.header.frameIntervalMs),
+  );
   const timeMs = idx * session.data.header.frameIntervalMs;
   const cpText = `C  P / ~p~${s.cpProgress}~w~/~y~${session.data.header.totalCp || 1}`;
   const timeText = `TIME / ${fmtRaceTime(timeMs)}`;
@@ -519,7 +547,11 @@ function syncObserverTds(session: ReplaySession): void {
  * 创建回放会话并开始播放（发起人自动观战第一个 ghost）。
  * replayId 必须存在且未删除；文件损坏/不存在返回提示。
  */
-export async function spawnReplay(player: Player, replayId: string, opts?: { npcCount?: number }): Promise<boolean> {
+export async function spawnReplay(
+  player: Player,
+  replayId: string,
+  opts?: { npcCount?: number; staggerMs?: number },
+): Promise<boolean> {
   const auth = getAuthState(player.id);
   if (!auth) return false;
   if (sessions.has(player.id)) {
@@ -565,7 +597,8 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
   const worldId = isGhost ? player.getVirtualWorld() : allocReplayWorld();
   const ghosts: Ghost[] = [];
   const duration = data.header.frameCount * data.header.frameIntervalMs;
-  const staggerMs = count > 1 ? duration / count : 0;
+  // 分身错峰间隔：自定义（opts.staggerMs，毫秒）或自动等分总时长（count 辆均匀铺开）
+  const baseGap = opts?.staggerMs ?? (count > 1 ? duration / count : 0);
 
   try {
     for (let i = 0; i < count; i++) {
@@ -579,7 +612,9 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
           player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足，回放创建失败");
           return false;
         }
-        logger.warn(`[replay] ${player.getName().name} 分身 ${i + 1}/${count} NPC 分配失败，降级为 ${ghosts.length} 台`);
+        logger.warn(
+          `[replay] ${player.getName().name} 分身 ${i + 1}/${count} NPC 分配失败，降级为 ${ghosts.length} 台`,
+        );
         break;
       }
       const npcPlayer = npc.getPlayer();
@@ -625,12 +660,14 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
         npc,
         vehicle,
         label,
-        playTime: i * staggerMs,
-        staggerMs,
+        playTime: i * baseGap, // 错峰起始（相对文件起点）
+        staggerMs: i * baseGap, // 该分身的错峰偏移（seek 保持错峰用）
         model: data.header.vehicleModelId,
         npcPlayerId: npcPlayer.id,
         lastEmulateAt: 0,
         warnedEmulateFail: false,
+        stopped: false,
+        lastNitroAt: 0,
       });
     }
   } catch (e) {
@@ -661,7 +698,6 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     recorderName: replay.recorderName,
     playing: true,
     paused: false,
-    direction: 1,
     speed: 1,
     lastTickAt: Date.now(),
     endedNotified: false,
@@ -682,7 +718,7 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
     // 可一起玩；控制只对自己会话生效（各看各的）；/rp watch 进入自己的观战视角
     player.sendClientMessage(
       COLOR_SUCCESS,
-      `回放已开始：${ghosts.length} 台车在世界上重播 · /rp 控制（暂停/快进/后退/倍速/seek）· /rp watch 观战`,
+      `回放已开始：${ghosts.length} 台车在世界上重播 · /rp 控制（暂停/快进/倍速/seek）· /rp watch 观战`,
     );
     return true;
   }
@@ -698,7 +734,10 @@ export async function spawnReplay(player: Player, replayId: string, opts?: { npc
   } catch {
     /* 观战失败不影响播放 */
   }
-  player.sendClientMessage(COLOR_SUCCESS, `回放已开始：${ghosts.length} 台车 · /rp 控制（暂停/快进/后退/倍速/seek）`);
+  player.sendClientMessage(
+    COLOR_SUCCESS,
+    `回放已开始：${ghosts.length} 台车 · /rp 控制（暂停/快进/倍速/seek）`,
+  );
   return true;
 }
 
@@ -715,31 +754,26 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       player.sendClientMessage(COLOR_RACE, "回放已暂停");
       break;
     }
-    case "resume":
     case "play": {
+      // 只支持正放：播放/继续都是同一件事（解除暂停继续推进）
       session.paused = false;
-      session.direction = 1;
-      player.sendClientMessage(COLOR_RACE, "回放继续");
-      break;
-    }
-    case "forward": {
-      // 只切方向（正放），保持当前倍速——倍速由 /rp speed 单独调
-      session.direction = 1;
-      session.paused = false;
-      player.sendClientMessage(COLOR_RACE, `正放 ×${session.speed}`);
-      break;
-    }
-    case "back": {
-      // 只切方向（倒放），保持当前倍速
-      session.direction = -1;
-      session.paused = false;
-      player.sendClientMessage(COLOR_RACE, `倒放 ×${session.speed}`);
+      // 全部 ghost 已播完（停发）→ 按 play 不会动，明确提示回看而非无响应
+      if (session.ghosts.every((g) => g.stopped)) {
+        player.sendClientMessage(COLOR_RACE, "回放已播完（/rp seek 可回看）");
+        break;
+      }
+      player.sendClientMessage(COLOR_RACE, `回放继续 ×${session.speed}`);
       break;
     }
     case "speed": {
+      if (!arg) {
+        // 不填参数：只显示当前倍速（对齐命令帮助的提示逻辑）
+        player.sendClientMessage(COLOR_RACE, `当前倍速 ×${session.speed}`);
+        break;
+      }
       const n = Number(arg);
-      session.speed = n === 0.5 || n === 1 || n === 2 || n === 4 ? n : 1;
-      player.sendClientMessage(COLOR_RACE, `倍速 ×${session.speed}（方向${session.direction === 1 ? "正放" : "倒放"}）`);
+      session.speed = REPLAY_SPEEDS.includes(n) ? n : 1;
+      player.sendClientMessage(COLOR_RACE, `倍速 ×${session.speed}`);
       break;
     }
     case "seek": {
@@ -755,10 +789,15 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       const max = session.data.header.frameCount * session.data.header.frameIntervalMs;
       const target = Math.min(max, Math.max(0, ms));
       for (const g of session.ghosts) {
-        g.playTime = target;
+        // 保持分身的错峰偏移：各分身落在 target + 自身偏移（clamp 到文件末尾），
+        // 否则 seek 后全部分身重合在同一时刻，错峰演示被破坏
+        g.playTime = Math.min(max, target + g.staggerMs);
         // seek 后强制立即发包：重置节流时间戳，否则距上次发包 <33ms 时
         // renderGhost 会被节流跳过，ghost 位置延迟最多 1 tick
         g.lastEmulateAt = 0;
+        // 恢复驱动：seek 回看重新开始发包（seek 到结尾会发一次尾帧后由
+        // renderGhost 重新标记停发）
+        g.stopped = false;
       }
       // seek 离开结尾 → 重置"已播完"提示标记（再次正放播完会重新提示）
       if (target < max) session.endedNotified = false;
@@ -838,7 +877,12 @@ export function stopReplaySession(playerId: number): void {
   // 比赛回放（独立世界）：玩家可能在其中刷过车 → 恢复玩家世界 + 爱车世界，
   // 防爱车留在独立世界成幽灵车（仅当玩家仍在回放世界；已离开则不覆盖其状态）
   const owner = Player.getInstance(playerId);
-  if (owner && owner.isConnected() && session.replayType === "race" && owner.getVirtualWorld() === session.worldId) {
+  if (
+    owner &&
+    owner.isConnected() &&
+    session.replayType === "race" &&
+    owner.getVirtualWorld() === session.worldId
+  ) {
     owner.setVirtualWorld(session.ownerPrevWorld);
     const owned = getOwnedVehicle(playerId);
     if (owned && owned.isValid() && owned !== owner.getVehicle()) {

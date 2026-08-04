@@ -25,7 +25,12 @@ function typeLabel(t: string): string {
 }
 
 /** 二次确认删除（本人）：MSGBOX 确认 + INPUT 输入文件名二次验证（复用删除赛道模式） */
-async function confirmDeleteReplay(player: Player, replayId: string, fileName: string, back?: MenuBack): Promise<void> {
+async function confirmDeleteReplay(
+  player: Player,
+  replayId: string,
+  fileName: string,
+  back?: MenuBack,
+): Promise<void> {
   const c = await showDialog(
     player,
     new Dialog({
@@ -92,7 +97,7 @@ export async function openReplayMenu(player: Player, back?: MenuBack): Promise<v
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "回放操作",
-      info: "1. 观看（1 台车）\n2. 分身挑战（3 台车错峰同跑）\n3. 删除",
+      info: "1. 观看（1 台车）\n2. 分身挑战（2-5 台错峰同跑）\n3. 删除",
       button1: "执行",
       button2: "取消",
     }),
@@ -104,11 +109,39 @@ export async function openReplayMenu(player: Player, back?: MenuBack): Promise<v
     return back?.();
   }
   if (op.listItem === 1) {
-    await spawnReplay(player, replay.id, { npcCount: 3 });
+    // 分身挑战：选数量（2-5 台）→ 选错峰间隔（秒，留空/0 = 自动均分全程）
+    const cnt = await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.LIST,
+        caption: "分身数量",
+        info: "1. 2 台\n2. 3 台\n3. 4 台\n4. 5 台",
+        button1: "确定",
+        button2: "取消",
+      }),
+    );
+    if (!cnt || cnt.response !== 1) return back?.();
+    const n = cnt.listItem + 2; // 2..5
+    const gap = await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.INPUT,
+        caption: "错峰间隔",
+        info: "分身起步间隔（秒，留空或 0 = 自动均分全程）：",
+        button1: "确定",
+        button2: "取消",
+      }),
+    );
+    if (!gap || gap.response !== 1) return back?.();
+    const sec = Number(gap.inputText.trim());
+    const staggerMs = Number.isFinite(sec) && sec > 0 ? Math.round(sec * 1000) : undefined;
+    await spawnReplay(player, replay.id, { npcCount: n, staggerMs });
     return back?.();
   }
   if (op.listItem === 2) {
-    await confirmDeleteReplay(player, replay.id, replay.fileName, () => openReplayMenu(player, back));
+    await confirmDeleteReplay(player, replay.id, replay.fileName, () =>
+      openReplayMenu(player, back),
+    );
   }
 }
 
@@ -141,7 +174,9 @@ export async function openOpReplayPanel(player: Player, back?: MenuBack): Promis
     button2: "取消",
   });
   if (!r) return back?.();
-  await confirmDeleteReplay(player, r.item.id, r.item.fileName, () => openOpReplayPanel(player, back));
+  await confirmDeleteReplay(player, r.item.id, r.item.fileName, () =>
+    openOpReplayPanel(player, back),
+  );
 }
 
 /** 万能面板"回放"分组菜单（开始/停止录制 + 我的录制 + 回放控制） */
@@ -154,7 +189,7 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
       info: [
         "1. 我的录制（观看 / 分身挑战 / 删除）",
         `2. ${isRecording(player.id) ? "停止录制（落盘）" : "开始录制（当前行驶）"}`,
-        "3. 回放控制（播放 / 暂停 / 快进 / 后退 / 倍速 / 跳转 / 停止）",
+        "3. 回放控制（播放 / 暂停 / 倍速 / 跳转 / 停止）",
       ].join("\n"),
       button1: "执行",
       button2: "关闭",
@@ -181,7 +216,7 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
   }
 }
 
-/** 回放控制菜单（播放/暂停/快进/后退/倍速/跳转/停止） */
+/** 回放控制菜单（播放/暂停/倍速/跳转/停止；回放只支持正放） */
 export async function openReplayControlMenu(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
@@ -191,12 +226,10 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       info: [
         "1. 播放 / 继续",
         "2. 暂停",
-        "3. 正放（保持倍速）",
-        "4. 倒放（保持倍速）",
-        "5. 倍速（0.5 / 1 / 2 / 4，保持方向）",
-        "6. 跳转时间（秒）",
-        "7. 观看视角",
-        "8. 停止回放",
+        "3. 倍速（0.5 / 1 / 2 / 4）",
+        "4. 跳转时间（秒）",
+        "5. 观看视角",
+        "6. 停止回放",
       ].join("\n"),
       button1: "执行",
       button2: "关闭",
@@ -205,7 +238,7 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
   if (!res) return;
   if (res.response !== 1) return back?.();
   const session = getReplaySession(player.id);
-  if (!session && res.listItem !== 7) {
+  if (!session && res.listItem !== 5) {
     player.sendClientMessage(COLOR_ERROR, "你不在播放回放中，先在「我的录制」选择播放");
     return back?.();
   }
@@ -216,19 +249,13 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
     case 1:
       controlReplay(player, "pause");
       return back?.();
-    case 2:
-      controlReplay(player, "forward");
-      return back?.();
-    case 3:
-      controlReplay(player, "back");
-      return back?.();
-    case 4: {
+    case 2: {
       const sp = await showDialog(
         player,
         new Dialog({
           style: DialogStylesEnum.INPUT,
           caption: "倍速",
-          info: "输入倍速（0.5 / 1 / 2 / 4）：",
+          info: "输入倍速（0.5 / 0.75 / 1 / 1.25 / 1.5 / 2 / 4）：",
           button1: "确定",
           button2: "取消",
         }),
@@ -237,7 +264,7 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       controlReplay(player, "speed", sp.inputText.trim());
       return back?.();
     }
-    case 5: {
+    case 3: {
       const t = await showDialog(
         player,
         new Dialog({
@@ -252,10 +279,10 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       controlReplay(player, "seek", t.inputText.trim());
       return back?.();
     }
-    case 6:
+    case 4:
       controlReplay(player, "watch");
       return back?.();
-    case 7:
+    case 5:
       controlReplay(player, "stop");
       return back?.();
   }
