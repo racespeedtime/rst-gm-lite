@@ -57,7 +57,7 @@ const RACE_MAP_ICON_NEXT = 70;
 const RACE_MAP_ICON_TYPE_NEXT = 56;
 /** 比赛房间独立世界起始 id（战局上限 1000，比赛从 1001 起；回放/挑战世界从
  *   REPLAY_WORLD_BASE=2001 起，两区间各 1000 个互不叠加） */
-const RACE_WORLD_BASE = 1001;
+export const RACE_WORLD_BASE = 1001;
 let nextRaceWorldId = RACE_WORLD_BASE;
 /**
  * 已销毁房间释放的比赛世界 id（复用防无界增长）：

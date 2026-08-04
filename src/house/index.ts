@@ -15,18 +15,26 @@ import { registerObjectCollision, clearObjectCollisions } from "@/core/collision
 import { teleportTo } from "@/teleport";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
+import { RACE_WORLD_BASE } from "@/race/room";
 
 import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
 
 /**
- * 房屋物件可见世界区间：公共大世界 0 + 战局 1..1000（按数组传，streamer 支持）。
- * 比赛（1001..2000）与回放/挑战（2001+）世界与公共大世界坐标一致——若房屋
- * 物件全局可见（默认 worldId=-1），赛道/回放中会看到房屋实体。限定战局区间后
- * 赛道与回放世界看不到房屋，互不干扰。
+ * 房屋物件可见世界区间（按数组传，streamer 支持）：
+ * - 普通房屋（不关联赛车/传送点）：公共大世界 0 + 战局 1..1000——赛道（1001..2000）
+ *   与回放/挑战（2001+）世界看不到，互不干扰
+ * - 关联赛道的房屋（House.race）：额外在比赛世界 1001..2000 可见（赛道实体）
+ * - 关联传送点的房屋：传送点都在战局世界使用（/house goto、//名称），战局区间
+ *   已覆盖，与普通房屋一致
  */
 const SESSION_WORLD_IDS: number[] = [
   PUBLIC_WORLD_ID,
   ...Array.from({ length: 1000 }, (_, i) => i + 1),
+];
+/** 战局 + 比赛区间（关联赛道的房屋可见） */
+const SESSION_RACE_WORLD_IDS: number[] = [
+  ...SESSION_WORLD_IDS,
+  ...Array.from({ length: 1000 }, (_, i) => i + RACE_WORLD_BASE),
 ];
 
 /** 房屋 obj 行格式：modelId x y z rX rY rZ（可选 drawDistance） */
@@ -136,7 +144,7 @@ export async function loadAllHouseObjects(): Promise<void> {
       // true 会残留模型/标签/车辆实体
       where: { house: { isEnabled: true, deletedAt: null } },
       orderBy: [{ houseId: "asc" }, { index: "asc" }],
-      include: { house: true },
+      include: { house: { include: { race: { select: { id: true } } } } },
     });
 
     const objs: DynamicObject[] = [];
@@ -152,6 +160,9 @@ export async function loadAllHouseObjects(): Promise<void> {
 
     for (const m of models) {
       const hname = houseName(m.houseId, m.house?.name ?? "?");
+      // 关联赛道的房屋：实体在比赛世界（1001..2000）也要可见（赛道实体）；
+      // 普通房屋（含关联传送点）：只在战局区间（0 + 1..1000）
+      const worldIds = m.house?.race ? SESSION_RACE_WORLD_IDS : SESSION_WORLD_IDS;
       try {
         if (SKIPPED_TYPES.has(m.type)) {
           skippedTypes.add(m.type);
@@ -175,7 +186,7 @@ export async function loadAllHouseObjects(): Promise<void> {
               ry: args.ry,
               rz: args.rz,
               drawDistance: args.drawDistance ?? 400,
-              worldId: SESSION_WORLD_IDS, // 仅战局区间可见（比赛/回放世界看不到）
+              worldId: worldIds, // 关联赛道→含比赛世界；否则仅战局区间
             });
             obj.create();
             // 相机无碰撞：镜头可穿透物体（避免被房屋模型遮挡视野）
@@ -314,7 +325,7 @@ export async function loadAllHouseObjects(): Promise<void> {
               drawDistance: 30,
               testLOS: false,
               charset: DEFAULT_CHARSET, // 房屋文字可能含中文
-              worldId: SESSION_WORLD_IDS, // 仅战局区间可见
+              worldId: worldIds, // 关联赛道→含比赛世界；否则仅战局区间
             });
             label.create();
             labels.push(label);
@@ -339,8 +350,8 @@ export async function loadAllHouseObjects(): Promise<void> {
               respawnDelay: -1, // 静态车不重生
             });
             veh.create();
-            // 静态车不支持 worldId 数组：setVirtualWorld 逐个设置战局区间
-            for (const wid of SESSION_WORLD_IDS) {
+            // 静态车不支持 worldId 数组：setVirtualWorld 逐个设置（关联赛道→含比赛世界）
+            for (const wid of worldIds) {
               veh.setVirtualWorld(wid);
             }
             vehicles.push(veh);
@@ -360,7 +371,7 @@ export async function loadAllHouseObjects(): Promise<void> {
               x: parts[0],
               y: parts[1],
               size: parts[2],
-              worldId: SESSION_WORLD_IDS, // 仅战局区间可见
+              worldId: worldIds, // 关联赛道→含比赛世界；否则仅战局区间
             });
             area.create();
             areas.push(area);
