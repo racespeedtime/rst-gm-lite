@@ -30,6 +30,7 @@ import {
   suspendRecording,
   resumeRecording,
   dropRecording,
+  rebindRecording,
 } from "@/replay/recorder";
 import {
   startObservePlayer,
@@ -134,13 +135,18 @@ interface RaceRoom {
   resultIndex: Map<number, number>;
   /** 创建时间（WAITING 超时回收） */
   createdAt: number;
-  /** 掉线重连：playerId -> 重连截止时间戳（窗口内不清理） */
-  reconnectUntil: Map<number, number>;
-  /** 掉线重连：playerId -> 断线时进度快照（含距下一 CP 距离——掉线玩家按快照
-   *  继续参与实时/最终排名，车停在原地被超越） */
+  /** 掉线重连：userId -> 重连截止时间戳（窗口内不清理）。
+   *  用 userId 而非 playerId 作 key：掉线期间 playerId 可能被新连接复用，
+   *  新玩家若命中旧窗口会劫持旧玩家的进度/名次/房主。 */
+  reconnectUntil: Map<string, number>;
+  /** 掉线重连：userId -> 断线时进度快照（含距下一 CP 距离——掉线玩家按快照
+   *  继续参与实时/最终排名，车停在原地被超越）。slot.playerId 为掉线时的
+   *  playerId：重连成功且 id 变化时用它把挂起的录制会话迁移到新 playerId；
+   *  超时落盘时也用它找挂起会话 */
   reconnectSlots: Map<
-    number,
+    string,
     {
+      playerId: number;
       cpIndex: number;
       lap: number;
       startTime: number;
@@ -260,11 +266,14 @@ export function cleanupRacePlayer(playerId: number): void {
       // 比赛中且比赛支持重连 → 进入重连窗口（已完成玩家不开窗口：成绩已纪录，防重连后重复完成）
       const estMs = estimateRaceDurationMs(room);
       if (room.state === "RACING" && !pr.finished && estMs >= RECONNECT_SUPPORT_MIN_MS) {
+        // 窗口 key 用 userId（防 playerId 复用劫持）；auth 在断线时仍可用
+        //（closePlayerSession 清 auth 在其后执行），取不到则回退 playerId 字符串
+        const uid = getAuthState(playerId)?.userId ?? String(playerId);
         const window = Math.min(
           RECONNECT_MAX_MS,
           Math.max(RECONNECT_MIN_MS, estMs * RECONNECT_RATIO),
         );
-        room.reconnectUntil.set(playerId, Date.now() + window);
+        room.reconnectUntil.set(uid, Date.now() + window);
         // 快照含"距下一 CP 距离"：掉线玩家按掉线瞬间位置/CP 继续参与排名
         const nextCp = room.cps[pr.cpIndex + 1];
         let dist = 0;
@@ -272,7 +281,8 @@ export function cleanupRacePlayer(playerId: number): void {
           const pos = Player.getInstance(playerId)?.getPos();
           if (pos) dist = Math.hypot(pos.x - nextCp.x, pos.y - nextCp.y, pos.z - nextCp.z);
         }
-        room.reconnectSlots.set(playerId, {
+        room.reconnectSlots.set(uid, {
+          playerId,
           cpIndex: pr.cpIndex,
           lap: pr.lap,
           startTime: pr.startTime,
@@ -324,17 +334,19 @@ export function cleanupRacePlayer(playerId: number): void {
 /** 清理过期的重连窗口（tickRooms 调用）：窗口到期的玩家彻底移出房间 */
 function cleanupExpiredReconnects(room: RaceRoom): void {
   const now = Date.now();
-  for (const [pid, until] of room.reconnectUntil) {
+  for (const [uid, until] of room.reconnectUntil) {
     if (now >= until) {
-      room.reconnectUntil.delete(pid);
-      room.reconnectSlots.delete(pid);
+      const slot = room.reconnectSlots.get(uid);
+      room.reconnectUntil.delete(uid);
+      room.reconnectSlots.delete(uid);
       // 重连超时：挂起中的录制落盘保留（未完成段，含掉线静止帧——玩家没回来，
-      // 录像停在原地；无人完成则由房间销毁路径作废）
-      if (isRecording(pid)) {
-        void stopRecording(pid, { quiet: true });
+      // 录像停在原地；无人完成则由房间销毁路径作废）。用 slot.playerId（掉线时
+      // 的 id）找挂起会话——挂起会话键控在 playerId 上
+      if (slot && isRecording(slot.playerId)) {
+        void stopRecording(slot.playerId, { quiet: true });
       }
       // 房主重连窗口过期 → 转移房主
-      if (room.ownerId === pid) {
+      if (slot && room.ownerUserId === uid) {
         const next = [...room.members.keys()][0];
         if (next != null) {
           room.ownerId = next;
@@ -1222,9 +1234,9 @@ function endRoom(room: RaceRoom): void {
     });
   }
   // 掉线重连窗口玩家：按掉线前快照计入最终排名（未完成，排在线完成者之后）
-  for (const [pid, slot] of room.reconnectSlots) {
+  for (const [, slot] of room.reconnectSlots) {
     ranked.push({
-      playerId: pid,
+      playerId: slot.playerId,
       name: slot.name,
       time: 0,
       finished: false,
@@ -1472,11 +1484,11 @@ function tickRooms(): void {
     }
     // 掉线重连窗口玩家：按掉线前快照继续参与排名（车停在原地，被在线玩家超越，
     // 但名次仍占着——重连成功后恢复真实位置重新计算）
-    for (const pid of room.reconnectUntil.keys()) {
-      const slot = room.reconnectSlots.get(pid);
+    for (const uid of room.reconnectUntil.keys()) {
+      const slot = room.reconnectSlots.get(uid);
       if (!slot) continue;
       rows.push({
-        playerId: pid,
+        playerId: slot.playerId,
         totalCp: slot.lap * room.cps.length + (slot.cpIndex + 1),
         dist: slot.dist,
         finished: false,
@@ -1967,24 +1979,30 @@ async function handleRaceEditCommand(player: Player, rest: string[]): Promise<vo
 export async function tryReconnectRace(player: Player): Promise<boolean> {
   const auth = getAuthState(player.id);
   if (!auth) return false;
-  // 遍历房间找该玩家的重连窗口
+  // 遍历房间找该玩家的重连窗口（key 是 userId：防 playerId 复用劫持旧窗口）
   for (const room of rooms.values()) {
-    const until = room.reconnectUntil.get(player.id);
+    const until = room.reconnectUntil.get(auth.userId);
     if (until == null) continue;
-    const slot = room.reconnectSlots.get(player.id);
+    const slot = room.reconnectSlots.get(auth.userId);
     // 窗口过期或房间已结束/解散 → 清理窗口，无法重连；对齐 cleanupExpiredReconnects
     // 把挂起的录制落盘（不落盘则会话永久悬挂、静止帧无限累积内存）
     if (Date.now() >= until || room.state === "FINISHED") {
-      room.reconnectUntil.delete(player.id);
-      room.reconnectSlots.delete(player.id);
-      if (isRecording(player.id)) {
-        void stopRecording(player.id, { quiet: true });
+      room.reconnectUntil.delete(auth.userId);
+      room.reconnectSlots.delete(auth.userId);
+      if (slot && isRecording(slot.playerId)) {
+        void stopRecording(slot.playerId, { quiet: true });
       }
       continue;
     }
     // 恢复：重新加入房间 + 恢复进度
-    room.reconnectUntil.delete(player.id);
-    room.reconnectSlots.delete(player.id);
+    room.reconnectUntil.delete(auth.userId);
+    room.reconnectSlots.delete(auth.userId);
+    // playerId 可能已被复用（新连接 id 与掉线时不同）：把挂起的录制会话从
+    // 旧 id 迁移到新 id，否则 resumeRecording(player.id) 找不到会话（掉线静帧
+    // 断在旧 id 上、回放缺段），且旧 id 残留挂起会话占内存
+    if (slot && slot.playerId !== player.id) {
+      rebindRecording(slot.playerId, player.id);
+    }
     room.members.set(player.id, player);
     room.raceMembersLast.set(player.id, auth.userId); // 重新登记本场录制成员（userId 快照供离线作废）
     // 恢复战局归属：prevWorld 对应战局若仍存在则加回，否则回公共大世界并修正

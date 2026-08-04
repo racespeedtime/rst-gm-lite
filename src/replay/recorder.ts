@@ -106,6 +106,17 @@ export function getRecording(playerId: number): RecordingSession | undefined {
   return sessions.get(playerId);
 }
 
+/** 挂起的录制会话从旧 playerId 迁移到新 playerId（掉线重连且 id 被复用场景）：
+ *  重连恢复时用新 playerId resume——会话仍键控在 playerId 上，id 变了不迁移
+ *  则 resume 找不到会话（掉线静帧断在旧 id、回放缺段），旧 id 还残留挂起会话 */
+export function rebindRecording(oldPlayerId: number, newPlayerId: number): void {
+  const session = sessions.get(oldPlayerId);
+  if (!session || !session.suspended) return;
+  sessions.delete(oldPlayerId);
+  session.playerId = newPlayerId;
+  sessions.set(newPlayerId, session);
+}
+
 /** 记录已完成的 CP 数（room 过 CP 时调用，采样写帧——回放 C P TD 与 seek 恢复用） */
 export function noteCpProgress(playerId: number, cpDone: number, totalCp: number): void {
   const s = sessions.get(playerId);
