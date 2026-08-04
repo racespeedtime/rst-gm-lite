@@ -16,7 +16,12 @@ import { getAuthState } from "@/auth/auth";
 import { isInRace } from "@/race/room";
 import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
 import { getDefaultRaceModel } from "@/race/vehicle";
-import { setIntervalSafe, clearIntervalSafe, setTimeoutSafe } from "@/core/timers";
+import {
+  setIntervalSafe,
+  clearIntervalSafe,
+  setTimeoutSafe,
+  clearTimeoutSafe,
+} from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import type { ReplayData } from "./format";
 import {
@@ -77,6 +82,10 @@ export interface ChallengeSession {
   /** 实际发车时间（倒计时结束 GO 时刻；结算/超时用真实时间差，不用帧数累计防漂移） */
   goAt: number;
   finished: boolean;
+  /** 影子已播完并触发"冲线倒计时"（对齐真人比赛第一名冲线 → 20 秒宽限） */
+  shadowFinished: boolean;
+  /** 影子完赛倒计时（20s 后未完成则结束结算影子赢） */
+  endTimer?: NodeJS.Timeout;
   /** 影子播放推进基准（真实流逝计时，防定时器节流导致影子慢放） */
   lastTickAt: number;
   timer?: NodeJS.Timeout;
@@ -96,6 +105,7 @@ export function cleanupChallenge(playerId: number): void {
   if (!ch) return;
   challenges.delete(playerId);
   if (ch.timer) clearIntervalSafe(ch.timer);
+  if (ch.endTimer) clearTimeoutSafe(ch.endTimer);
   try {
     unregisterReplayNpcForReplay(ch.ghost.npcPlayerId); // 注销屏蔽（影子销毁后不再有 sync 包）
     unregisterObserveCandidate(ch.ghost.vehicle.id, "vehicle"); // 移出观战切换候选
@@ -165,13 +175,19 @@ function renderGhost(ch: ChallengeSession): void {
 }
 
 /** 影子当前已过的 CP 数（从帧读，事件无关） */
-function ghostCpProgress(ch: ChallengeSession): number {
+/** 影子当前进度（已完成 CP 数 + 距其下一 CP 距离）——对齐真人排名算法：
+ *  完成 CP 数降序，相同比"距下一 CP 距离"升序（近者领先） */
+function ghostProgress(ch: ChallengeSession): { cp: number; dist: number } {
   const s = sampleAt(ch.data, ch.ghost.playTime);
-  return s ? Math.max(0, Math.min(ch.totalCp, s.cpProgress)) : 0;
+  if (!s) return { cp: 0, dist: Infinity };
+  const cp = Math.max(0, Math.min(ch.totalCp, s.cpProgress));
+  const next = ch.cps[cp]; // 影子已过 cp 个 CP，正朝第 cp+1 个（下标 cp）跑
+  if (!next) return { cp, dist: Infinity };
+  return { cp, dist: Math.hypot(s.x - next.x, s.y - next.y, s.z - next.z) };
 }
 
-/** 影子挑战超时宽限：影子播完后额外给玩家的时间（未完成自动结束，覆盖跑一半/挂机/没跑） */
-const CHALLENGE_GRACE_MS = 60_000;
+/** 影子挑战冲线倒计时（对齐真人比赛 END_GRACE：第一名冲线 → 20 秒宽限） */
+const CHALLENGE_END_GRACE_MS = 20_000;
 
 /** 60fps 推进影子（玩家自己动，影子按录制时间推进） */
 function tickChallenge(ch: ChallengeSession): void {
@@ -191,14 +207,6 @@ function tickChallenge(ch: ChallengeSession): void {
   }
   // 影子播完时间 = 播放终点 (frameCount-1)×interval（对齐 playback）
   const dur = (ch.data.header.frameCount - 1) * ch.data.header.frameIntervalMs;
-  // 影子播完 + 宽限后玩家未完成 → 自动结束（真实时间差，不用帧数累计防漂移）
-  if (Date.now() - ch.goAt > dur + CHALLENGE_GRACE_MS) {
-    if (p && p.isConnected()) {
-      p.sendClientMessage(COLOR_RACE, "[影子] 影子已到达终点，挑战超时结束（可再次挑战）");
-    }
-    cleanupChallenge(ch.playerId);
-    return;
-  }
   // 影子播放用真实流逝时间推进（固定 16ms/tick 在定时器节流时影子会慢放，
   // 与玩家实际速度不同步）；clamp 250ms 防卡顿后跳变
   const now = Date.now();
@@ -206,6 +214,26 @@ function tickChallenge(ch: ChallengeSession): void {
   ch.lastTickAt = now;
   ch.ghost.playTime = Math.min(dur, ch.ghost.playTime + elapsed);
   renderGhost(ch);
+  // 影子播完（playTime 到终点）→ 视同真实玩家冲线：触发 20 秒冲线倒计时
+  //（对齐真人比赛"第一名已完成，20 秒后比赛结束"）。玩家在倒计时内完成 →
+  // onChallengePlayerEnter 正常结算；超时未完成 → 结束结算影子赢。
+  if (ch.ghost.playTime >= dur && !ch.shadowFinished && !ch.finished) {
+    ch.shadowFinished = true;
+    if (p && p.isConnected()) {
+      p.sendClientMessage(COLOR_RACE, "[影子] 影子已完赛，20 秒后挑战结束（倒计时内完成可继续）");
+    }
+    ch.endTimer = setTimeoutSafe(() => {
+      if (ch.finished || !challenges.has(ch.playerId)) return;
+      ch.finished = true;
+      const pp = Player.getInstance(ch.playerId);
+      if (pp && pp.isConnected()) {
+        void finishChallenge(pp, ch);
+      } else {
+        cleanupChallenge(ch.playerId);
+      }
+    }, CHALLENGE_END_GRACE_MS);
+    return;
+  }
 }
 
 /** 玩家过 CP（RaceCpEvent.onPlayerEnter 注册：进入 checkpoint 范围自动触发；
@@ -217,7 +245,7 @@ function onChallengePlayerEnter(player: Player): void {
   const next = ch.cps[ch.cpIndex];
   if (!next) return;
   ch.cpIndex++;
-  const ghostCp = ghostCpProgress(ch);
+  const gp = ghostProgress(ch); // 影子进度（CP 数 + 距下一 CP 距离，对齐真人排名）
   if (ch.cpIndex >= ch.totalCp) {
     // 完成：结算
     ch.finished = true;
@@ -231,11 +259,24 @@ function onChallengePlayerEnter(player: Player): void {
   if (nxt && nxt2) {
     RaceCheckpoint.set(player, 0, nxt.x, nxt.y, nxt.z, nxt2.x, nxt2.y, nxt2.z, nxt.size);
   }
-  const ahead =
-    ch.cpIndex > ghostCp ? "领先影子" : ch.cpIndex < ghostCp ? "落后影子" : "与影子持平";
+  // 领先判定对齐真人排名算法：CP 数多者领先；相同则比"距下一 CP 距离"（近者领先）
+  const pcp = ch.cpIndex;
+  const pnext = ch.cps[pcp];
+  const ppos = player.getPos();
+  const pdist = pnext ? Math.hypot(ppos.x - pnext.x, ppos.y - pnext.y, ppos.z - pnext.z) : Infinity;
+  let ahead: string;
+  if (pcp !== gp.cp) {
+    ahead = pcp > gp.cp ? "领先影子" : "落后影子";
+  } else if (pdist < gp.dist) {
+    ahead = `领先影子 ${Math.max(1, Math.round(gp.dist - pdist))}m`;
+  } else if (pdist > gp.dist) {
+    ahead = `落后影子 ${Math.max(1, Math.round(pdist - gp.dist))}m`;
+  } else {
+    ahead = "与影子持平";
+  }
   player.sendClientMessage(
     COLOR_RACE,
-    `[影子] CP ${ch.cpIndex}/${ch.totalCp}（影子 ${ghostCp}/${ch.totalCp}）${ahead}`,
+    `[影子] CP ${pcp}/${ch.totalCp}（影子 ${gp.cp}/${ch.totalCp}）${ahead}`,
   );
 }
 
@@ -463,6 +504,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     startAt: Date.now(),
     goAt: Date.now(),
     finished: false,
+    shadowFinished: false,
     lastTickAt: Date.now(),
   };
   challenges.set(player.id, ch);
