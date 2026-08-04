@@ -14,6 +14,7 @@ import { openTeleportMenu } from "@/teleport";
 import { openAttireMenu } from "@/attire";
 import { openAttireAdmin } from "@/attire/admin";
 import { openRaceMenu } from "@/race/manage";
+import { openActionMenu } from "@/personalize/action";
 import {
   isInRace,
   getRacePlayerState,
@@ -179,6 +180,7 @@ const panelGroups: PanelGroup[] = [
       { label: "世界", desc: "时间 / 天气 / 物件 / 颜色 / 出生 / 传送", run: openWorldMenu },
       { label: "界面", desc: "GUI / 速度表 / 特技", run: openInterfaceMenu },
       { label: "装扮", desc: "预设 / 挂件 / 编辑", run: openAttireMenu },
+      { label: "动作", desc: "抽烟 / 跳舞 / 坐下 / 躺下 / 投降…", run: openActionMenu },
     ],
   },
   {

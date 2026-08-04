@@ -42,6 +42,7 @@ import {
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
 import { initSkinCommands } from "@/personalize/skinPicker";
 import { initQuickCommands } from "@/personalize/quickActions";
+import { initActionCommands, initActionCleanup, cleanupAction } from "@/personalize/action";
 import { initHelpCommand, sendWelcomeMessage } from "@/core/help";
 import { initColandreas } from "@/core/colandreas";
 import { initElevators } from "@/elevator";
@@ -236,6 +237,8 @@ PlayerEvent.onDisconnect(({ player, next }) => {
   cleanupPlayerStyle(player.id);
   // 万能面板：清理层级记忆（断线后重新登录从主面板开始）
   cleanupPanel(player.id);
+  // 动作：清理播放记录（实体动作在断线时随客户端重置，无需发包清除）
+  cleanupAction(player.id);
   // 设置缓存：按 userId 失效（防长期运行内存累积）
   if (leavingUserId) {
     invalidateSettingCache(leavingUserId);
@@ -346,6 +349,9 @@ initPlayerInfo();
 initSkinCommands();
 // 快捷命令（/fxq 喷气背包 · /jls 降落伞）
 initQuickCommands();
+// 动作命令（/anim 播放动作）+ 状态切换清理（上车/死亡/观战清除动作）
+initActionCommands();
+initActionCleanup();
 
 // 帮助命令（/help 常用命令）
 initHelpCommand();
