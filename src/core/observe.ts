@@ -11,6 +11,7 @@ import {
   isPressed,
 } from "@infernus/core";
 
+import { setIntervalSafe } from "@/core/timers";
 import { COLOR_ORANGE, COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
 
 /** 观察状态 */
@@ -43,10 +44,10 @@ export function unregisterObserveCandidate(targetId: number, kind: "player" | "v
 }
 
 /** 观战左/右键切换：循环切换下一个/上一个可观战目标。
- *  左键（FIRE）→ 下一个；右键（SECONDARY_ATTACK/瞄准）→ 上一个。
- *  open.mp 无现成的"观战目标切换"事件，用按键同步（onKeyStateChange）检测
- *  ——观战中玩家仍发按键包（键盘 WASD 已证实可用，鼠标键同理依赖客户端）。
- *  AI 观战者/NPC 不参与（onKeyStateChange 对 NPC 不触发）。 */
+ *  open.mp 无现成的"观战目标切换"事件。触发源：
+ *  - 左键（FIRE）→ 下一个；LOOK_RIGHT/A → 下一个
+ *  - LOOK_LEFT/A → 上一个；键盘 ←/→ 由 getKeys() 轮询（pollObserveKeys）
+ *  鼠标右键（SECONDARY_ATTACK/瞄准）在观战模式下客户端不发送，不可用。 */
 function cycleObserveTarget(observer: Player, forward: boolean): void {
   const st = observeStates.get(observer.id);
   if (!st) return;
@@ -63,15 +64,39 @@ function cycleObserveTarget(observer: Player, forward: boolean): void {
       const target = Player.getInstance(k);
       if (target && target.isConnected() && target.id !== observer.id) {
         startObservePlayer(observer, target); // 会更新 observeStates + spectate
+        observer.sendClientMessage(
+          COLOR_ORANGE,
+          `[TV] 已切换到 ${target.getName().name}(${target.id})`,
+        );
         return;
       }
     } else {
       const target = Vehicle.getInstance(-k);
       if (target && target.isValid()) {
         startObserveVehicle(observer, target);
+        observer.sendClientMessage(COLOR_ORANGE, `[TV] 已切换到车辆 #${target.id}`);
         return;
       }
     }
+  }
+}
+
+/** 键盘方向键切换检测（getKeys 轮询）：方向键不触发 onKeyStateChange（SA-MP
+ *  文档明确），需服务器主动读 leftAndRight（-128 左 / 128 右）。只响应观战者，
+ *  按下瞬间（与上次读数变化）触发。 */
+const observePrevLeftRight = new Map<number, number>();
+function pollObserveKeys(): void {
+  for (const pid of observeStates.keys()) {
+    const p = Player.getInstance(pid);
+    if (!p || !p.isConnected()) continue;
+    const lr = p.getKeys().leftRight;
+    const prev = observePrevLeftRight.get(pid) ?? 0;
+    if (lr === -128 && prev !== -128) {
+      cycleObserveTarget(p, false); // ← 上一个
+    } else if (lr === 128 && prev !== 128) {
+      cycleObserveTarget(p, true); // → 下一个
+    }
+    observePrevLeftRight.set(pid, lr);
   }
 }
 
@@ -229,8 +254,9 @@ export function initObserve(): void {
     return next();
   });
 
-  // 观战左/右键循环切换（左键=下一个，右键=上一个）。按下瞬间触发；
-  // 观战模式中玩家仍发按键包（键盘方向键已验证可用）。只响应观战者。
+  // 观战切换（按下瞬间触发；只响应观战者）：
+  // 左键（FIRE）→ 下一个；A/D（LOOK_LEFT/LOOK_RIGHT）→ 上一个/下一个。
+  // 鼠标右键观战中客户端不发送，不可用；键盘 ←/→ 由 pollObserveKeys 轮询。
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
     if (!observeStates.has(player.id)) return next(); // 非观战不处理
@@ -238,12 +264,19 @@ export function initObserve(): void {
       cycleObserveTarget(player, true); // 左键 → 下一个
       return next();
     }
-    if (isPressed(newKeys, oldKeys, KeysEnum.SECONDARY_ATTACK)) {
-      cycleObserveTarget(player, false); // 右键 → 上一个
+    if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_RIGHT)) {
+      cycleObserveTarget(player, true); // D/A → 下一个
+      return next();
+    }
+    if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_LEFT)) {
+      cycleObserveTarget(player, false); // A → 上一个
       return next();
     }
     return next();
   });
+
+  // 键盘 ←/→ 方向键切换（getKeys 轮询 100ms；onKeyStateChange 收不到方向键）
+  setIntervalSafe(() => pollObserveKeys(), 100);
 
   // /tv <ID> 观战玩家，/tv off 关闭
   PlayerEvent.onCommandText(["tv", "ob", "spec"], ({ player, subcommand, next }) => {
