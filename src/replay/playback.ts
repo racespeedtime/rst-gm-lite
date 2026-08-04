@@ -605,7 +605,8 @@ function tickSession(session: ReplaySession): void {
       const w = Player.getInstance(pid);
       if (w && w.isConnected()) {
         if (session.replayType === "race") {
-          new GameText("~r~比 赛 结 束~w~!", 3000, 3).forPlayer(w);
+          // GameText 不支持中文（AGENTS.md 约定），比赛结束用英文
+          new GameText("~r~RACE FINISHED~w~!", 3000, 3).forPlayer(w);
         }
         w.sendClientMessage(
           COLOR_RACE,
