@@ -16,8 +16,13 @@ import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scri
 import { isEditing } from "./editor";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
-import { raceRecordingStart, raceRecordingStop, stopReplayForPlayer } from "@/replay";
-import { noteCpProgress, stopRecording, isRecording } from "@/replay/recorder";
+import {
+  raceRecordingStart,
+  raceRecordingStop,
+  stopReplayForPlayer,
+  discardRaceReplay,
+} from "@/replay";
+import { noteCpProgress, stopRecording } from "@/replay/recorder";
 import {
   startObservePlayer,
   stopObserve,
@@ -127,6 +132,8 @@ interface RaceRoom {
     number,
     { cpIndex: number; lap: number; startTime: number; prevWorld: number }
   >;
+  /** 本场比赛参与过录制的成员（房间销毁且无人完成时据此作废其未完成录像） */
+  raceMembersLast: Set<number>;
 }
 
 const rooms = new Map<number, RaceRoom>();
@@ -418,6 +425,7 @@ export async function createRaceRoom(
     createdAt: Date.now(),
     reconnectUntil: new Map(),
     reconnectSlots: new Map(),
+    raceMembersLast: new Set(),
   };
   rooms.set(room.id, room);
   await joinRoom(player, room);
@@ -561,6 +569,7 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
     stopObserve(player);
   }
   room.members.set(player.id, player);
+  room.raceMembersLast.add(player.id); // 登记本场录制成员（房间销毁时作废用）
   playerRaces.set(player.id, {
     roomId: room.id,
     cpIndex: -1,
@@ -1179,13 +1188,13 @@ function checkRoomState(room: RaceRoom): void {
     if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
     if (room.endTimer) clearTimeoutSafe(room.endTimer);
     destroyRaceTds(room);
-    // 房间销毁（全员离开/断线）：整场无人完成 → 该段比赛回放原子作废
-    //（discard 落盘即删文件不建 DB 记录；有 rank 的已完成场景不会走到这）
-    for (const pid of room.members.keys()) {
-      if (isRecording(pid)) {
-        void stopRecording(pid, { quiet: true, discard: true });
-      }
+    // 房间销毁（最后成员离开/断线）：整场无人完成 → 该段比赛回放作废删除。
+    // 掉线重连窗口的玩家不在 members（掉线即删），其录像不在这里作废——
+    // 若重连成功由 tryReconnectRace 删掉线段，重连超时则保留（未完成可回看）。
+    for (const pid of room.raceMembersLast.keys()) {
+      discardRaceReplay(pid);
     }
+    room.raceMembersLast.clear();
     freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id
     rooms.delete(room.id);
   }
@@ -1657,6 +1666,10 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     room.reconnectUntil.delete(player.id);
     room.reconnectSlots.delete(player.id);
     room.members.set(player.id, player);
+    room.raceMembersLast.add(player.id); // 重新登记本场录制成员
+    // 重连成功：作废掉线前那段"未完成"录像（断线瞬间已落盘，无 rank 噪音），
+    // 下面 raceRecordingStart 会新开一段续录（完成时保留）
+    discardRaceReplay(player.id);
     // 恢复战局归属：prevWorld 对应战局若仍存在则加回，否则回公共大世界并修正
     // prevWorld=0（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
     const prevWorld = slot?.prevWorld ?? player.getVirtualWorld();
