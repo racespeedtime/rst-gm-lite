@@ -37,6 +37,41 @@ export function destroyDebugInfo(state: DebugInfoState | null): void {
   if (state && state.td.isValid()) state.td.destroy();
 }
 
+/** 构建版本 TextDraw 坐标（640x480 名义坐标）：右下角，与 debug（底部居中）分开 */
+const BUILD_Y = 432;
+
+/**
+ * 构建版本 TextDraw（右下角、单独 TD）：显示当前构建基于的时间点与 git 提交号，
+ * 由 gui.ts 随 showDebugInfo 开关与 debug 联动创建/销毁（不参与文本刷新——静态）。
+ */
+export function createBuildVersionTd(player: Player): TextDraw {
+  const text = `{A9C4E4}build {FFFFFF}${fmtBuildTime(__BUILD_TIME__)}{808080} @${__BUILD_HASH__}`;
+  const td = new TextDraw({ player, x: 638, y: BUILD_Y, text })
+    .create()
+    .setAlignment(3) // RIGHT：x=638 为右缘（右下角，留 2px margin）
+    .setFont(1)
+    .setLetterSize(0.12, 0.5) // 比 debug(0.13) 更小，角落不抢视线
+    .setColor(0xffffffff)
+    .setOutline(1)
+    .setProportional(true)
+    .setShadow(1)
+    .setSelectable(false);
+  td.show(player);
+  return td;
+}
+
+export function destroyBuildVersionTd(td: TextDraw | null): void {
+  if (td && td.isValid()) td.destroy();
+}
+
+/** 构建时间 ISO → "YYYY-MM-DD HH:mm"（服务器本地时区） */
+function fmtBuildTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "unknown";
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 const r2 = (n: number): string => (Math.round(n * 10) / 10).toFixed(1);
 
 /** 刷新调试文本（内容无变化跳过，省 5Hz 无用 setString） */

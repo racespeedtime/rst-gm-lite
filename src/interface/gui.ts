@@ -18,6 +18,8 @@ import {
   createDebugInfo,
   destroyDebugInfo,
   updateDebugInfo,
+  createBuildVersionTd,
+  destroyBuildVersionTd,
   type DebugInfoState,
 } from "./debugInfo";
 import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUserSetting";
@@ -33,6 +35,8 @@ interface PlayerGui {
   speedo3dVehId: number | null;
   netstat: NetstatState | null;
   debugInfo: DebugInfoState | null;
+  /** 构建版本 TD（与 debug 联动：showDebugInfo 开关一并创建/销毁） */
+  buildTd: TextDraw | null;
   /** 上次更新网络面板的时间戳（网络面板每秒更新，与 200ms 速度表 tick 分离） */
   netstatAt: number;
 }
@@ -59,11 +63,12 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     speedo3dVehId: null,
     netstat: null,
     debugInfo: null,
+    buildTd: null,
     netstatAt: 0,
   };
   guis.set(player.id, gui);
 
-  // hideAllGui 覆盖优先：全部隐藏（debugInfo 也隐藏）
+  // hideAllGui 覆盖优先：全部隐藏（debugInfo 与 buildTd 也销毁）
   if (setting.hideAllGui) {
     gui.speedoTd.forEach((t) => t.hide(player));
     destroySpeed3d(gui.speedo3d);
@@ -73,6 +78,10 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     if (gui.debugInfo) {
       destroyDebugInfo(gui.debugInfo);
       gui.debugInfo = null;
+    }
+    if (gui.buildTd) {
+      destroyBuildVersionTd(gui.buildTd);
+      gui.buildTd = null;
     }
     return;
   }
@@ -111,12 +120,17 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     gui.netstat.tds.forEach((t) => t.show(player));
   }
 
-  // 调试信息 GUI（底部居中，数据库开关 showDebugInfo 控制）
+  // 调试信息 GUI（底部居中，数据库开关 showDebugInfo 控制）。
+  // 构建版本 TD（右下角）与 debug 联动：同开同关——版本属于调试信息，
+  // 玩家关 debug 时右下角版本号一并收起（避免残留角落 UI）
   if (setting.showDebugInfo && !gui.debugInfo) {
     gui.debugInfo = createDebugInfo(player);
+    gui.buildTd = createBuildVersionTd(player);
   } else if (gui.debugInfo && !setting.showDebugInfo) {
     destroyDebugInfo(gui.debugInfo);
     gui.debugInfo = null;
+    destroyBuildVersionTd(gui.buildTd);
+    gui.buildTd = null;
   } else if (gui.debugInfo) {
     // 已创建：隐藏所有 GUI 关闭后重新显示
   }
@@ -189,6 +203,7 @@ export function cleanupGui(playerId: number): void {
     destroySpeed3d(gui.speedo3d);
     if (gui.netstat) destroyNetstat(gui.netstat);
     destroyDebugInfo(gui.debugInfo);
+    destroyBuildVersionTd(gui.buildTd);
   } catch (e) {
     logger.error(`[gui] 清理 ${playerId} 的 GUI 失败`, e);
   }
