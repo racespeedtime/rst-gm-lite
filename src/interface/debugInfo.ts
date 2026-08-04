@@ -6,7 +6,8 @@ import { getReplayDebugState } from "@/replay/playback";
  * 调试信息 GUI：屏幕底部居中、尽可能小字号的诊断文本（位置/朝向/世界/内景/
  * 车辆/按键/速度，观战中显示被观战对象，回放中叠加播放时长/帧率）。
  * 数据源全部实时读取，仅做文本拼接（速度 kmh 由 gui.ts 计算传入复用）。
- * 样式对齐"底部居中 + margin-bottom"，字体小于速度表（0.16 vs 0.2）。
+ * 车内/车外区分：车内显示车辆位置+车朝向角+车速；车外显示玩家位置+朝向+步行速度。
+ * 样式对齐"底部居中 + margin-bottom"，字体小于速度表（0.13 vs 0.2）。
  */
 
 export interface DebugInfoState {
@@ -23,7 +24,7 @@ export function createDebugInfo(player: Player): DebugInfoState {
     .create()
     .setAlignment(2) // CENTER：x=320 为水平中心（默认左对齐会从左往右铺，偏左）
     .setFont(1)
-    .setLetterSize(0.16, 0.65)
+    .setLetterSize(0.13, 0.55) // 比速度表(0.2)更小，底部居中不挡视野
     .setColor(0xffffffff)
     .setOutline(1)
     .setProportional(true)
@@ -57,8 +58,14 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
   const angle = player.getFacingAngle().angle;
   const veh = player.isInAnyVehicle() ? player.getVehicle() : null;
   const keys = player.getKeys();
+  const health = player.getHealth();
+  const armour = player.getArmour();
+  // 车内：位置/朝向/速度取车辆实体（车辆坐标即玩家位置，车朝向更精确）
+  const displayPos = veh ? veh.getPos() : pos;
+  const displayAngle = veh ? veh.getZAngle().angle : angle;
   const lines: string[] = [
-    `pos ${r2(pos.x)} ${r2(pos.y)} ${r2(pos.z)}  angle ${r2(angle)}  world ${player.getVirtualWorld()}  int ${player.getInterior()}`,
+    `pos ${r2(displayPos.x)} ${r2(displayPos.y)} ${r2(displayPos.z)}  angle ${r2(displayAngle)}  world ${player.getVirtualWorld()}  int ${player.getInterior()}`,
+    `hp ${Math.ceil(health.health)}  armor ${Math.ceil(armour.armour)}  skin ${player.getSkin()}`,
     `veh ${veh ? veh.id : "-"}  ${Math.floor(kmh)} km/h  keys 0x${(keys.keys & 0xffff).toString(16)} ${pressedKeys(keys.keys)}`,
   ];
   // 观战中：显示被观战对象（玩家/车辆）
@@ -66,7 +73,7 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
   if (st) {
     lines.push(`watch ${st.kind} #${st.targetId}`);
   }
-  // 回放中：叠加当前播放时长/总时长、当前速度、帧率
+  // 回放中：叠加当前播放时长/总时长、当前速度、帧号
   const rep = getReplayDebugState(player.id);
   if (rep) {
     lines.push(
