@@ -140,13 +140,18 @@ export function cleanupLoginSpawned(playerId: number): void {
  * 按设置计算重生位置（LAST_POSITION / RANDOM，含 colandreas Z 修正）。
  * 供死亡重生预计算 spawnInfo 与 onSpawn 兜底定位共用；无出生点配置返回 null。
  */
-async function computeSpawnPos(setting: {
-  spawnMode?: string | null;
-  lastX?: unknown;
-  lastY?: unknown;
-  lastZ?: unknown;
-  lastAngle?: unknown;
-} | null | undefined): Promise<{ x: number; y: number; z: number; angle: number } | null> {
+async function computeSpawnPos(
+  setting:
+    | {
+        spawnMode?: string | null;
+        lastX?: unknown;
+        lastY?: unknown;
+        lastZ?: unknown;
+        lastAngle?: unknown;
+      }
+    | null
+    | undefined,
+): Promise<{ x: number; y: number; z: number; angle: number } | null> {
   const hasLast =
     setting?.spawnMode === "LAST_POSITION" &&
     setting.lastX != null &&
@@ -260,12 +265,15 @@ export function initSpawnSystem(): void {
     return next();
   });
 
-  // 阻止进入 class 选择界面：服务器未 AddPlayerClass（无 class 系统），
-  // 死亡后玩家按 F4 / 意外进入 class 选择会被拒绝并提示。死亡重生走
-  // RequestSpawn（上面闸门放行），不受此影响。
+  // 阻止进入 class 选择界面：服务器未 AddPlayerClass（无 class 系统）。
+  // 部分客户端在死亡后会先进 class 选择（按 F4 / 客户端默认行为），若只
+  // return false 抑制界面，玩家会卡在死亡状态无响应（不会自动 RequestSpawn）
+  // ——直接强制重生（玩家此刻必然是想起死），死亡后即用即走，不再弹提示。
   PlayerEvent.onRequestClass(({ player, next }) => {
     if (player.isNpc()) return next();
-    player.sendClientMessage(COLOR_SUCCESS, "当前模式不支持 class 选择，死亡后会自动重生");
+    // 比赛/编辑中的重生由各自系统处理（比赛回上一 CP / 编辑器状态），不干预
+    if (isInRace(player.id) || isEditing(player.id)) return next();
+    player.spawn();
     return false;
   });
 
