@@ -37,16 +37,15 @@ export function destroyDebugInfo(state: DebugInfoState | null): void {
   if (state && state.td.isValid()) state.td.destroy();
 }
 
-/** 构建版本 TextDraw 坐标（640x480 名义坐标）：右下角，与 debug（底部居中）分开 */
-const BUILD_Y = 432;
-
 /**
  * 构建版本 TextDraw（右下角、单独 TD）：显示当前构建基于的时间点与 git 提交号，
  * 由 gui.ts 随 showDebugInfo 开关与 debug 联动创建/销毁（不参与文本刷新——静态）。
+ * Y 与 debug 对齐（同一 DEBUG_Y，不单独设坐标）。颜色用 TextDraw 内置 ~ 色码
+ * （~y~ 黄 / ~w~ 白）——{}16 进制嵌入是聊天/对话框语法，TextDraw 不支持会原样输出。
  */
 export function createBuildVersionTd(player: Player): TextDraw {
-  const text = `{A9C4E4}build {FFFFFF}${fmtBuildTime(__BUILD_TIME__)}{808080} @${__BUILD_HASH__}`;
-  const td = new TextDraw({ player, x: 638, y: BUILD_Y, text })
+  const text = `~y~build ~w~${fmtBuildTime(__BUILD_TIME__)} @${__BUILD_HASH__}`;
+  const td = new TextDraw({ player, x: 638, y: DEBUG_Y, text })
     .create()
     .setAlignment(3) // RIGHT：x=638 为右缘（右下角，留 2px margin）
     .setFont(1)
@@ -100,11 +99,12 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
   if (st) {
     lines.push(`watch ${st.kind === "vehicle" ? "v" : "p"} #${st.targetId}`);
   }
-  // 回放中：叠加当前播放时长/总时长、帧号；掉线静止段标记 offline
+  // 回放中：叠加当前播放时长/总时长、帧号；掉线静止段标记 offline（~r~ 为
+  // TextDraw 内置红色码，{}16 进制嵌入不被 TextDraw 支持）
   const rep = getReplayDebugState(player.id);
   if (rep) {
     lines.push(
-      `rep ${fmtMs(rep.playTimeMs)}/${fmtMs(rep.durationMs)}  f ${rep.frameIndex}/${rep.frameCount}${rep.online ? "" : "  {FF0000}offline"}`,
+      `rep ${fmtMs(rep.playTimeMs)}/${fmtMs(rep.durationMs)}  f ${rep.frameIndex}/${rep.frameCount}${rep.online ? "" : "  ~r~offline"}`,
     );
   }
   const text = lines.join("\n");
