@@ -451,10 +451,16 @@ export async function stopRecording(
 
 /** 强制停止录制（断线/离开比赛时调用；断线玩家无提示）。
  *  掉线挂起中的会话跳过不落盘（保持挂起等重连续录）；需要落盘挂起会话的
- *  路径（重连超时/服务器退出）直接调 stopRecording。 */
+ *  路径（重连超时/服务器退出）直接调 stopRecording。
+ *  自定义（ghost）录制断线即作废：无重连/挂起语义，中断的录制无保留意义，
+ *  直接丢弃（不落盘、不建 DB 记录）；比赛（race）录制走落盘/无人完成作废。 */
 export async function forceStopRecording(playerId: number): Promise<void> {
   const session = sessions.get(playerId);
   if (!session || session.suspended) return;
+  if (session.type === "ghost") {
+    dropRecording(playerId);
+    return;
+  }
   await stopRecording(playerId, { quiet: true });
 }
 
