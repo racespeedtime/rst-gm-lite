@@ -582,6 +582,14 @@ function tickSession(session: ReplaySession): void {
     return;
   }
   if (!session.playing) return;
+  // 清扫已退出观战的 watcher：玩家 /tv off 离开回放后若不清理，其比赛 TD 会
+  // 残留屏幕上并持续被 syncObserverTds 更新（用户回到原世界还挂着回放 HUD）
+  for (const pid of session.watchers) {
+    if (!isObserving(pid)) {
+      destroyObserverTds(session, pid);
+      session.watchers.delete(pid);
+    }
+  }
   // 用真实流逝时间推进播放（固定 16ms/tick 在定时器节流时偏慢 → 慢倍速感）。
   // clamp 250ms：服务器卡顿/断线恢复等单次大延迟不跳变（最多跳 0.25s 播放）
   const now = Date.now();
@@ -1130,17 +1138,16 @@ export function stopReplaySession(playerId: number): void {
   // 独立世界（比赛回放）的会话：会话销毁后世界无人使用 → 回收世界 id 供复用
   if (session.replayType === "race") freeReplayWorld(session.worldId);
   // 比赛回放（独立世界）：玩家可能在其中刷过车 → 恢复玩家世界 + 爱车世界，
-  // 防爱车留在独立世界成幽灵车（仅当玩家仍在回放世界；已离开则不覆盖其状态）
+  // 防爱车留在独立世界成幽灵车（worldId 已被回收，下次复用会串进别的回放）。
+  // 无条件检查爱车所在世界 == 回放世界（不依赖 owner 是否仍在该世界——owner
+  // 可能已提前离开/切走，但爱车仍留在即将回收的独立世界）
   const owner = Player.getInstance(playerId);
-  if (
-    owner &&
-    owner.isConnected() &&
-    session.replayType === "race" &&
-    owner.getVirtualWorld() === session.worldId
-  ) {
-    owner.setVirtualWorld(session.ownerPrevWorld);
+  if (owner && owner.isConnected() && session.replayType === "race") {
+    if (owner.getVirtualWorld() === session.worldId) {
+      owner.setVirtualWorld(session.ownerPrevWorld);
+    }
     const owned = getOwnedVehicle(playerId);
-    if (owned && owned.isValid() && owned !== owner.getVehicle()) {
+    if (owned && owned.isValid() && owned.getVirtualWorld() === session.worldId) {
       owned.setVirtualWorld(session.ownerPrevWorld);
     }
   }

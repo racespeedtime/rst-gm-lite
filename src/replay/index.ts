@@ -11,6 +11,7 @@ import {
   cleanupRecorder,
   forceStopRecording,
   isRecording,
+  getRecording,
   startRecording,
   stopRecording,
 } from "./recorder";
@@ -101,18 +102,27 @@ export function stopReplayForPlayer(playerId: number): void {
 /**
  * 比赛自动录制钩子（room.ts 调用）：
  * startRace/beginRace 时对每个成员开启录制（type=race）；endRoom 时停止。
+ * raceRoomId 记录所属房间：房间销毁/结束收尾时校验归属，防跨房间误停误丢。
  */
 export function raceRecordingStart(
   playerId: number,
-  opts?: { raceId?: string; raceName?: string },
+  opts?: { raceId?: string; raceName?: string; raceRoomId?: number },
 ): void {
-  void forceStopRecording(playerId); // 防残留（重复开赛/重连）
+  // 玩家正在自定义（ghost）录制中进比赛：先落盘保存（forceStopRecording 对
+  // ghost 是直接丢弃——玩家辛苦录的长段漂移会静默丢失），再开比赛录制
+  const cur = getRecording(playerId);
+  if (cur && !cur.suspended && cur.type === "ghost") {
+    void stopRecording(playerId, { quiet: true });
+  } else {
+    void forceStopRecording(playerId); // 防残留（重复开赛/重连）
+  }
   const p = Player.getInstance(playerId);
   if (!p || !p.isConnected()) return;
   void startRecording(p, {
     type: "race",
     raceId: opts?.raceId ?? null,
     raceName: opts?.raceName ?? null,
+    raceRoomId: opts?.raceRoomId ?? null,
   });
 }
 

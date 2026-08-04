@@ -29,12 +29,16 @@ export function getAuthState(playerId: number): AuthState | undefined {
   return authStates.get(playerId);
 }
 
+/** 认证中途（会话已写库但 authStates 未登记）的 userId——封禁即时踢出时扫描用 */
+export function getPendingAuthUserId(playerId: number): string | undefined {
+  return pendingSessions.get(playerId)?.userId;
+}
+
 export function clearAuthState(playerId: number): void {
   authStates.delete(playerId);
   sessionStartedAt.delete(playerId);
   pendingSessions.delete(playerId);
 }
-
 /** 收集所有在线会话 id（含认证中途的 pending 会话），供心跳批量更新 last_heartbeat_at */
 export function getOnlineSessionIds(): string[] {
   const ids = new Set<string>();
@@ -87,7 +91,15 @@ export async function closePlayerSession(playerId: number): Promise<void> {
       logger.error(`[auth] 关闭会话失败 ${auth.username || auth.userId}`, e);
     }
   }
-  clearAuthState(playerId);
+  // 竞态防护：DB 更新（await 让出）期间该 playerId 可能已被新连接复用并完成
+  // authStates.set——此时无条件 clearAuthState 会清掉新玩家的认证状态。
+  // 校验"当前登记的仍是本次关闭的会话"才清理。
+  const cur = authStates.get(playerId);
+  if (cur && sessionId && cur.sessionId === sessionId) {
+    clearAuthState(playerId);
+  } else if (!cur && !sessionId) {
+    clearAuthState(playerId);
+  }
 }
 
 /** 校验昵称是否可作为账号名：非空 + 字节数 ≤ 24（SA-MP 昵称按字节计，支持中文/Unicode） */

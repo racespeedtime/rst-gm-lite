@@ -13,7 +13,7 @@ import { getAuthState } from "@/auth/auth";
 import { cleanupAttire, applyVehiclePreset } from "@/attire";
 import { isInRace } from "@/race/room";
 import { isPlayerLocked } from "@/core/interaction";
-import { toggleSetting } from "@/personalize/settings";
+import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { DEFAULT_CHARSET } from "@/utils/constants";
@@ -436,9 +436,19 @@ export function initVehicleCommands(): void {
     return next();
   });
 
-  // /c 3d 3D速度表开关（对齐原版 /c 3d；2d/3d 互斥，与界面菜单一致）
-  PlayerEvent.onCommandText(["c 3d", "veh 3d"], ({ player, next }) => {
-    void toggleSetting(player, "showSpeed3d", "3D速度表", { showSpeed2d: false });
+  // /c 3d 3D速度表开关（对齐原版 /c 3d；2d/3d 互斥，与界面菜单一致）。
+  // 开启时联动总开关 showSpeed（GUI 判定是 showSpeed && showSpeed3d，只写
+  // showSpeed3d 而总开关关闭时提示"已开启"实际不显示）
+  PlayerEvent.onCommandText(["c 3d", "veh 3d"], async ({ player, next }) => {
+    const setting = await getSetting(player);
+    if (!setting) return next();
+    const nextOn = !setting.showSpeed3d;
+    await updateSetting(player, {
+      showSpeed3d: nextOn,
+      showSpeed2d: false,
+      showSpeed: nextOn ? true : setting.showSpeed,
+    });
+    notifySaved(player, `3D速度表已${nextOn ? "开启" : "关闭"}`);
     return next();
   });
 }

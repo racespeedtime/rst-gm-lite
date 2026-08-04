@@ -218,8 +218,18 @@ function boost(el: ElevatorInstance, floorId: number): void {
   el.carDoors[0].stop();
   el.carDoors[1].stop();
   el.car.move(el.config.x, el.config.y, carZ(el, floorId), ELEVATOR_SPEED);
-  el.carDoors[0].move(el.config.carDoors.closed.x, el.config.carDoors.closed.y, doorsZ(el, floorId), ELEVATOR_SPEED);
-  el.carDoors[1].move(el.config.carDoors.closed.x, el.config.carDoors.closed.y, doorsZ(el, floorId), ELEVATOR_SPEED);
+  el.carDoors[0].move(
+    el.config.carDoors.closed.x,
+    el.config.carDoors.closed.y,
+    doorsZ(el, floorId),
+    ELEVATOR_SPEED,
+  );
+  el.carDoors[1].move(
+    el.config.carDoors.closed.x,
+    el.config.carDoors.closed.y,
+    doorsZ(el, floorId),
+    ELEVATOR_SPEED,
+  );
 }
 
 /** 停留结束：回到空闲并继续处理队列 */
@@ -483,9 +493,11 @@ function handleKeyState(
     }
     return true;
   }
-  // 楼层按钮：按 Y 呼叫当前层
+  // 楼层按钮：按 Y 呼叫当前层。面板流程中放行 Y 键给万能面板（否则站在按钮
+  // 区旁永远打不开面板）
   const fr = cfg.floorButtonRange;
   if (dx >= fr.xMin && dx <= fr.xMax && dy >= fr.yMin && dy <= fr.yMax) {
+    if (isPlayerLocked(player.id)) return false;
     if (!isPressed(newKeys, oldKeys, KeysEnum.YES)) return true;
     const target = findFloorByZ(el, pos.z);
     if (target >= 0) {
@@ -504,6 +516,9 @@ function handleKeyState(
               : `* 电梯已呼叫，当前在「${name}」…`;
           player.sendClientMessage(0xffdd00aa, msg);
         }
+      } else {
+        // callElevator 失败（目标层已在队列/已在响应中）：给出反馈，防重复按键无感
+        player.sendClientMessage(0xffdd00aa, `[电梯] 「${cfg.floors[target]}」已在响应中，请稍候`);
       }
     }
     return true;

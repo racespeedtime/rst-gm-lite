@@ -198,7 +198,11 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
 
   rows.push({
     label: "范围倒计时",
-    run: () => sessionCountdown(player, 10),
+    // 发火式：触发后立即返回菜单（不阻塞面板锁 10 秒）——倒计时 GameText/音效
+    // 在后台定时器继续跑，玩家可继续操作/关闭面板
+    run: () => {
+      void sessionCountdown(player, 10);
+    },
   });
 
   // 观战相关：未观战显示"观战玩家"，已观战显示"停止观战"（互斥，避免无效项）

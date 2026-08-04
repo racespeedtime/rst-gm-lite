@@ -26,6 +26,7 @@ import {
   noteCpProgress,
   stopRecording,
   isRecording,
+  getRecording,
   suspendRecording,
   resumeRecording,
   dropRecording,
@@ -152,6 +153,10 @@ interface RaceRoom {
    *  据此作废其未完成录像。存 userId 而非在线查 auth——掉线/重连超时者 auth
    *  已清，离线作废依赖此快照） */
   raceMembersLast: Map<number, string>;
+  /** 开赛时按房主设置定的房间统一时间天气（重连玩家是新连接，恢复用；
+   *  CP 脚本改时间天气后由脚本路径直接 setTime/setWeather，不更新此缓存） */
+  roomTime: { hour: number; minute: number };
+  roomWeather: number;
 }
 
 const rooms = new Map<number, RaceRoom>();
@@ -186,19 +191,7 @@ export function getRaceRoom(roomId: number): RaceRoom | undefined {
  * p/panel 必须在白名单内：观战（spect）模式下客户端不发按键收不到 Y 键，
  * 只能靠 /p 开面板——比赛结束自动观战的玩家若不放行 /p 将彻底打不开面板。
  */
-const RACE_SAFE_COMMANDS = new Set([
-  "r",
-  "race",
-  "pm",
-  "kill",
-  "tv",
-  "ob",
-  "spec",
-  "p",
-  "panel",
-  "q",
-  "quit",
-]);
+const RACE_SAFE_COMMANDS = new Set(["r", "race", "pm", "kill", "tv", "ob", "spec", "p", "panel"]);
 
 export function isRaceCommandAllowed(command: string): boolean {
   return RACE_SAFE_COMMANDS.has(command);
@@ -476,6 +469,9 @@ export async function createRaceRoom(
     reconnectUntil: new Map(),
     reconnectSlots: new Map(),
     raceMembersLast: new Map(),
+    // 房间统一时间天气：beginRace 时按房主设置填充
+    roomTime: { hour: 12, minute: 0 },
+    roomWeather: 0,
   };
   rooms.set(room.id, room);
   await joinRoom(player, room);
@@ -578,6 +574,9 @@ export async function restartRace(player: Player): Promise<void> {
   if (room.endTimer) clearTimeoutSafe(room.endTimer);
   const wasRunning = room.state === "RACING" || room.state === "COUNTDOWN";
   room.state = "WAITING";
+  // 重置 WAITING 超时基准：createdAt 是建房时刻，重开不清会被 tickRooms 的
+  // "等待超时 10 分钟解散"立即命中（建房到重开累计超过 10 分钟的长赛道常见）
+  room.createdAt = Date.now();
   // 清空排名/CP 进度数据（重开后从零开始）
   room.results = [];
   room.lastCpAt.clear();
@@ -807,6 +806,9 @@ function beginRace(room: RaceRoom): void {
       m.setTime(hour, minute);
       m.setWeather(weather);
     }
+    // 缓存房间统一时间天气：重连玩家是新连接，按此恢复（与房间其他成员一致）
+    room.roomTime = { hour, minute };
+    room.roomWeather = weather;
   })();
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
@@ -837,7 +839,11 @@ function beginRace(room: RaceRoom): void {
       // startWorld，若在切世界前开录，开赛后会被"已离开录制世界"边界检查
       // 立即自动停止（首次 join 的玩家 startWorld 是原世界，上一场录制全丢，
       // 影子挑战也因此永远没有该赛道的比赛回放）。
-      raceRecordingStart(m.id, { raceId: room.raceId, raceName: room.raceName });
+      raceRecordingStart(m.id, {
+        raceId: room.raceId,
+        raceName: room.raceName,
+        raceRoomId: room.id,
+      });
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);
       // 比赛信息 UI（C P/TIME/BEST/RANK）已在加入房间时创建（joinRoom），
@@ -1028,6 +1034,10 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   // 触发当前 CP 脚本（脚本已随房间载入内存，不再查库）。
   // 第一 CP 的 cveh 是赛道标准车型（进赛道时已按它匹配/刷车），到达时跳过换车，
   // 其余 CP 的 cveh（如 Car 赛道 CP11 的 562 中途换车）照常执行。
+  // 显示下一个 CP 与音效放在脚本循环之前——spawnpos 返回 false 会终止脚本链，
+  // 若放在循环后，CP 箭头/红圈会残留错位一整段（cpIndex 已推进但视觉停在旧 CP）。
+  showNextCheckpoint(player, room.cps, pr.cpIndex);
+  player.playSound(1056);
   const isFirstCp = nextCp.index === room.cps[0].index;
   const scriptCtx: CpScriptContext = {
     raceId: room.raceId,
@@ -1036,18 +1046,20 @@ async function onPlayerReachCp(player: Player): Promise<void> {
     authorName: room.authorName,
     cps: room.cps.map((c) => ({ index: c.index, x: c.x, y: c.y, z: c.z })),
   };
-  for (const script of nextCp.scripts) {
-    // spawnpos 返回 false → 终止整条脚本链（对齐原版 Race_Cp_Script_Start 的 return 1）
-    if (!execCpScript(player, scriptCtx, script, { skipCveh: isFirstCp })) return;
-    // 脚本执行（同步）期间玩家可能已离开/比赛结束 → 终止后续操作
-    if (!playerRaces.has(player.id) || rooms.get(pr.roomId)?.state !== "RACING" || pr.finished) {
-      return;
+  try {
+    for (const script of nextCp.scripts) {
+      // spawnpos 返回 false → 终止整条脚本链（对齐原版 Race_Cp_Script_Start 的 return 1）
+      if (!execCpScript(player, scriptCtx, script, { skipCveh: isFirstCp })) return;
+      // 脚本执行（同步）期间玩家可能已离开/比赛结束 → 终止后续操作
+      if (!playerRaces.has(player.id) || rooms.get(pr.roomId)?.state !== "RACING" || pr.finished) {
+        return;
+      }
     }
+  } catch (e) {
+    // 脚本执行异常（native 读取失败等）：终止链但不影响玩家状态（对齐原版防御式执行）
+    logger.error(`[race] CP 脚本执行异常 race=${room.raceId} cp=${nextCp.index}`, e);
+    return;
   }
-
-  // 显示下一个 CP
-  showNextCheckpoint(player, room.cps, pr.cpIndex);
-  player.playSound(1056);
 }
 
 /** 完成比赛 */
@@ -1062,7 +1074,11 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   room.results.push({ playerId: player.id, time, name: player.getName().name });
   room.resultIndex.set(player.id, time);
   const rank = room.results.length; // 完成顺序 = 名次（同一起点同时开始）
-  broadcastToRoom(room, `[赛车] ${player.getName().name} 完成比赛！耗时 ${formatTime(time)}`);
+  broadcastToRoom(room, `[赛车] ${player.getName().name} 完成比赛！用时 ${formatTime(time)}`);
+  // 完成瞬间即落盘本段录像（带名次）：完成者掉线不进重连窗口，若等 endRoom
+  // 才落盘，宽限期内掉线会经 forceStopRecording 以无 rank 落盘 → 录像永远
+  // 误标"未完成"。提前落盘后 endRoom 的 raceRecordingStop 对已移除会话是 no-op。
+  raceRecordingStop(player.id, { rank, finished: true });
 
   // 写纪录（record 为毫秒）
   let isPB = false;
@@ -1149,12 +1165,13 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   }
 
   // 全部完成 → 立即结束（单人房间/全员冲线：没有人在跑，不需要 20s 宽限，
-  // 否则会先广播"20 秒后结束"再立刻结束，误导）
-  if (room.results.length >= room.members.size) {
+  // 否则会先广播"20 秒后结束"再立刻结束，误导）。判定须含掉线重连窗口玩家
+  //（members 不含窗口玩家，漏算会提前 endRoom，把"C 秒内可重连"的承诺作废）
+  if (room.results.length >= room.members.size + room.reconnectSlots.size) {
     endRoom(room);
     return;
   }
-  // 第一名完成、还有成员在跑 → 20s 宽限等他们冲线
+  // 第一名完成、还有成员（含窗口玩家）在 → 20s 宽限等他们冲线
   if (rank === 1 && !room.endTimer) {
     broadcastToRoom(room, "[赛车] 第一名已完成，20 秒后比赛结束");
     room.endTimer = setTimeoutSafe(() => endRoom(room), END_GRACE_MS);
@@ -1280,7 +1297,10 @@ function endRoom(room: RaceRoom): void {
   // 带 rank 落盘；挂起成员不在 members 循环里，这里补上——完成后掉线者也能
   // 在录像里拿到名次，不再误标"未完成"。stopRecording 对已落盘的会话无副作用）
   for (const pid of room.raceMembersLast.keys()) {
-    if (isRecording(pid)) {
+    // 归属校验：只处理属于本房间的录制会话（玩家退赛后又加入别的房间时，
+    // 其新会话 raceRoomId 是别的房间——防误停/误丢另一房间的活跃录制）
+    const rec = isRecording(pid) ? getRecording(pid) : undefined;
+    if (rec && (!rec.raceRoomId || rec.raceRoomId === room.id)) {
       const r = ranked.find((x) => x.playerId === pid);
       void stopRecording(pid, {
         quiet: true,
@@ -1304,6 +1324,11 @@ function checkRoomState(room: RaceRoom): void {
     // 已落盘段不作废。仅"无人完成"才作废删除（挂起丢弃 + 已落盘段删除）。
     const someoneFinished = room.results.length > 0;
     for (const pid of room.raceMembersLast.keys()) {
+      // 归属校验：只处理属于本房间的录制会话（玩家退赛后又加入别的房间时，
+      // 其新会话 raceRoomId 是别的房间——防误停/误丢另一房间的活跃录制）
+      const rec = getRecording(pid);
+      const mine = !rec || !rec.raceRoomId || rec.raceRoomId === room.id;
+      if (!mine) continue;
       if (isRecording(pid)) {
         if (someoneFinished) {
           void stopRecording(pid, { quiet: true }); // 挂起会话落盘保留（含静止段）
@@ -1983,7 +2008,11 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       // 则新开一段录制兜底）
       resumeRecording(player.id);
       if (!isRecording(player.id)) {
-        raceRecordingStart(player.id, { raceId: room.raceId, raceName: room.raceName });
+        raceRecordingStart(player.id, {
+          raceId: room.raceId,
+          raceName: room.raceName,
+          raceRoomId: room.id,
+        });
       }
       const tds = createRaceTd(player, room);
       // 恢复 BEST TD（房间缓存已有，无则查询）
@@ -1994,6 +2023,10 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       showNextCheckpoint(player, room.cps, slot?.cpIndex ?? -1);
       // 重新强制无碰撞（重连是全新连接，碰撞状态已重置）
       applyRaceNoCollision(player, true);
+      // 恢复房间统一时间天气（重连是新连接，默认回服务器时间天气——不恢复会
+      // 与同房其他成员不一致，直到碰到带 time/weather 脚本的 CP）
+      player.setTime(room.roomTime.hour, room.roomTime.minute);
+      player.setWeather(room.roomWeather);
       // 无车兜底（断线前坐默认比赛车，重连时已被清理）：用默认比赛车型刷爱车
       // （有该模型爱车则复用外观，没有则自动创建成爱车——与 joinRoom/beginRace 一致）
       if (!player.isInAnyVehicle() && !getOwnedVehicle(player.id)) {

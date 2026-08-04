@@ -88,6 +88,9 @@ export interface RecordingSession {
   suspendFrame: ReplayFrame | null;
   /** 挂起是否因掉线（true=掉线挂起标 online:false；false=主动退赛挂起保持 online） */
   suspendedOffline: boolean;
+  /** 所属比赛房间 id（race 录制）：房间销毁/结束收尾时校验归属，防跨房间误停/
+   *  误丢"另一房间"的活跃会话（玩家退赛后又加入新房间时旧房间收尾会命中新会话） */
+  raceRoomId?: number | null;
 }
 
 const sessions = new Map<number, RecordingSession>();
@@ -235,7 +238,12 @@ function captureVehicleFrame(player: Player, session?: RecordingSession): Replay
  */
 export async function startRecording(
   player: Player,
-  opts: { type: "ghost" | "race"; raceId?: string | null; raceName?: string | null },
+  opts: {
+    type: "ghost" | "race";
+    raceId?: string | null;
+    raceName?: string | null;
+    raceRoomId?: number | null;
+  },
 ): Promise<boolean> {
   const auth = getAuthState(player.id);
   if (!auth) {
@@ -284,6 +292,7 @@ export async function startRecording(
     recorderName: auth.username,
     raceId: opts.raceId ?? null,
     raceName: opts.raceName ?? null,
+    raceRoomId: opts.raceRoomId ?? null,
     startAt: Date.now(),
     startWorld: player.getVirtualWorld(),
     autoStopTriggered: false,

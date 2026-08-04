@@ -22,7 +22,7 @@ import {
   setMyVehiclePlate,
   kickMyVehiclePassengers,
 } from "./index";
-import { toggleSetting } from "@/personalize/settings";
+import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
 import { parseIntInRange } from "@/utils/parse";
 
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
@@ -338,7 +338,18 @@ export function initMyVehicleCommands(): void {
       }
       changeMyVehicleColor(player, c1, c2);
     } else if (arg === "3d") {
-      void toggleSetting(player, "showSpeed3d", "3D速度表", { showSpeed2d: false });
+      // 联动总开关（与 /c 3d、界面菜单一致）：只写 showSpeed3d 而总开关关闭时
+      // 提示"已开启"实际不显示
+      const setting = await getSetting(player);
+      if (setting) {
+        const n3d = !setting.showSpeed3d;
+        await updateSetting(player, {
+          showSpeed3d: n3d,
+          showSpeed2d: false,
+          showSpeed: n3d ? true : setting.showSpeed,
+        });
+        notifySaved(player, `3D速度表已${n3d ? "开启" : "关闭"}`);
+      }
     } else if (arg === "buy" || arg === "create") {
       player.sendClientMessage(
         COLOR_WHITE,

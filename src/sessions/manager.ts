@@ -150,6 +150,10 @@ export class SessionManager {
     session: Session,
     password?: string,
   ): Promise<{ ok: boolean; reason?: string }> {
+    // 幂等：已在目标战局直接返回——否则"回到已有战局"（createSession 命中
+    // findOwnedSession）会先 leaveCurrentSession 把自己唯一成员的战局解散
+    //（释放 worldId），随后又加回 → 幽灵战局 + worldId 复用冲突
+    if (session.has(player)) return { ok: true };
     if (session.isFull) return { ok: false, reason: "战局已满" };
     if (session.password && session.password !== password) {
       return { ok: false, reason: "战局密码错误" };

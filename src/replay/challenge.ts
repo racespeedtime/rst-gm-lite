@@ -15,7 +15,6 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isInRace } from "@/race/room";
 import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
-import { getDefaultRaceModel } from "@/race/vehicle";
 import {
   setIntervalSafe,
   clearIntervalSafe,
@@ -123,11 +122,12 @@ export function cleanupChallenge(playerId: number): void {
   if (p && p.isConnected() && p.getVirtualWorld() === ch.worldId) {
     p.setVirtualWorld(ch.prevWorld);
     RaceCheckpoint.disable(p);
-    // 爱车一并切回原世界（防留在挑战世界成幽灵车；对齐比赛 restorePlayerAfterRace）
-    const owned = getOwnedVehicle(playerId);
-    if (owned && owned.isValid() && owned !== p.getVehicle()) {
-      owned.setVirtualWorld(ch.prevWorld);
-    }
+  }
+  // 爱车无条件检查所在世界 == 挑战世界（不依赖玩家是否仍在该世界——玩家可能
+  // 已提前离开但车留在即将回收的独立世界，worldId 复用后成幽灵车）
+  const owned = getOwnedVehicle(playerId);
+  if (owned && owned.isValid() && owned.getVirtualWorld() === ch.worldId) {
+    owned.setVirtualWorld(ch.prevWorld);
   }
   // 挑战独立世界已无人使用 → 回收世界 id 供复用
   freeReplayWorld(ch.worldId);
@@ -283,11 +283,15 @@ function onChallengePlayerEnter(player: Player): void {
     void finishChallenge(player, ch);
     return;
   }
-  // 下一个 CP 箭头（对齐比赛：type 0 箭头指向下一个 CP）
+  // 下一个 CP 箭头（对齐比赛 showNextCheckpoint：type 0 箭头指向下一个 CP；
+  // 无下下个 CP 时用 type 1 终点在目标位置注册 checkpoint——否则最后一个 CP
+  // 没有 checkpoint，玩家永远无法触发进入事件完成挑战）
   const nxt = ch.cps[ch.cpIndex];
   const nxt2 = ch.cps[ch.cpIndex + 1];
   if (nxt && nxt2) {
     RaceCheckpoint.set(player, 0, nxt.x, nxt.y, nxt.z, nxt2.x, nxt2.y, nxt2.z, nxt.size);
+  } else if (nxt) {
+    RaceCheckpoint.set(player, 1, nxt.x, nxt.y, nxt.z, nxt.x, nxt.y, nxt.z, nxt.size);
   }
   // 领先判定对齐真人排名算法：CP 数多者领先；相同则比"距下一 CP 距离"（近者领先）
   const pcp = ch.cpIndex;
@@ -624,11 +628,9 @@ async function startChallengeCore(
     owned.setVirtualWorld(worldId);
     owned.putPlayerIn(player, 0);
   } else {
-    await spawnVehicle(
-      player,
-      getDefaultRaceModel(cps.map(() => ({ scripts: [] as string[] }))),
-      true,
-    );
+    // 玩家车模型与影子一致（录制车型）——cveh 换车脚本赛道（如 562 漂移）上
+    // 用 getDefaultRaceModel（读不到 cveh 恒 411）会与影子车不同型，对比失实
+    await spawnVehicle(player, data.header.vehicleModelId, true);
     if (!player.isConnected()) {
       cleanupChallenge(player.id); // await 期间断线 → 清理 ghost
       return false;

@@ -1,6 +1,6 @@
 import { Player } from "@infernus/core";
 import { prisma } from "@/prisma";
-import { getAuthState, hasSuperAdminRole } from "@/auth/auth";
+import { getAuthState, getPendingAuthUserId, hasSuperAdminRole } from "@/auth/auth";
 import { logger } from "@/logger";
 
 /**
@@ -57,7 +57,9 @@ function banReasonText(reason: string, endAt: Date | null): string {
  * 注意：登录流程在密码验证前调用（此时新连接尚未创建会话，统计不含自己）；
  * 注册流程同样生效。
  */
-async function checkIpAccountLimit(ip?: string): Promise<{ reason: string; online: number } | null> {
+async function checkIpAccountLimit(
+  ip?: string,
+): Promise<{ reason: string; online: number } | null> {
   if (!ip || ip === "") return null;
   const online = await prisma.sysUserGameSession.groupBy({
     by: ["userId"],
@@ -106,7 +108,9 @@ export async function checkLoginAllowed(
   return null;
 }
 
-/** 把账号/IP 对应的在线玩家即时踢出（封禁即时生效） */
+/** 把账号/IP 对应的在线玩家即时踢出（封禁即时生效）。含认证中途玩家
+ * （会话已写库但 authStates 未登记）——否则停在密码对话框的玩家在封禁生效后
+ * 仍能完成登录继续在线 */
 function kickOnlineForBan(
   target: { userId?: string | null; ip?: string | null },
   reason: string,
@@ -116,7 +120,8 @@ function kickOnlineForBan(
     const auth = getAuthState(p.id);
     const pIp = p.getIp().ip;
     const match =
-      (target.userId && auth?.userId === target.userId) ||
+      (target.userId &&
+        (auth?.userId === target.userId || getPendingAuthUserId(p.id) === target.userId)) ||
       (target.ip && target.ip !== "" && pIp === target.ip);
     if (match) {
       p.sendClientMessage("#ff5555", `[系统] 你已被封禁：${reason}`);

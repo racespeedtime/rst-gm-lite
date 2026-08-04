@@ -136,10 +136,15 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
     return again();
   }
   if (index === 4) {
-    // 显示物件：切换后立即对玩家生效（房屋/场景物件显隐）
+    // 显示物件：切换后立即对玩家生效（房屋/场景物件显隐）。
+    // 说明：隐藏是全局 streamer 虚拟坐标方案（infernus 无 per-object 玩家级
+    // 显隐 API），3D 速度表与爱车挂件（DynamicObject attach 车辆）也会一并隐藏
     const next = !setting.showObject;
     await updateSetting(player, { showObject: next });
-    notifySaved(player, `显示物件已${next ? "开启" : "关闭"}`);
+    notifySaved(
+      player,
+      next ? "显示物件已开启" : "显示物件已关闭（3D 速度表与爱车挂件也会一并隐藏）",
+    );
     setHouseObjectsVisibleForPlayer(player, next);
     return again();
   }

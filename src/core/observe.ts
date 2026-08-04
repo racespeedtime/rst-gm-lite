@@ -141,8 +141,10 @@ export function startObservePlayer(observer: Player, target: Player): void {
     return;
   }
   if (target.isInAnyVehicle()) {
-    const veh = target.getVehicle()!;
-    startObserveVehicle(observer, veh, target.id);
+    // 换车/上车瞬间 isInAnyVehicle 与 getVehicle 之间有空窗：getVehicle 可能
+    // 返回 undefined，非空断言会让 startObserveVehicle 在 isValid() 上抛 TypeError
+    const veh = target.getVehicle();
+    if (veh) startObserveVehicle(observer, veh, target.id);
   } else {
     // 保留已有 prevWorld/prevInterior（重跟踪时不覆盖最初值）
     const existing = observeStates.get(observer.id);
@@ -403,10 +405,12 @@ export function initObserve(): void {
     return next();
   });
 
-  // 目标进室内/换世界：观察者跟着进（主动追踪内部空间）
+  // 目标进室内/换世界：观察者跟着进（主动追踪内部空间）。
+  // 用 originPlayerId 匹配（与 onStateChange 对齐）：目标上车后 kind 已是
+  // vehicle，仅按 kind=player 匹配会漏——目标从车里进室内时观察者 interior 不跟随
   PlayerEvent.onInteriorChange(({ player: target, next }) => {
     for (const [pid, st] of observeStates) {
-      if (st.kind === "player" && st.targetId === target.id) {
+      if (st.originPlayerId === target.id) {
         const observer = Player.getInstance(pid);
         if (observer && observer.isConnected()) {
           observer.setInterior(target.getInterior());
