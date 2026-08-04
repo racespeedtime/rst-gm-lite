@@ -16,7 +16,7 @@ RST-GM-Lite 是 `open.mp + samp-node + @infernus/core` 纯 TypeScript 实现的�
 |------|---------|-----------|
 | `main.ts` / `logger` | — | 程序入口（仅装载 logger / raknet / callbacks）；winston 日志体系 |
 | `callbacks/` | — | 事件总线总入口：onConnect 认证流程、onDisconnect 清理链、全部模块 init、onInit/onExit 生命周期 |
-| `raknet/` | 比赛自动录像的"黑匣子" | 拦截 DriverSync 数据包高频采样，与定时兜底采样双轨录制 |
+| `raknet/` | — | 必须注册的 RakNet 回调占位（infernus 要求 onIncoming/Outgoing Packet/RPC 全部注册，否则回调链不放行）；录制采样在 replay/recorder.ts（IPacket 拦截 DriverSync） |
 | `core/` | 无处不在的底层体验 | 通用系统集：出生、面板、观战、计时器、碰撞、无敌等（见下） |
 
 ### 账号与身份
@@ -55,7 +55,7 @@ RST-GM-Lite 是 `open.mp + samp-node + @infernus/core` 纯 TypeScript 实现的�
 
 | 模块 | 玩家视角 | 开发者视角 |
 |------|---------|-----------|
-| `replay/` | 自定义录制、比赛回放（倍速 / 暂停 / seek / 观战）、影子挑战 | 自有二进制格式（v6，帧内含在线标记），NPC 分身回放 + 模拟驱动，挑战 = 影子 NPC 与你同场 PK |
+| `replay/` | 自定义录制、比赛回放（倍速 / 暂停 / seek / 观战）、影子挑战 | 自有二进制格式（v6，帧内含在线标记），RakNet DriverSync 拦截 + 定时兜底双轨采样录制（recorder.ts），NPC 分身回放 + 模拟驱动，挑战 = 影子 NPC 与你同场 PK |
 
 ### 系统支撑
 
