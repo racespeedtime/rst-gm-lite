@@ -102,8 +102,16 @@ export function noteCpProgress(playerId: number, cpDone: number, totalCp: number
   s.totalCp = totalCp;
 }
 
-/** 录制时长硬上限（1 小时）：防玩家挂机无限录制拖垮内存/磁盘（帧数组常驻内存） */
-const MAX_RECORD_MS = 60 * 60 * 1000;
+/** 自定义（ghost）录制时长硬上限（1 小时）：防玩家挂机无限录制拖垮内存/磁盘
+ * （帧数组常驻内存，约 30Hz×3600s=10.8 万帧） */
+const MAX_RECORD_MS_GHOST = 60 * 60 * 1000;
+/** 比赛（race）录制时长硬上限（6 小时）：对齐原版比赛录像时长上限 */
+const MAX_RECORD_MS_RACE = 6 * 60 * 60 * 1000;
+
+/** 按录制类型取时长上限 */
+function maxRecordMs(session: RecordingSession): number {
+  return session.type === "race" ? MAX_RECORD_MS_RACE : MAX_RECORD_MS_GHOST;
+}
 /** 离散状态缓存刷新间隔（sync 帧间少读 native） */
 const DISCRETE_REFRESH_MS = 2000;
 /**
@@ -126,7 +134,7 @@ const FALLBACK_INTERVAL_MS = 100;
 function checkRecordingBoundary(session: RecordingSession, player: Player): boolean {
   if (session.autoStopTriggered) return true;
   const reason =
-    Date.now() - session.startAt > MAX_RECORD_MS
+    Date.now() - session.startAt > maxRecordMs(session)
       ? "录制已达时长上限"
       : player.getVirtualWorld() !== session.startWorld
         ? "已离开录制世界"
