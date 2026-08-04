@@ -30,6 +30,7 @@ import {
   registerReplayNpcForReplay,
   unregisterReplayNpcForReplay,
 } from "./playback";
+import { registerObserveCandidate, unregisterObserveCandidate } from "@/core/observe";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR } from "@/utils/colors";
 
@@ -95,6 +96,7 @@ export function cleanupChallenge(playerId: number): void {
   if (ch.timer) clearIntervalSafe(ch.timer);
   try {
     unregisterReplayNpcForReplay(ch.ghost.npcPlayerId); // 注销屏蔽（影子销毁后不再有 sync 包）
+    unregisterObserveCandidate(ch.ghost.vehicle.id, "vehicle"); // 移出观战切换候选
     ch.ghost.label.destroy();
     ch.ghost.npc.destroy();
     ch.ghost.vehicle.destroy();
@@ -405,6 +407,8 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     // 登记影子 NPC：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
     // 防的是 NPC 自身/残留 sync 与模拟广播冲突）
     registerReplayNpcForReplay(shadowPlayer.id);
+    // 登记为观战切换候选（与回放 ghost 同机制，可左右键切到影子车）
+    registerObserveCandidate(veh.id, "vehicle");
     vehicle = veh;
     label = lab;
     ghost = {

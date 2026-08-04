@@ -7,7 +7,13 @@ import { isInRace } from "@/race/room";
 import { isInChallenge } from "./challenge";
 import { getOwnedVehicle } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
-import { startObserveVehicle, stopObserve, isObserving } from "@/core/observe";
+import {
+  startObserveVehicle,
+  stopObserve,
+  isObserving,
+  registerObserveCandidate,
+  unregisterObserveCandidate,
+} from "@/core/observe";
 import {
   parseReplayFile,
   decodeFrame,
@@ -662,7 +668,7 @@ export async function spawnReplay(
         text:
           `{FFD700}${npc.getName()}` +
           `\n{FFFFFF}回放 · ${replay.recorderName}` +
-          (ghosts.length + 1 > 1 ? `{808080} [ghost ${ghosts.length + 1}/${count}]` : ""),
+          (count > 1 ? `{808080} [ghost ${ghosts.length + 1}/${count}]` : ""),
         color: "#ffffff",
         x: 0,
         y: 0,
@@ -677,6 +683,8 @@ export async function spawnReplay(
       // 登记 NPC playerId：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
       // 但 NPC 自身/残留状态可能发真实 sync 会冲突）；同时记录 em
       registerReplayNpc(npcPlayer.id);
+      // 登记为观战切换候选：回放/挑战玩家按左/右键可在各 ghost 车之间循环切换
+      registerObserveCandidate(vehicle.id, "vehicle");
       ghosts.push({
         npc,
         vehicle,
@@ -891,6 +899,7 @@ export function stopReplaySession(playerId: number): void {
   for (const g of session.ghosts) {
     try {
       unregisterReplayNpc(g.npcPlayerId); // 注销屏蔽（NPC 销毁后不再有 sync 包）
+      unregisterObserveCandidate(g.vehicle.id, "vehicle"); // 移出观战切换候选
       g.label.destroy();
       g.npc.destroy();
       g.vehicle.destroy();

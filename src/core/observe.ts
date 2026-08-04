@@ -1,12 +1,14 @@
 import {
   Dialog,
   DialogStylesEnum,
+  KeysEnum,
   Player,
   PlayerEvent,
   PlayerStateEnum,
   SpectateModesEnum,
   Vehicle,
   VehicleEvent,
+  isPressed,
 } from "@infernus/core";
 
 import { COLOR_ORANGE, COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
@@ -21,6 +23,57 @@ interface ObserveState {
 }
 
 const observeStates = new Map<number, ObserveState>();
+
+/**
+ * 观战切换候选源（玩家/车辆，注册制的可切换目标列表）。
+ * 每份观战会话对应一条：切走/停止时清掉；观战回放/影子时由 replay 模块
+ * 注册 ghost 车。key 保证同源不重复注册（玩家用负号区分车辆）。
+ */
+const observeCandidates = new Map<number, { kind: "player" | "vehicle" }>();
+
+/** 注册观战切换候选源（targetId：玩家 id 或车辆 id；kind 区分命名空间） */
+export function registerObserveCandidate(targetId: number, kind: "player" | "vehicle"): void {
+  const key = kind === "player" ? targetId : -targetId;
+  observeCandidates.set(key, { kind });
+}
+
+/** 注销观战切换候选源（实体销毁/离开可切范围时调用） */
+export function unregisterObserveCandidate(targetId: number, kind: "player" | "vehicle"): void {
+  observeCandidates.delete(kind === "player" ? targetId : -targetId);
+}
+
+/** 观战左/右键切换：循环切换下一个/上一个可观战目标。
+ *  左键（FIRE）→ 下一个；右键（SECONDARY_ATTACK/瞄准）→ 上一个。
+ *  open.mp 无现成的"观战目标切换"事件，用按键同步（onKeyStateChange）检测
+ *  ——观战中玩家仍发按键包（键盘 WASD 已证实可用，鼠标键同理依赖客户端）。
+ *  AI 观战者/NPC 不参与（onKeyStateChange 对 NPC 不触发）。 */
+function cycleObserveTarget(observer: Player, forward: boolean): void {
+  const st = observeStates.get(observer.id);
+  if (!st) return;
+  if (observeCandidates.size === 0) return;
+  // 当前目标在候选列表中的索引；不在则从头/尾开始
+  const curKey = st.kind === "player" ? st.targetId : -st.targetId;
+  const keys = [...observeCandidates.keys()];
+  let idx = keys.indexOf(curKey);
+  if (idx < 0) idx = forward ? -1 : keys.length;
+  for (let step = 1; step <= keys.length; step++) {
+    const k = keys[(idx + (forward ? step : -step) + keys.length * 2) % keys.length];
+    const cand = observeCandidates.get(k)!;
+    if (cand.kind === "player") {
+      const target = Player.getInstance(k);
+      if (target && target.isConnected() && target.id !== observer.id) {
+        startObservePlayer(observer, target); // 会更新 observeStates + spectate
+        return;
+      }
+    } else {
+      const target = Vehicle.getInstance(-k);
+      if (target && target.isValid()) {
+        startObserveVehicle(observer, target);
+        return;
+      }
+    }
+  }
+}
 
 export function isObserving(playerId: number): boolean {
   return observeStates.has(playerId);
@@ -170,6 +223,28 @@ async function suggestStop(observer: Player): Promise<void> {
 
 /** 初始化观察系统 */
 export function initObserve(): void {
+  // 在线玩家都登记为可切换观战候选（断线时注销；观战者自己在切换时排除）
+  PlayerEvent.onConnect(({ player, next }) => {
+    if (!player.isNpc()) registerObserveCandidate(player.id, "player");
+    return next();
+  });
+
+  // 观战左/右键循环切换（左键=下一个，右键=上一个）。按下瞬间触发；
+  // 观战模式中玩家仍发按键包（键盘方向键已验证可用）。只响应观战者。
+  PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
+    if (player.isNpc()) return next();
+    if (!observeStates.has(player.id)) return next(); // 非观战不处理
+    if (isPressed(newKeys, oldKeys, KeysEnum.FIRE)) {
+      cycleObserveTarget(player, true); // 左键 → 下一个
+      return next();
+    }
+    if (isPressed(newKeys, oldKeys, KeysEnum.SECONDARY_ATTACK)) {
+      cycleObserveTarget(player, false); // 右键 → 上一个
+      return next();
+    }
+    return next();
+  });
+
   // /tv <ID> 观战玩家，/tv off 关闭
   PlayerEvent.onCommandText(["tv", "ob", "spec"], ({ player, subcommand, next }) => {
     const arg = subcommand[0];
@@ -259,6 +334,8 @@ export function initObserve(): void {
   });
 
   PlayerEvent.onDisconnect(({ player: target, next }) => {
+    // 从可切换候选移除
+    unregisterObserveCandidate(target.id, "player");
     for (const [pid, st] of observeStates) {
       if (st.kind === "player" && st.targetId === target.id) {
         const observer = Player.getInstance(pid);
