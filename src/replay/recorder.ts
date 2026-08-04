@@ -373,12 +373,21 @@ export async function stopRecording(
     return null;
   }
 
+  // 认证态须在写文件后仍可用：断线/服务器退出（onExit 强制落盘）时 auth 可能
+  // 已被清理，userId 为空串会写进非空 UUID 列（PostgreSQL invalid uuid）触发
+  // create 失败 → catch 里还会删掉刚写好的文件。显式处理：无认证态直接删文件
+  // + 告警，宁可丢这段录制也不留"文件删了 DB 还残留"或"错误日志噪音"。
   const auth = getAuthState(playerId);
+  if (!auth) {
+    deleteRecordingFile(fileName);
+    logger.warn(`[replay] 录制落盘时认证态已失效，删除文件 ${fileName}（playerId=${playerId}）`);
+    return null;
+  }
   try {
     const created = await prisma.replay.create({
       data: {
         type: session.type,
-        userId: auth?.userId ?? "",
+        userId: auth.userId,
         recorderName: player?.getName().name ?? "未知",
         raceId: session.raceId,
         raceName: session.raceName,

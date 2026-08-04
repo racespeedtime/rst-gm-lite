@@ -1,9 +1,10 @@
-import { Player, PlayerEvent } from "@infernus/core";
+import { Dialog, DialogStylesEnum, Player, PlayerEvent } from "@infernus/core";
 import { getAuthState } from "@/auth/auth";
 import { isPlayerLocked } from "@/core/interaction";
 import { isInRace } from "@/race/room";
+import { showDialog } from "@/utils/dialog";
 import { startRecording, stopRecording, isRecording } from "./recorder";
-import { controlReplay, getReplaySession } from "./playback";
+import { controlReplay, getReplaySession, REPLAY_SPEEDS } from "./playback";
 import { isInChallenge, cleanupChallenge } from "./challenge";
 import { openReplayMenu } from "./menu";
 import { COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
@@ -97,19 +98,30 @@ export function initReplayCommands(): void {
       }
       case "help":
       default: {
-        player.sendClientMessage(
-          COLOR_INFO,
-          [
-            "用法: /rp <指令> [参数]",
-            "  play      开始/继续播放（暂停后恢复；未在播放则打开我的录制）",
-            "  pause     暂停",
-            "  speed [0.5|0.75|1|1.25|1.5|2|4]  倍速（不填则提示当前倍速）",
-            "  seek <秒|mm:ss>  跳转（多分身保持错峰）",
-            "  watch     观看回放视角（比赛回放带 C P/TIME/BEST）",
-            "  stop      停止回放",
-            "面板入口：/p → 回放 分组，功能与命令一致",
-          ].join("\n"),
-        );
+        // /rp 帮助：MSGBOX 弹出（7 行聊天刷屏不友好；Dialog 支持中文）
+        void (async () => {
+          await showDialog(
+            player,
+            new Dialog({
+              style: DialogStylesEnum.MSGBOX,
+              caption: "/rp 回放控制",
+              info: [
+                "用法: /rp <指令> [参数]",
+                "",
+                "  play      开始/继续播放（暂停后恢复；未在播放则打开我的录制）",
+                "  pause     暂停",
+                `  speed [${REPLAY_SPEEDS.join("|")}]  倍速（不填则提示当前倍速）`,
+                "  seek <秒|mm:ss>  跳转（多分身保持错峰）",
+                "  watch     观看回放视角（比赛回放带 C P/TIME/BEST）",
+                "  stop      停止回放",
+                "",
+                "面板入口：/p → 回放 分组，功能与命令一致",
+              ].join("\n"),
+              button1: "确定",
+              button2: "关闭",
+            }),
+          );
+        })();
         return next();
       }
     }

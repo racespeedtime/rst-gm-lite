@@ -10,7 +10,6 @@ import {
   RaceCpEvent,
   Vehicle,
 } from "@infernus/core";
-import { InCarSync, IncomingBitStream } from "@infernus/raknet";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -22,6 +21,7 @@ import { showDialog } from "@/utils/dialog";
 import type { ReplayData } from "./format";
 import {
   sampleAt,
+  emulateDriverSync,
   allocReplayWorld,
   freeReplayWorld,
   allocReplayNpc,
@@ -121,15 +121,15 @@ export function destroyAllChallenges(): void {
 }
 
 /** 渲染影子到当前播放时间（帧序一致；播完 clamp 终点）
- * emulate 驱动（与回放一致）：构造 DriverSync 包模拟影子 NPC 传入 + 发给
- * 挑战者——客户端本地物理驱动，影子速度/朝向真实平滑。
- * 30Hz 节流；血量由 emulate 的 vehicleHealth 处理。 */
+ * emulate 驱动（与回放一致，复用 playback 的 emulateDriverSync 发包）：
+ * 构造 DriverSync 包模拟影子 NPC 传入 + 发给挑战者——客户端本地物理驱动，
+ * 影子速度/朝向真实平滑。30Hz 节流；血量由 emulate 的 vehicleHealth 处理。 */
 function renderGhost(ch: ChallengeSession): void {
   const s = sampleAt(ch.data, ch.ghost.playTime);
   if (!s) return;
-  // 影子播完（playTime 到最后一帧）→ 速度/氮气清零：影子停在终点，挑战者
+  // 影子播完（playTime 到最后一帧）→ 速度/按键清零：影子停在终点，挑战者
   // 仍要看见它作参照（不能停发）。否则尾帧非零速度会让影子在终点持续滑行
-  // 抖动，keys 残留 SPRINT 还会原地喷氮。
+  // 抖动，按键残留还会原地转向抖动（emulateDriverSync 的 atEnd 分支处理）。
   const maxTime = (ch.data.header.frameCount - 1) * Math.max(1, ch.data.header.frameIntervalMs);
   const atEnd = ch.ghost.playTime >= maxTime;
   try {
@@ -145,39 +145,7 @@ function renderGhost(ch: ChallengeSession): void {
       ch.ghost.lastNitroAt = now;
       ch.ghost.vehicle.addComponent(1010);
     }
-    const bs = new IncomingBitStream();
-    try {
-      const sync = new InCarSync(bs);
-      sync.writeSync({
-        vehicleId: ch.ghost.vehicle.id,
-        lrKey: s.lrKey,
-        udKey: s.udKey,
-        keys: atEnd ? 0 : s.keys,
-        quaternion: [s.qw, s.qx, s.qy, s.qz], // InCarSync quaternion 序 = [w,x,y,z]
-        position: [s.x, s.y, s.z],
-        velocity: atEnd ? [0, 0, 0] : [s.vx, s.vy, s.vz], // 播完静止停在终点
-        vehicleHealth: s.vehicleHealth,
-        playerHealth: 100,
-        armour: 0,
-        additionalKey: s.additionalKey,
-        weaponId: 0,
-        sirenState: s.sirenState,
-        landingGearState: s.landingGearState,
-        trailerId: s.trailerId,
-        trainSpeed: s.trainSpeed,
-      });
-      bs.emulateIncomingPacket(ch.ghost.npcPlayerId);
-      // 发给能看到影子车的玩家（独立挑战世界只有挑战者；车辆 stream 由
-      // 服务器维护，NPC 无 stream 不能用 sendPacketToPlayerStream——见 playback）
-      for (const p of Player.getInstances()) {
-        if (p.isNpc() || !p.isConnected()) continue;
-        if (ch.ghost.vehicle.isStreamedIn(p)) {
-          bs.sendPacket(p.id);
-        }
-      }
-    } finally {
-      bs.delete();
-    }
+    emulateDriverSync(ch.ghost.npcPlayerId, ch.ghost.vehicle, s, atEnd);
   } catch (e) {
     // 一次性 warn 防刷屏；实体失效由清理兜底
     if (!ch.ghost.warnedEmulateFail) {

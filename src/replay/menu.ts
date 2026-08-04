@@ -5,7 +5,7 @@ import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import { isSuperAdmin } from "@/admin/op";
 import { deleteRecordingFile } from "./storage";
-import { spawnReplay, controlReplay, getReplaySession } from "./playback";
+import { spawnReplay, controlReplay, getReplaySession, REPLAY_SPEEDS } from "./playback";
 import { startRecording, stopRecording, isRecording } from "./recorder";
 import { isInChallenge } from "./challenge";
 import { isInRace } from "@/race/room";
@@ -226,7 +226,7 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       info: [
         "1. 播放 / 继续",
         "2. 暂停",
-        "3. 倍速（0.5 / 1 / 2 / 4）",
+        "3. 倍速（0.5 / 0.75 / 1 / 1.25 / 1.5 / 2 / 4）",
         "4. 跳转时间（秒）",
         "5. 观看视角",
         "6. 停止回放",
@@ -250,18 +250,20 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       controlReplay(player, "pause");
       return back?.();
     case 2: {
+      // 倍速档位选择（LIST 避免手输 1,5 这种错误；档位复用 playback 常量）
       const sp = await showDialog(
         player,
         new Dialog({
-          style: DialogStylesEnum.INPUT,
+          style: DialogStylesEnum.LIST,
           caption: "倍速",
-          info: "输入倍速（0.5 / 0.75 / 1 / 1.25 / 1.5 / 2 / 4）：",
+          info: REPLAY_SPEEDS.map((s, i) => `${i + 1}. ×${s}`).join("\n"),
           button1: "确定",
           button2: "取消",
         }),
       );
       if (!sp || sp.response !== 1) return back?.();
-      controlReplay(player, "speed", sp.inputText.trim());
+      const speed = REPLAY_SPEEDS[sp.listItem];
+      controlReplay(player, "speed", String(speed));
       return back?.();
     }
     case 3: {

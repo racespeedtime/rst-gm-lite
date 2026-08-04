@@ -86,8 +86,8 @@ export function freeReplayWorld(worldId: number): void {
 
 /** 播放推进帧间隔（60fps） */
 const TICK_MS = 16;
-/** 支持的倍速档位（/rp speed、面板倍速输入共用校验） */
-const REPLAY_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4];
+/** 支持的倍速档位（/rp speed、面板倍速选择共用校验） */
+export const REPLAY_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4];
 /** emulate 发包节流：对齐 open.mp in_vehicle_sync_rate=30（30Hz）——60fps tick
  *  每 2 tick 发一个 DriverSync 模拟包（发太多服务器会合并/浪费） */
 const EMULATE_INTERVAL_MS = 33;
@@ -378,13 +378,58 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
 }
 
 /**
- * 渲染单个 ghost：构造 InCarSync（DriverSync）包 emulateIncomingPacket 模拟
- * 该 NPC 作为司机传入——服务器按真实司机处理车辆状态；随后 bs.sendPacket
- * 把该 DriverSync 包显式发给所有玩家（emulate 只进服务器处理、不会自动转发
- * 给客户端，必须手动 send 才能让玩家看到/让客户端本地物理驱动）。
- * 位置/朝向/速度/keys（氮气）/lrKey/udKey/起落架/警笛/拖挂/火车速度全部来自
- * 录制帧，客户端物理驱动平滑。30Hz 节流（对齐 in_vehicle_sync_rate）。
+ * 构造 DriverSync（InCarSync）包并模拟 NPC 传入 + 发给能看到该车的所有玩家
+ * （回放 ghost 与挑战影子共用）。
+ * - emulate 进服务器（按真实司机处理车辆状态），再显式 send 给玩家——客户端
+ *   本地物理驱动（车速表/氮气真实）。emulate 只进服务器处理、不会自动转发。
+ * - 不能用 sendPacketToPlayerStream(players, npcPlayer)：NPC 无客户端实体，
+ *   open.mp 的 Player::streamedFor_ 对 NPC 从不置位（源码确认 streamInForPlayer
+ *   只在 Actor/Pickup/TextLabel/Vehicle 调用），isStreamedIn(npc) 恒 false →
+ *   一个玩家都收不到。用车辆维度 Vehicle.isStreamedIn（服务器按世界+距离维护）。
+ * - atEnd（播完/影子到达终点）：速度与按键（keys/lrKey/udKey/additionalKey）
+ *   清零——尾帧非零速度会让车辆在停发后继续滑行/终点抖动，按键清零防原地
+ *   转向抖动。
  */
+export function emulateDriverSync(
+  npcPlayerId: number,
+  vehicle: Vehicle,
+  s: SampledState,
+  atEnd: boolean,
+): void {
+  const bs = new IncomingBitStream();
+  try {
+    const sync = new InCarSync(bs);
+    sync.writeSync({
+      vehicleId: vehicle.id,
+      lrKey: atEnd ? 0 : s.lrKey,
+      udKey: atEnd ? 0 : s.udKey,
+      keys: atEnd ? 0 : s.keys, // SPRINT=氮气，客户端据此在对应时刻喷氮
+      quaternion: [s.qw, s.qx, s.qy, s.qz], // InCarSync quaternion 序 = [w,x,y,z]
+      position: [s.x, s.y, s.z],
+      velocity: atEnd ? [0, 0, 0] : [s.vx, s.vy, s.vz],
+      vehicleHealth: s.vehicleHealth,
+      playerHealth: 100,
+      armour: 0,
+      additionalKey: atEnd ? 0 : s.additionalKey,
+      weaponId: 0,
+      sirenState: s.sirenState,
+      landingGearState: s.landingGearState,
+      trailerId: s.trailerId,
+      trainSpeed: s.trainSpeed,
+    });
+    bs.emulateIncomingPacket(npcPlayerId);
+    for (const p of Player.getInstances()) {
+      if (p.isNpc() || !p.isConnected()) continue;
+      if (vehicle.isStreamedIn(p)) {
+        bs.sendPacket(p.id);
+      }
+    }
+  } finally {
+    bs.delete(); // 释放 BitStream 原生句柄
+  }
+}
+
+/** 渲染单个 ghost：按播放时间采样 → emulateDriverSync 模拟司机传入 + 广播 */
 function renderGhost(session: ReplaySession, ghost: Ghost): void {
   // 已停发（播完）：不再 emulate，车辆静止停在终点
   if (ghost.stopped) return;
@@ -401,63 +446,21 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     ensureGhostVehicle(session, ghost, s.vehicleModel);
     // 30Hz 发包节流（60fps tick 每 2 tick 一次；seek/快进时播放时间跳变，
     // 首帧/跳转帧立即发一次保证位置同步）。atEnd 帧必须强制发——它是
-    // 客户端收到的最后一帧（含速度清零），若被节流跳过则停发前最后发的是
-    // 带非零速度的旧帧，车辆在终点仍会滑行。
+    // 客户端收到的最后一帧（速度/按键已清零），若被节流跳过则停发前最后发
+    // 的是带非零速度的旧帧，车辆在终点仍会滑行。
     const now = Date.now();
     if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS && !atEnd) return;
     ghost.lastEmulateAt = now;
     // 氮气跟随录制者按键：SA 氮气有容量、喷完即消失，录制时由 vehicleAuto
     // 定时补充，回放 NPC 车无人补——检测到 keys.SPRINT 置位就给车补一个氮气
     // 组件（500ms 节流防高频 addComponent），保证该喷的时刻有氮气可喷
-    // （否则氮气耗尽后 keys 仍按住却不喷，表现断断续续像点按）。
-    if (s.keys & KeysEnum.SPRINT && now - ghost.lastNitroAt >= 500) {
+    // （否则氮气耗尽后 keys 仍按住却不喷，表现断断续续像点按；播完不再补）。
+    if (s.keys & KeysEnum.SPRINT && !atEnd && now - ghost.lastNitroAt >= 500) {
       ghost.lastNitroAt = now;
       ghost.vehicle.addComponent(1010);
     }
-    // 血量：emulate 的 DriverSync 包已带 vehicleHealth，服务器按真实司机
-    // 处理时会应用到车辆实体并广播，无需显式 setHealth（重复操作）
-    // 构造 DriverSync 包并模拟 NPC 传入（incoming 上下文 → 包内不含 playerId，
-    // emulateIncomingPacket 的 playerId 参数即发送者）
-    const bs = new IncomingBitStream();
-    try {
-      const sync = new InCarSync(bs);
-      sync.writeSync({
-        vehicleId: ghost.vehicle.id,
-        lrKey: s.lrKey,
-        udKey: s.udKey,
-        keys: s.keys, // SPRINT=氮气，客户端据此在对应时刻喷氮
-        quaternion: [s.qw, s.qx, s.qy, s.qz], // InCarSync quaternion 序 = [w,x,y,z]
-        position: [s.x, s.y, s.z],
-        // atEnd 速度清零：尾帧非零速度会让客户端物理在停发后继续滑行，
-        // 撞上终点地形/物体 → 翻车、朝向乱转。清零后车辆静止停在终点。
-        velocity: atEnd ? [0, 0, 0] : [s.vx, s.vy, s.vz],
-        vehicleHealth: s.vehicleHealth,
-        playerHealth: 100,
-        armour: 0,
-        additionalKey: s.additionalKey,
-        weaponId: 0,
-        sirenState: s.sirenState,
-        landingGearState: s.landingGearState,
-        trailerId: s.trailerId,
-        trainSpeed: s.trainSpeed,
-      });
-      // emulate 进服务器（按真实司机处理车辆状态），再显式把 DriverSync 包
-      // 发给能看到 ghost 车的玩家——客户端本地物理驱动（车速表/氮气真实）。
-      // 注意：不能用 sendPacketToPlayerStream(players, npcPlayer)——NPC 无客户端
-      // 实体，open.mp 的 Player::streamedFor_ 对 NPC 从不置位（源码确认
-      // streamInForPlayer 只在 Actor/Pickup/TextLabel/Vehicle 调用），
-      // isStreamedIn(npc) 恒 false → 一个玩家都收不到。
-      // 用车辆维度：Vehicle.isStreamedIn（服务器按世界+距离维护的真实可见性）
-      bs.emulateIncomingPacket(ghost.npcPlayerId);
-      for (const p of Player.getInstances()) {
-        if (p.isNpc() || !p.isConnected()) continue;
-        if (ghost.vehicle.isStreamedIn(p)) {
-          bs.sendPacket(p.id);
-        }
-      }
-    } finally {
-      bs.delete(); // 释放 BitStream 原生句柄
-    }
+    // 血量由 emulate 的 vehicleHealth 处理，无需显式 setHealth（重复操作）
+    emulateDriverSync(ghost.npcPlayerId, ghost.vehicle, s, atEnd);
   } catch (e) {
     // 一次性 warn 防刷屏（30Hz 下持续失败会刷日志）；实体失效由清理兜底
     if (!ghost.warnedEmulateFail) {
@@ -597,8 +600,9 @@ export async function spawnReplay(
   const worldId = isGhost ? player.getVirtualWorld() : allocReplayWorld();
   const ghosts: Ghost[] = [];
   const duration = data.header.frameCount * data.header.frameIntervalMs;
-  // 分身错峰间隔：自定义（opts.staggerMs，毫秒）或自动等分总时长（count 辆均匀铺开）
-  const baseGap = opts?.staggerMs ?? (count > 1 ? duration / count : 0);
+  // 分身错峰间隔：自定义（opts.staggerMs，毫秒）或自动等分总时长（count 辆均匀铺开）。
+  // 用 || 而非 ??：显式传 0 视为"未指定"（0 间隔 = 无错峰，非用户本意）
+  const baseGap = opts?.staggerMs || (count > 1 ? duration / count : 0);
 
   try {
     for (let i = 0; i < count; i++) {
@@ -772,8 +776,16 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         break;
       }
       const n = Number(arg);
-      session.speed = REPLAY_SPEEDS.includes(n) ? n : 1;
-      player.sendClientMessage(COLOR_RACE, `倍速 ×${session.speed}`);
+      if (REPLAY_SPEEDS.includes(n)) {
+        session.speed = n;
+        player.sendClientMessage(COLOR_RACE, `倍速 ×${session.speed}`);
+      } else {
+        session.speed = 1;
+        player.sendClientMessage(
+          COLOR_ERROR,
+          `无效倍速，已回退 ×1（可选：${REPLAY_SPEEDS.join(" / ")}）`,
+        );
+      }
       break;
     }
     case "seek": {
