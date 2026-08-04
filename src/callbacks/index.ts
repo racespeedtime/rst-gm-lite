@@ -15,6 +15,7 @@ import { initSpawnSystem, savePlayerPosition, cleanupLoginSpawned } from "@/core
 import { runLobby } from "@/personalize/lobby";
 import { cleanupGui, initGui } from "@/interface/gui";
 import { initVehicleCommands, onPlayerDisconnectVehicle, startVehicleSaveTimer } from "@/vehicles";
+import { initMyVehicleCommands } from "@/vehicles/menu";
 import { cleanupTeleport, fallbackTeleport, initTeleport, initTpTimeoutLoop } from "@/teleport";
 import {
   initHouseCommands,
@@ -277,6 +278,8 @@ initGui();
 // 爱车系统（刷车命令 + 位置定时保存 + 改装店 mod 存储）
 initVehicleCommands();
 startVehicleSaveTimer();
+// 原版爱车命令兼容（/cars|/ac /wdac /llac）
+initMyVehicleCommands();
 
 // 无限金钱（登录发钱 + 进改装店补给）
 initMoneySystem();

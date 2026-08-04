@@ -13,7 +13,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
 import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scripts";
-import { isEditing } from "./editor";
+import { isEditing, enterRaceEdit, canEditRace, addCp, showEditMenu, exitEdit } from "./editor";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import {
@@ -1448,7 +1448,8 @@ function tickRooms(): void {
 export function initRaceSystem(): void {
   PlayerEvent.onCommandText(["r", "race"], ({ player, subcommand, next }) => {
     const cmd = subcommand[0];
-    const query = subcommand.slice(1).join(" ");
+    const rest = subcommand.slice(1);
+    const query = rest.join(" ");
     if (cmd === "s") {
       if (query) {
         void startRaceFlow(player, query);
@@ -1465,12 +1466,34 @@ export function initRaceSystem(): void {
       joinRoomFlow(player);
     } else if (cmd === "l" || cmd === "leave") {
       leaveRace(player);
+    } else if (cmd === "info") {
+      // /r info 赛道名 → 赛道详情（对齐原版）
+      if (!query) {
+        player.sendClientMessage(COLOR_RACE, "用法: /r info 赛道名称");
+      } else {
+        void showRaceInfo(player, query);
+      }
+    } else if (cmd === "page") {
+      // /r page [N] → 原版翻页入口，gm-lite 无页码概念 → 打开赛道选择列表
+      void openRaceListDialog(player);
+    } else if (cmd === "create") {
+      // /r create 赛道名 → 创建赛道并进入编辑（对齐原版；无密码机制）
+      if (!query) {
+        player.sendClientMessage(COLOR_RACE, "用法: /r create 赛道名称");
+      } else {
+        void createRaceByCommand(player, query);
+      }
+    } else if (cmd === "edit") {
+      void handleRaceEditCommand(player, rest);
     } else if (!cmd) {
       // /r 无参数 → 弹赛道列表对话框（对齐原版 Race_ShowGameMainSel 分页列表，
       // 选中赛道直接创建比赛）
       void openRaceListDialog(player);
     } else {
-      player.sendClientMessage(COLOR_RACE, "用法: /r s 赛道名称 创建比赛 · /r j 加入 · /r l 离开");
+      player.sendClientMessage(
+        COLOR_RACE,
+        "用法: /r s 赛道名称 创建比赛 · /r j 加入 · /r l 离开 · /r info 名称 · /r create 名称 · /r edit 名称|cp|q|d",
+      );
     }
     return next();
   });
@@ -1752,6 +1775,116 @@ function joinRoomFlow(player: Player): void {
   void joinRoom(player, room).then(() => {
     broadcastToRoom(room, `[赛车] ${player.getName().name} 加入了比赛`);
   });
+}
+
+/** 赛道信息查询（/r info）：按名字或 id 查赛道，展示名称/长度/圈数/作者/纪录数 */
+async function showRaceInfo(player: Player, query: string): Promise<void> {
+  const race =
+    (await prisma.race.findFirst({
+      where: { isEnabled: true, deletedAt: null, name: query },
+    })) ??
+    (UUID_RE.test(query)
+      ? await prisma.race.findFirst({
+          where: { isEnabled: true, deletedAt: null, id: query },
+        })
+      : null);
+  if (!race) {
+    player.sendClientMessage(COLOR_ERROR, `未找到赛道「${query}」`);
+    return;
+  }
+  const [recs, author] = await Promise.all([
+    prisma.raceRecord.count({ where: { raceId: race.id, deletedAt: null } }),
+    race.userId
+      ? prisma.sysUser.findUnique({ where: { id: race.userId }, select: { username: true } })
+      : null,
+  ]);
+  player.sendClientMessage(
+    COLOR_RACE,
+    `[赛道] ${race.name} | 长度 ${Math.round(Number(race.totalLength))}m | ` +
+      `${race.laps ?? 1} 圈 | 作者 ${author?.username ?? "?"} | ${recs} 条纪录`,
+  );
+}
+
+/** 创建赛道（/r create）：名字查重后创建 + 进入编辑（对齐原版 /r create 流程，无密码机制） */
+async function createRaceByCommand(player: Player, name: string): Promise<void> {
+  const auth = getAuthState(player.id);
+  if (!auth) return;
+  const dup = await prisma.race.findFirst({ where: { name } });
+  if (dup) {
+    player.sendClientMessage(COLOR_ERROR, `赛道「${name}」已存在`);
+    return;
+  }
+  try {
+    const race = await prisma.race.create({
+      data: { name, isEnabled: true, userId: auth.userId },
+    });
+    if (isInRace(player.id)) {
+      // 比赛中不能进编辑（对齐原版 /r edit 门禁）：赛道已建但只提示，不刷编辑车
+      player.sendClientMessage(COLOR_RACE, `赛道「${name}」创建成功（比赛中，请离开比赛后编辑）`);
+      return;
+    }
+    player.sendClientMessage(COLOR_SUCCESS, `赛道「${name}」创建成功，进入编辑模式放置检查点`);
+    await enterRaceEdit(player, race.id);
+  } catch (e) {
+    logger.error(`[race] /r create 创建赛道失败 ${name}`, e);
+    player.sendClientMessage(COLOR_ERROR, "创建失败（名称可能已存在）");
+  }
+}
+
+/** /r edit 子命令：无参数 → 编辑帮助；名称 → 进编辑；cp/q/d → 编辑态操作（对齐原版） */
+async function handleRaceEditCommand(player: Player, rest: string[]): Promise<void> {
+  const sub = rest[0];
+  if (!sub) {
+    player.sendClientMessage(
+      COLOR_RACE,
+      "用法: /r edit 赛道名 进入编辑 · /r edit cp 放置CP · /r edit q 退出 · /r edit d 打开编辑菜单",
+    );
+    return;
+  }
+  if (sub === "cp") {
+    if (!isEditing(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "你不在赛道编辑中，先 /r edit 赛道名 进入编辑");
+      return;
+    }
+    await addCp(player);
+    return;
+  }
+  if (sub === "q") {
+    exitEdit(player.id);
+    player.sendClientMessage(COLOR_RACE, "已退出编辑模式");
+    return;
+  }
+  if (sub === "d") {
+    if (!isEditing(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "你不在赛道编辑中，先 /r edit 赛道名 进入编辑");
+      return;
+    }
+    await showEditMenu(player);
+    return;
+  }
+  // /r edit 赛道名 → 进入编辑（对齐原版，无密码机制；按名字查）
+  const name = rest.join(" ");
+  const race =
+    (await prisma.race.findFirst({
+      where: { isEnabled: true, deletedAt: null, name },
+    })) ??
+    (UUID_RE.test(name)
+      ? await prisma.race.findFirst({ where: { isEnabled: true, deletedAt: null, id: name } })
+      : null);
+  if (!race) {
+    player.sendClientMessage(COLOR_ERROR, `未找到赛道「${name}」`);
+    return;
+  }
+  if (!(await canEditRace(player, race.id))) {
+    player.sendClientMessage(COLOR_ERROR, "你无权编辑该赛道（仅作者或管理员）");
+    return;
+  }
+  if (isInRace(player.id)) {
+    // 比赛中禁止进编辑（对齐原版 /r edit 门禁：编辑会刷测试车/切走玩家，干扰比赛）
+    player.sendClientMessage(COLOR_ERROR, "比赛中不能进入赛道编辑，先 /r l 离开比赛");
+    return;
+  }
+  await enterRaceEdit(player, race.id);
 }
 
 /**

@@ -1,6 +1,7 @@
-import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
+import { Dialog, DialogStylesEnum, Player, PlayerEvent } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
+import { isPlayerLocked } from "@/core/interaction";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
@@ -74,8 +75,8 @@ async function spawnVehicleFlow(player: Player, back?: MenuBack): Promise<void> 
   return back?.();
 }
 
-/** 爱车列表：列出该玩家的所有爱车（分页），选择刷出 */
-async function listVehiclesFlow(player: Player, back?: MenuBack): Promise<void> {
+/** 爱车列表：列出该玩家的所有爱车（分页），选择刷出（/llac /cars list 命令入口也调它） */
+export async function listVehiclesFlow(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
   const vehicles = await prisma.userVehicle.findMany({
@@ -105,8 +106,8 @@ async function listVehiclesFlow(player: Player, back?: MenuBack): Promise<void> 
   return back?.();
 }
 
-/** 当前爱车管理：锁车/车牌/改色/踢乘客（操作后停留本菜单，取消返回上一层） */
-async function manageCurrentVehicle(player: Player, back?: MenuBack): Promise<void> {
+/** 当前爱车管理：锁车/车牌/改色/踢乘客（操作后停留本菜单，取消返回上一层；/wdac 入口） */
+export async function manageCurrentVehicle(player: Player, back?: MenuBack): Promise<void> {
   const veh = getOwnedVehicle(player.id);
   if (!veh) {
     player.sendClientMessage(COLOR_ERROR, "你还没有刷出车辆");
@@ -218,4 +219,92 @@ async function manageCurrentVehicle(player: Player, back?: MenuBack): Promise<vo
     player.sendClientMessage(COLOR_SUCCESS, "已回收车辆");
     return back?.(); // 回收后车没了，回上一层
   }
+}
+
+/**
+ * 原版爱车命令兼容（对齐 pawn-server Cars.inc）：
+ * /cars|/ac — 爱车入口（打开爱车面板）
+ * /cars list — 爱车列表（= /llac）
+ * /cars wode — 召唤爱车到身边
+ * /cars lock — 锁/解锁爱车
+ * /wdac — 我的爱车管理菜单
+ * /llac — 爱车列表
+ * 原版 /cars buy（购买爱车）/cars create（管理员造车）在 gm-lite 无对应概念：
+ * 刷车即自动登记爱车（无需购买/造车），给出引导提示而非报错。
+ */
+export function initMyVehicleCommands(): void {
+  const cmdGuard = (player: Player, next: () => unknown): boolean => {
+    if (!getAuthState(player.id) || isPlayerLocked(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "请先完成登录后再操作");
+      next();
+      return false;
+    }
+    return true;
+  };
+
+  PlayerEvent.onCommandText(["cars", "ac"], async ({ player, subcommand, next }) => {
+    if (!cmdGuard(player, next)) return;
+    const arg = subcommand[0];
+    if (arg === "list") {
+      void listVehiclesFlow(player);
+    } else if (arg === "wode") {
+      const veh = getOwnedVehicle(player.id);
+      if (!veh) {
+        player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先 /c 车辆ID 刷车");
+        return next();
+      }
+      const pos = player.getPos();
+      const angle = player.isInAnyVehicle()
+        ? player.getVehicle()!.getZAngle().angle
+        : player.getFacingAngle().angle;
+      veh.setPos(pos.x, pos.y, pos.z);
+      veh.setZAngle(angle);
+      veh.setVirtualWorld(player.getVirtualWorld());
+      veh.linkToInterior(player.getInterior());
+      veh.addComponent(1010);
+      veh.putPlayerIn(player, 0);
+      player.sendClientMessage(COLOR_SUCCESS, "爱车已召唤到身边");
+    } else if (arg === "lock") {
+      const veh = getOwnedVehicle(player.id);
+      if (!veh) {
+        player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先 /c 车辆ID 刷车");
+        return next();
+      }
+      const { doors } = veh.getParamsEx();
+      const isLocked = doors < 1;
+      veh.toggleDoors(isLocked);
+      const auth = getAuthState(player.id);
+      if (auth) {
+        await prisma.userVehicle.updateMany({
+          where: { userId: auth.userId, modelId: veh.getModel() },
+          data: { isLocked },
+        });
+      }
+      player.sendClientMessage(COLOR_WHITE, isLocked ? "爱车已上锁" : "爱车已解锁");
+    } else if (arg === "buy" || arg === "create") {
+      player.sendClientMessage(
+        COLOR_WHITE,
+        arg === "buy"
+          ? "[爱车] gm-lite 无需购买爱车，/c 车辆ID 刷车即自动登记为爱车"
+          : "[爱车] gm-lite 无需管理员造车，刷车即自动登记爱车",
+      );
+    } else {
+      void openMyVehicleMenu(player);
+    }
+    return next();
+  });
+
+  // /wdac 我的爱车管理（对齐原版 pViewMyCar）
+  PlayerEvent.onCommandText("wdac", ({ player, next }) => {
+    if (!cmdGuard(player, next)) return;
+    void manageCurrentVehicle(player);
+    return next();
+  });
+
+  // /llac 爱车列表（对齐原版 pViewACList）
+  PlayerEvent.onCommandText("llac", ({ player, next }) => {
+    if (!cmdGuard(player, next)) return;
+    void listVehiclesFlow(player);
+    return next();
+  });
 }

@@ -107,8 +107,8 @@ export async function enterRaceEdit(player: Player, raceId: string): Promise<voi
   await showEditMenu(player);
 }
 
-/** 编辑主菜单 */
-async function showEditMenu(player: Player): Promise<void> {
+/** 编辑主菜单（/r edit d 命令入口也调它） */
+export async function showEditMenu(player: Player): Promise<void> {
   const state = editStates.get(player.id);
   if (!state) return;
   const cps = await prisma.raceCp.findMany({
@@ -198,8 +198,8 @@ async function editRaceLaps(player: Player): Promise<void> {
   player.sendClientMessage(COLOR_SUCCESS, `圈数已设为 ${laps}`);
 }
 
-/** 在玩家当前位置放置 CP */
-async function addCp(player: Player): Promise<void> {
+/** 在玩家当前位置放置 CP（/r edit cp 命令入口也调它） */
+export async function addCp(player: Player): Promise<void> {
   const state = editStates.get(player.id);
   if (!state) return;
   const pos = player.getPos();
