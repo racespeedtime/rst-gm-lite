@@ -3,6 +3,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
+import { isPlayerLocked } from "@/core/interaction";
 import { sessionManager } from "@/sessions/manager";
 import { isInRace } from "@/race/room";
 import { showDialog } from "@/utils/dialog";
@@ -380,6 +381,52 @@ export function initTeleport(): void {
     initTp(player.id);
     return next();
   });
+
+  // /vmake [名字] 创建用户传送点（//名字 触发）——对齐原版命令（原版 /vmake）。
+  // 无参 → 打开面板创建流程（对话框收集名字/描述，兼容老玩家习惯）
+  PlayerEvent.onCommandText("vmake", ({ player, subcommand, next }) => {
+    if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      return next();
+    }
+    const name = subcommand[0];
+    if (!name) {
+      void createTeleportFlow(player);
+      return next();
+    }
+    void createTeleport(player, name, null, false);
+    return next();
+  });
+
+  // /vsmake [名字] [描述] 管理员创建系统传送点（/名字 触发，全服共享）——对齐
+  // 原版 /vsmake（LV4+）。描述支持带空格（原版 sscanf 缺陷吞空格，这里修正）
+  PlayerEvent.onCommandText("vsmake", ({ player, subcommand, next }) => {
+    if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      return next();
+    }
+    if (!isSuperAdmin(player)) {
+      player.sendClientMessage(COLOR_ERROR, "[传送] 只有管理员能创建系统传送点");
+      return next();
+    }
+    const name = subcommand[0];
+    if (!name) {
+      player.sendClientMessage(
+        COLOR_WHITE,
+        "[传送] 用法: /vsmake [名字] [描述] 例如 /vsmake sf SF机场（/名字 触发，全服共享）",
+      );
+      return next();
+    }
+    const description = subcommand.slice(1).join(" ");
+    void createTeleport(player, name, description || null, true);
+    return next();
+  });
+
+  // /telemenu 系统传送点列表（分页选择传送）——对齐原版 /telemenu
+  PlayerEvent.onCommandText("telemenu", ({ player, next }) => {
+    void listSystemTeleports(player);
+    return next();
+  });
 }
 
 /** tpa 超时清理（定时器调用） */
@@ -500,6 +547,62 @@ async function listUserTeleports(player: Player, back?: MenuBack): Promise<void>
   return back?.();
 }
 
+/** 创建传送点（面板流程与 /vmake /vsmake 命令共用）：
+ * 名字去斜杠前缀 + 去空格 + 长度 ≤48（对齐原版 vmake/vsmake 的 48 位限制）；
+ * 重名（含软删，name 全局唯一约束）拒绝。成功返回 true，失败已发提示返回 false。 */
+async function createTeleport(
+  player: Player,
+  name: string,
+  description: string | null,
+  isSystem: boolean,
+): Promise<boolean> {
+  const clean = name.replace(/^\/+/, "").trim();
+  if (!clean) {
+    player.sendClientMessage(COLOR_ERROR, "[传送] 传送点名称不能为空");
+    return false;
+  }
+  if (clean.length > 48) {
+    player.sendClientMessage(COLOR_ERROR, "[传送] 名字过长，最多 48 个字符");
+    return false;
+  }
+  if (description && description.length > 48) {
+    player.sendClientMessage(COLOR_ERROR, "[传送] 描述过长，最多 48 个字符");
+    return false;
+  }
+  const exist = await prisma.teleport.findFirst({ where: { name: clean } });
+  if (exist) {
+    player.sendClientMessage(COLOR_ERROR, `[传送] 该传送点 ${clean} 已存在`);
+    return false;
+  }
+  const auth = getAuthState(player.id);
+  const pos = player.getPos();
+  try {
+    await prisma.teleport.create({
+      data: {
+        name: clean,
+        description: description?.trim() || null,
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+        angle: player.getFacingAngle().angle,
+        interiorId: player.getInterior(),
+        isSystem,
+        isEnabled: true,
+        userId: isSystem ? null : auth?.userId,
+      },
+    });
+    player.sendClientMessage(
+      COLOR_WHITE,
+      `[传送] 传送点 ${isSystem ? "/" : "//"}${clean} 创建成功`,
+    );
+    return true;
+  } catch (e) {
+    logger.error(`[tp] 创建传送点失败 ${clean}`, e);
+    player.sendClientMessage(COLOR_ERROR, "[传送] 创建失败，名称可能已存在");
+    return false;
+  }
+}
+
 /** 创建传送点：非 OP 只能建 //（用户点），OP 可选 / 或 // */
 async function createTeleportFlow(player: Player, back?: MenuBack): Promise<void> {
   const isOp = isSuperAdmin(player);
@@ -550,28 +653,7 @@ async function createTeleportFlow(player: Player, back?: MenuBack): Promise<void
   );
   if (!descRes) return;
   if (descRes.response !== 1) return back?.();
-  const pos = player.getPos();
-  const auth = getAuthState(player.id);
-  try {
-    await prisma.teleport.create({
-      data: {
-        name,
-        description: descRes.inputText.trim() || null,
-        x: pos.x,
-        y: pos.y,
-        z: pos.z,
-        angle: player.getFacingAngle().angle,
-        interiorId: player.getInterior(),
-        isSystem,
-        isEnabled: true,
-        userId: isSystem ? null : auth?.userId,
-      },
-    });
-    player.sendClientMessage(COLOR_WHITE, `[传送] 传送点 ${isSystem ? "/" : "//"}${name} 创建成功`);
-  } catch (e) {
-    logger.error(`[tp] 创建传送点失败 ${name}`, e);
-    player.sendClientMessage(COLOR_ERROR, "创建失败，名称可能已存在");
-  }
+  await createTeleport(player, name, descRes.inputText.trim() || null, isSystem);
   return back?.();
 }
 
