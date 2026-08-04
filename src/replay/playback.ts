@@ -78,8 +78,9 @@ export function unregisterReplayNpcForReplay(playerId: number): void {
   unregisterReplayNpc(playerId);
 }
 
-/** 回放世界起始 id（避开公共大世界 0、战局 1..n、比赛 5000+；挑战共用） */
-const REPLAY_WORLD_BASE = 6000;
+/** 回放/挑战世界起始 id（战局 1..1000、比赛 1001..2000，回放从 2001 起——
+ * 三区间独立不叠加；挑战共用） */
+const REPLAY_WORLD_BASE = 2001;
 let nextReplayWorldId = REPLAY_WORLD_BASE;
 /**
  * 已释放的回放/挑战世界 id（复用防无界增长）：

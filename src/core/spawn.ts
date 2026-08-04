@@ -92,7 +92,8 @@ export async function spawnPlayer(player: Player): Promise<void> {
 export async function savePlayerPosition(player: Player): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
-  // 比赛中：玩家在比赛独立世界（world≥5000），保存会污染 LAST_POSITION 出生点，跳过
+  // 比赛中：玩家在比赛独立世界（world≥1001，RACE_WORLD_BASE），保存会污染
+  // LAST_POSITION 出生点，跳过
   if (isInRace(player.id)) return;
   const pos = player.getPos();
   const angle = player.getFacingAngle().angle;

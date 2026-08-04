@@ -22,7 +22,8 @@ export class SessionManager {
   private nextSessionId = 1;
   private nextWorldId = 1;
   /** 已解散战局回收的 world id（复用防无界增长：战局频繁创建/解散，
-   *  长期运行后 worldId 会涨过 5000 与比赛世界（RACE_WORLD_BASE）撞车） */
+   *  极端在线 1000 人 worldId 最多到 1000，与比赛世界（RACE_WORLD_BASE=1001）
+   *  边界不冲突；回收复用仍保留防异常） */
   private freedWorldIds: number[] = [];
   /** 缓存出生点，用于加入战局时的传送 */
   private spawnPoints: { x: number; y: number; z: number; angle: number }[] | null = null;
@@ -96,10 +97,7 @@ export class SessionManager {
     this.publicWorld.members.set(player.id, player);
     this.playerSessions.set(player.id, PUBLIC_SESSION_ID);
     // 通知公共大世界内的其他玩家（登录广播）；本人由"欢迎回来"等提示覆盖，不重复发
-    this.publicWorld.broadcastOthers(
-      `[战局] ${player.getName().name} 进入了公共大世界`,
-      player,
-    );
+    this.publicWorld.broadcastOthers(`[战局] ${player.getName().name} 进入了公共大世界`, player);
   }
 
   /**
@@ -137,10 +135,7 @@ export class SessionManager {
     this.playerSessions.set(player.id, PUBLIC_SESSION_ID);
     await this.teleportTo(player, PUBLIC_WORLD_ID);
     // 通知公共大世界内的其他玩家（本人由"你已回到..."覆盖，不重复发）
-    this.publicWorld.broadcastOthers(
-      `[战局] ${player.getName().name} 回到了公共大世界`,
-      player,
-    );
+    this.publicWorld.broadcastOthers(`[战局] ${player.getName().name} 回到了公共大世界`, player);
     player.sendClientMessage(SESSION_COLOR, `你已回到${this.publicWorld.name}`);
   }
 
@@ -298,7 +293,8 @@ export class SessionManager {
   }
 
   /** 处理玩家掉线：移出所在战局，房主掉线则转移或解散 */
-  handlePlayerDisconnect(player: Player): void {    const current = this.getPlayerSession(player);
+  handlePlayerDisconnect(player: Player): void {
+    const current = this.getPlayerSession(player);
     // 统一从 publicWorld.members 移除（防幽灵成员）
     this.publicWorld.members.delete(player.id);
     this.playerSessions.delete(player.id);

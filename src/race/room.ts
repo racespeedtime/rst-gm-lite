@@ -55,13 +55,14 @@ const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 const RACE_MAP_ICON_NEXT = 70;
 /** 比赛小地图图标类型：56 = 赛车 CP 预览图标（原版 RACE_MAP_ICON_TYPE） */
 const RACE_MAP_ICON_TYPE_NEXT = 56;
-/** 比赛房间独立世界起始 id（避开公共大世界 0 与战局 1..n） */
-const RACE_WORLD_BASE = 5000;
+/** 比赛房间独立世界起始 id（战局上限 1000，比赛从 1001 起；回放/挑战世界从
+ *   REPLAY_WORLD_BASE=2001 起，两区间各 1000 个互不叠加） */
+const RACE_WORLD_BASE = 1001;
 let nextRaceWorldId = RACE_WORLD_BASE;
 /**
  * 已销毁房间释放的比赛世界 id（复用防无界增长）：
  * 房间创建/销毁非常频繁（每人一房、结束即销毁），若只递增不复用，长期运行
- * 约 1000 个房间后 worldId 会追上回放世界基准 6000（REPLAY_WORLD_BASE），
+ * 约 1000 个房间后 worldId 会追上回放世界基准 2001（REPLAY_WORLD_BASE），
  * 造成比赛与回放/挑战世界互相可见（跨世界实体穿模）。销毁时回收、创建时先取。
  */
 const freedRaceWorlds: number[] = [];
