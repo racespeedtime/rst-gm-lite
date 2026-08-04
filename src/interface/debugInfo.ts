@@ -1,13 +1,12 @@
-import { KeysEnum, Player, TextDraw } from "@infernus/core";
+import { Player, TextDraw } from "@infernus/core";
 import { getObserveTarget } from "@/core/observe";
 import { getReplayDebugState } from "@/replay/playback";
 
 /**
- * 调试信息 GUI：屏幕底部居中、尽可能小字号的诊断文本（位置/朝向/世界/内景/
- * 车辆/按键/速度，观战中显示被观战对象，回放中叠加播放时长/帧率）。
- * 数据源全部实时读取，仅做文本拼接（速度 kmh 由 gui.ts 计算传入复用）。
- * 车内/车外区分：车内显示车辆位置+车朝向角+车速；车外显示玩家位置+朝向+步行速度。
- * 样式对齐"底部居中 + margin-bottom"，字体小于速度表（0.13 vs 0.2）。
+ * 调试信息 GUI：屏幕底部居中、尽可能小字号的诊断文本，短标签格式：
+ * x/y/z 位置 · a 朝向角 · w 世界 · i 内景 · qw/qx/qy/qz 旋转四元数 ·
+ * h 血量 · ar 护甲 · sk 皮肤 · v 车辆ID · sp 速度 · k 按键位集。
+ * 车内取车辆姿态（完整三维），车外取玩家（yaw）；观战/回放叠加一行。
  */
 
 export interface DebugInfoState {
@@ -40,18 +39,6 @@ export function destroyDebugInfo(state: DebugInfoState | null): void {
 
 const r2 = (n: number): string => (Math.round(n * 10) / 10).toFixed(1);
 
-/** 已按下的按键名（位集解析；KeysEnum 数值键名） */
-function pressedKeys(keys: number): string {
-  const names: string[] = [];
-  for (const k of Object.keys(KeysEnum)) {
-    const v = KeysEnum[k as keyof typeof KeysEnum];
-    if (typeof v === "number" && v > 0 && v < 0x10000 && (keys & v) === v) {
-      names.push(k);
-    }
-  }
-  return names.length > 0 ? names.join("|") : "-";
-}
-
 /** 刷新调试文本（内容无变化跳过，省 5Hz 无用 setString） */
 export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: number): void {
   const pos = player.getPos();
@@ -60,31 +47,29 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
   const keys = player.getKeys();
   const health = player.getHealth();
   const armour = player.getArmour();
-  // 旋转四元数：车内取车辆（完整三维姿态），车外取玩家（yaw 旋转，等价朝向角）。
-  // 带来源标记 v/p——车辆与玩家的 quat 数值完全不同（站立时玩家 quat 为恒等
-  // [0,0,0,1]），不加标记看不出是动态取数的
+  // 旋转四元数：车内取车辆（完整三维姿态），车外取玩家（yaw 旋转）
   const q = veh ? veh.getRotationQuat() : player.getRotationQuat();
-  // 车内：位置/朝向/速度取车辆实体（车辆坐标即玩家位置，车朝向更精确）
+  // 车内：位置/朝向取车辆实体（车辆坐标即玩家位置，车朝向更精确）
   const displayPos = veh ? veh.getPos() : pos;
   const displayAngle = veh ? veh.getZAngle().angle : angle;
-  const quatText = q.ret
-    ? `quat(${veh ? "v" : "p"}) ${r2(q.x)} ${r2(q.y)} ${r2(q.z)} ${r2(q.w)}`
-    : "quat --";
+  const qText = q.ret
+    ? `qw ${r2(q.w)}  qx ${r2(q.x)}  qy ${r2(q.y)}  qz ${r2(q.z)}`
+    : "qw --  qx --  qy --  qz --";
   const lines: string[] = [
-    `pos ${r2(displayPos.x)} ${r2(displayPos.y)} ${r2(displayPos.z)}  angle ${r2(displayAngle)}  world ${player.getVirtualWorld()}  int ${player.getInterior()}`,
-    `${quatText}  hp ${Math.ceil(health.health)}  armor ${Math.ceil(armour.armour)}  skin ${player.getSkin()}`,
-    `veh ${veh ? veh.id : "-"}  ${Math.floor(kmh)} km/h  keys 0x${(keys.keys & 0xffff).toString(16)} ${pressedKeys(keys.keys)}`,
+    `x ${r2(displayPos.x)} ${r2(displayPos.y)} ${r2(displayPos.z)}  a ${r2(displayAngle)}  w ${player.getVirtualWorld()}  i ${player.getInterior()}`,
+    `${qText}  h ${Math.ceil(health.health)}  ar ${Math.ceil(armour.armour)}  sk ${player.getSkin()}`,
+    `v ${veh ? veh.id : "-"}  sp ${Math.floor(kmh)}  k 0x${(keys.keys & 0xffff).toString(16)}`,
   ];
-  // 观战中：显示被观战对象（玩家/车辆）
+  // 观战中：显示被观战对象（p 玩家 / v 车辆）
   const st = getObserveTarget(player.id);
   if (st) {
-    lines.push(`watch ${st.kind} #${st.targetId}`);
+    lines.push(`watch ${st.kind === "vehicle" ? "v" : "p"} #${st.targetId}`);
   }
-  // 回放中：叠加当前播放时长/总时长、当前速度、帧号
+  // 回放中：叠加当前播放时长/总时长、帧号
   const rep = getReplayDebugState(player.id);
   if (rep) {
     lines.push(
-      `replay ${fmtMs(rep.playTimeMs)}/${fmtMs(rep.durationMs)}  ${Math.floor(rep.currentKmh)} km/h  frame ${rep.frameIndex}/${rep.frameCount}`,
+      `rep ${fmtMs(rep.playTimeMs)}/${fmtMs(rep.durationMs)}  f ${rep.frameIndex}/${rep.frameCount}`,
     );
   }
   const text = lines.join("\n");
