@@ -218,7 +218,24 @@ export function initObserve(): void {
     return next();
   });
 
+  // 观察者自己死亡（/kill 自杀/被杀死）：退出观战。否则 onRequestSpawn 闸门
+  // 会拦截 spect 中的出生请求，玩家卡在观战无法重生（重生请求被拒）。
+  // 死亡即回到自己世界：恢复 prevWorld 后客户端重生请求放行，正常重生。
+  PlayerEvent.onDeath(({ player, next }) => {
+    if (observeStates.has(player.id)) {
+      stopObserve(player);
+    }
+    return next();
+  });
+
   PlayerEvent.onSpawn(({ player: target, next }) => {
+    // 观察者自己重生（服务器 spawn 路径，如比赛强制重生，绕过 RequestSpawn
+    // 闸门）：兜底退出观战——否则 observeStates 残留，速度表仍读被观战
+    // 对象的速度而非自己的
+    if (observeStates.has(target.id)) {
+      stopObserve(target);
+    }
+    // 被观战者重生：通知观察者重跟踪
     for (const [pid, st] of observeStates) {
       if (st.kind === "player" && st.targetId === target.id) {
         const observer = Player.getInstance(pid);
