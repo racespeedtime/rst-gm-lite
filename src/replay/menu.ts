@@ -19,6 +19,12 @@ function fmtDur(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/** 时间格式化（MM-DD HH:MM）：固定格式，避免 toLocaleString 输出依赖 ICU/locale
+ * （zh-CN 不补零时 "2026/8/4 15:20:30" 用 slice(5,16) 会切出半个秒数 "8/4 15:20:3"） */
+function fmtTime(d: Date): string {
+  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 /** 类型标签 */
 function typeLabel(t: string): string {
   return t === "race" ? "比赛" : "自定义";
@@ -84,7 +90,7 @@ export async function openReplayMenu(player: Player, back?: MenuBack): Promise<v
       v.raceName || "—",
       v.type === "race" ? (v.rank != null ? `No.${v.rank}` : "{FF0000}未完成") : "—",
       fmtDur(v.durationMs),
-      v.createdAt.toLocaleString("zh-CN", { hour12: false }).slice(5, 16),
+      fmtTime(v.createdAt),
     ],
     button1: "操作",
     button2: "取消",
@@ -168,7 +174,7 @@ export async function openOpReplayPanel(player: Player, back?: MenuBack): Promis
       typeLabel(v.type),
       v.raceName || "—",
       fmtDur(v.durationMs),
-      v.createdAt.toLocaleString("zh-CN", { hour12: false }).slice(5, 16),
+      fmtTime(v.createdAt),
     ],
     button1: "删除",
     button2: "取消",
@@ -202,15 +208,34 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
   } else if (res.listItem === 1) {
     if (isRecording(player.id)) {
       await stopRecording(player.id);
-    } else if (isInRace(player.id)) {
+      return back?.(); // 停止后回面板（可能继续查看列表等操作）
+    }
+    if (isInRace(player.id)) {
       // 比赛中由比赛系统自动录制（race 类型），手动开始会与自动录制抢会话
       player.sendClientMessage(COLOR_ERROR, "比赛中已自动录制（结束自动保存），无需手动开始");
-    } else if (isInChallenge(player.id) || getReplaySession(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "影子挑战/回放中不能录制");
-    } else {
-      await startRecording(player, { type: "ghost" });
+      return back?.();
     }
-    return back?.();
+    if (isInChallenge(player.id) || getReplaySession(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "影子挑战/回放中不能录制");
+      return back?.();
+    }
+    // 开始录制前确认：录制会持续采集当前行驶，误触会白录一段
+    const c = await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.MSGBOX,
+        caption: "开始录制",
+        info: "确认开始录制当前行驶？\n结束后自动保存为回放（/rec stop 或 /p → 回放 → 停止录制），可用 /rp 观看。",
+        button1: "开始录制",
+        button2: "取消",
+      }),
+    );
+    if (!c || c.response !== 1) return back?.(); // 取消 → 回面板
+    const ok = await startRecording(player, { type: "ghost" });
+    if (!ok) return back?.(); // 失败（无车等，startRecording 已发错误提示）→ 回面板
+    // 录制已正式开始：不再回到面板（结束整个面板流程），提示录制中
+    player.sendClientMessage(COLOR_SUCCESS, "录制中… 用 /rec stop 或 /p → 回放 停止并保存");
+    return;
   } else if (res.listItem === 2) {
     await openReplayControlMenu(player, () => openReplayMenuPanel(player, back));
   }
