@@ -368,12 +368,12 @@ async function pickRandomRace(): Promise<{
   sysUser: { username: string } | null;
 } | null> {
   const count = await prisma.race.count({
-    where: { isEnabled: true, deletedAt: null, cps: { some: {} } },
+    where: { isEnabled: true, deletedAt: null, raceCps: { some: {} } },
   });
   if (count === 0) return null;
   const skip = Math.floor(Math.random() * count);
   const race = await prisma.race.findFirst({
-    where: { isEnabled: true, deletedAt: null, cps: { some: {} } },
+    where: { isEnabled: true, deletedAt: null, raceCps: { some: {} } },
     skip,
     include: { sysUser: true },
   });
