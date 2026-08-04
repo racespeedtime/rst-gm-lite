@@ -43,7 +43,7 @@ RST-GM-Lite 是 `open.mp + samp-node + @infernus/core` 纯 TypeScript 实现的�
 | 模块 | 玩家视角 | 开发者视角 |
 |------|---------|-----------|
 | `vehicles/` | 爱车系统：一人一车、刷车、车型目录 | 懒创建 `user_vehicle` 行、位置定时保存、改装存储 |
-| `attire/` | 装扮 / 挂件（含实时编辑）与管理员装扮管理 | EditAttachedObject 在线编辑，预设保存/清理孤儿 |
+| `attire/` | 装扮 / 挂件（含实时编辑）与管理员装扮管理 | 由**装扮模型 + 预设**驱动：`Attire` 表定义 3D 模型与挂点参数，`PlayerPreset`/`VehiclePreset` 组合多个装扮项成一套方案；EditAttachedObject 在线编辑，预设保存/清理孤儿 |
 | `personalize/` | 个性化全家桶：人物 / 车辆 / 世界 / 界面 / 动作 / 快捷操作 | 设置表驱动（pickOption/notifySaved），3D 选肤、登录大厅、动作系统（对齐原版 /anim） |
 
 ### 赛道与比赛
