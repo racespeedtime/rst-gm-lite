@@ -211,18 +211,28 @@ function renderGhost(ch: ChallengeSession): void {
   }
 }
 
-/** 影子当前进度（累计 CP 数 + 距其下一 CP 距离）——对齐真人排名算法：
- *  完成 CP 数降序，相同比"距下一 CP 距离"升序（近者领先）。
- *  帧里 cpProgress 是圈内进度（每圈重置），影子跨圈需累计：
- *  检测 cpProgress 回退（当前 < 上一帧 = 从一圈末尾跳回圈首）→ 影子圈数 +1。
- *  影子播放时间单调递增（无 seek），回退检测可靠。 */
-function ghostProgress(ch: ChallengeSession): { cp: number; dist: number } {
+/**
+ * 影子圈数推进（每 tick 调用，跟随影子播放）：帧里 cpProgress 是圈内进度
+ * （每圈重置），播放时间单调递增——检测 cpProgress 回退（当前 < 上一帧 =
+ * 从一圈末尾跳回圈首）累计 shadowLapOffset。
+ * 必须每 tick 推进而非在玩家过 CP 时才采样：稀疏采样会漏圈（玩家过 CP 间隔
+ * 大时，两次采样之间影子可能跨多圈，回退只 +1）。16ms 采样 ≥ 帧率，不漏。
+ */
+function advanceShadowLap(ch: ChallengeSession): void {
   const s = sampleAt(ch.data, ch.ghost.playTime);
-  if (!s) return { cp: 0, dist: Infinity };
+  if (!s) return;
   if (ch.lastShadowCp !== -1 && s.cpProgress < ch.lastShadowCp) {
     ch.shadowLapOffset++;
   }
   ch.lastShadowCp = s.cpProgress;
+}
+
+/** 影子当前进度（累计 CP 数 + 距其下一 CP 距离）——对齐真人排名算法：
+ *  完成 CP 数降序，相同比"距下一 CP 距离"升序（近者领先）。
+ *  只读 shadowLapOffset/lastShadowCp（由 tickChallenge 的 advanceShadowLap 推进） */
+function ghostProgress(ch: ChallengeSession): { cp: number; dist: number } {
+  const s = sampleAt(ch.data, ch.ghost.playTime);
+  if (!s) return { cp: 0, dist: Infinity };
   const lapCp = Math.max(0, Math.min(ch.cps.length, s.cpProgress));
   const cp = ch.shadowLapOffset * ch.cps.length + lapCp; // 累计（跨圈）
   const next = ch.cps[cp % ch.cps.length]; // 影子朝第 (圈内) 下一个 CP 跑
@@ -257,6 +267,8 @@ function tickChallenge(ch: ChallengeSession): void {
   const elapsed = Math.min(250, now - ch.lastTickAt);
   ch.lastTickAt = now;
   ch.ghost.playTime = Math.min(dur, ch.ghost.playTime + elapsed);
+  // 影子圈数推进：跟随影子播放检测跨圈（每 tick，不漏圈——见 advanceShadowLap）
+  advanceShadowLap(ch);
   renderGhost(ch);
   // 影子播完（playTime 到终点）→ 视同真实玩家冲线：触发 20 秒冲线倒计时
   //（对齐真人比赛"第一名已完成，20 秒后比赛结束"）。玩家在倒计时内完成 →
