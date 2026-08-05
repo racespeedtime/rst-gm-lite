@@ -1912,14 +1912,28 @@ function writeBackRollbackProgress(
   rollback?: number,
 ): void {
   if (!rollback) return;
-  pr.lap = Math.floor(target.cumIdx / room.cps.length);
-  pr.cpIndex = target.cumIdx % room.cps.length;
-  // 同步 CP 进度 TD（圈内进度 = 目标累计序号 % 一圈CP数 + 1）
-  const cpDone = pr.cpIndex + 1;
+  const len = room.cps.length;
+  // 目标累计序号对应某圈的**最后一个 CP**：onPlayerReachCp 里"触达末 CP"是函数体
+  // 内瞬态（随后立即 cpIndex=-1、lap++ 翻圈），不能持久化为 (lap, len-1)——
+  // 否则 nextCp = cps[len] = undefined 导致过点事件永久早退、进度软锁。写
+  // post-wrap 状态（lap+1, cpIndex=-1），与正常翻圈后的进度一致；红圈已由
+  // respawnToCpCore 的 showNextCheckpoint(prevIdx=len-1) 摆到本圈第一个 CP。
+  if (target.cumIdx % len === len - 1) {
+    pr.lap = Math.floor(target.cumIdx / len) + 1;
+    pr.cpIndex = -1;
+  } else {
+    pr.lap = Math.floor(target.cumIdx / len);
+    pr.cpIndex = target.cumIdx % len;
+  }
+  // 圈内进度 = 目标累计序号 % 一圈CP数 + 1（末 CP 情形 = len，与正常翻圈后的显示一致）
+  const cpDone = (target.cumIdx % len) + 1;
   const raceTds = room.raceTextTds.get(player.id);
   if (raceTds) {
-    raceTds.cp.setString(`C  P / ~p~${cpDone}~w~/~y~${room.cps.length}`);
+    raceTds.cp.setString(`C  P / ~p~${cpDone}~w~/~y~${len}`);
   }
+  // 录制会话的 cpProgress 同步回退：否则回放帧残留回退前的高进度，C P TD 与
+  // seek 显示玩家实际未跑到的进度（对齐过 CP 时的 noteCpProgress 口径）
+  noteCpProgress(player.id, Math.min(cpDone, len), len);
 }
 
 /** 多回退一格重生（面板「回退到更早检查点」）：上一 CP 可能是空中/无落点（无 spawnpos、

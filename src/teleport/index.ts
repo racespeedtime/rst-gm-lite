@@ -307,7 +307,8 @@ export function initTeleport(): void {
       sysMsg(player, "tp", "没有待处理的请求", "warn");
       return next();
     }
-    if (tpTimeoutAt.get(player.id)! < Date.now()) {
+    // 请求存在但超时条目缺失（防御性，正常 requestTpa 保证同写）：视为未超时
+    if ((tpTimeoutAt.get(player.id) ?? Infinity) < Date.now()) {
       sysMsg(player, "tp", "请求已超时", "warn");
       initTp(player.id);
       return next();
@@ -429,9 +430,15 @@ export function updateTpTimeouts(): void {
   for (const [pid, timeout] of tpTimeoutAt) {
     if (now >= timeout) {
       const targetId = tpGotoId.get(pid) ?? tpFromId.get(pid);
+      // 双方都通知：发起方（pid）要知道自己请求超时（可重新发起），
+      // 接收方（targetId）也知道请求已过期
+      const requester = Player.getInstance(pid);
+      if (requester && requester.isConnected()) {
+        sysMsg(requester, "tp", "传送请求已超时", "info");
+      }
       if (targetId != null) {
         const target = Player.getInstance(targetId);
-        if (target) {
+        if (target && target.isConnected()) {
           sysMsg(target, "tp", "传送请求已超时", "info");
         }
         // 双向清理：对方侧可能残留配对条目（tpFromId[tp] = pid）——只清 pid

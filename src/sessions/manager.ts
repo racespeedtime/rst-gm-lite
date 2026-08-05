@@ -102,7 +102,10 @@ export class SessionManager {
     this.publicWorld.members.set(player.id, player);
     this.playerSessions.set(player.id, PUBLIC_SESSION_ID);
     // 通知公共大世界内的其他玩家（登录广播）；本人由"欢迎回来"等提示覆盖，不重复发
-    this.publicWorld.broadcastOthers(`[战局] ${player.getName().name} 进入了公共大世界`, player);
+    this.publicWorld.broadcastOthers(
+      `${PREFIX.session} ${player.getName().name} 进入了公共大世界`,
+      player,
+    );
   }
 
   /**
@@ -117,7 +120,7 @@ export class SessionManager {
       if (session) {
         session.members.delete(player.id);
         if (notify) {
-          session.broadcast(`[战局] ${player.getName().name} 离开了战局`);
+          session.broadcast(`${PREFIX.session} ${player.getName().name} 离开了战局`);
         }
         // 空战局回收：房主离开/被踢后 0 人战局立即删除，防 privateSessions 无界增长，
         // 且 findOwnedSession 命中旧空局导致房主永远无法创建新战局
@@ -140,7 +143,10 @@ export class SessionManager {
     this.playerSessions.set(player.id, PUBLIC_SESSION_ID);
     await this.teleportTo(player, PUBLIC_WORLD_ID);
     // 通知公共大世界内的其他玩家（本人由"你已回到..."覆盖，不重复发）
-    this.publicWorld.broadcastOthers(`[战局] ${player.getName().name} 回到了公共大世界`, player);
+    this.publicWorld.broadcastOthers(
+      `${PREFIX.session} ${player.getName().name} 回到了公共大世界`,
+      player,
+    );
     player.sendClientMessage(SESSION_COLOR, `你已回到${this.publicWorld.name}`);
   }
 
@@ -174,7 +180,7 @@ export class SessionManager {
     await this.teleportTo(player, session.worldId);
     // 加入提示：默认全员可见但排除本人（本人由成功提示覆盖）；silentSelf 时同样排除
     const name = player.getName().name;
-    session.broadcastOthers(`[战局] ${name} 加入了战局`, player);
+    session.broadcastOthers(`${PREFIX.session} ${name} 加入了战局`, player);
     player.sendClientMessage(SESSION_COLOR, `你已加入战局「${session.name}」`);
     return { ok: true };
   }
@@ -223,7 +229,7 @@ export class SessionManager {
     if (isInRace(target.id) || isEditing(target.id)) {
       return { ok: false, reason: "目标正在比赛/编辑中，无法移出" };
     }
-    session.broadcast(`[战局] ${target.getName().name} 被房主移出了战局`);
+    session.broadcast(`${PREFIX.session} ${target.getName().name} 被房主移出了战局`);
     // 被踢者回到公共大世界
     this.leaveCurrentSession(target, false);
     this.publicWorld.members.set(target.id, target);
@@ -277,7 +283,9 @@ export class SessionManager {
       return { ok: false, reason: "你不是房主" };
     }
     session.password = password && password.length > 0 ? password : null;
-    session.broadcast(password ? `[战局] 房主已设置战局密码` : `[战局] 房主已清除战局密码`);
+    session.broadcast(
+      password ? `${PREFIX.session} 房主已设置战局密码` : `${PREFIX.session} 房主已清除战局密码`,
+    );
     return { ok: true };
   }
 

@@ -293,10 +293,14 @@ function resetChallengeCheckpoint(player: Player, ch: ChallengeSession): void {
 }
 
 /** 玩家位置挪到起点 CP（车就位 + 放回车里；restart 与首进共用）。
- * async：无车时刷车是异步的，调用方 await 后需自行做断线检查。 */
+ * async：无车时刷车是异步的，调用方 await 后需自行做断线检查。
+ * 入口 pendingRespawn 短路：restart↔go 交错时（restart 的 seatPlayerAtStart 不 await
+ * 就 go），在途刷车未完成则跳过本次——车由在途那次刷到位，防双 spawnVehicle 并发
+ * 销毁对方刚建的车/残留孤儿实体。 */
 async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<void> {
   const first = ch.cps[0];
   if (!first) return;
+  if (pendingRespawn.has(player.id)) return; // 刷车在途 → 跳过（在途那次会就位）
   const owned = getOwnedVehicle(player.id);
   if (owned && owned.isValid()) {
     owned.setPos(first.x, first.y, first.z);
