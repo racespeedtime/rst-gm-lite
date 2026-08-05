@@ -1091,6 +1091,9 @@ const SIGNIFICANT_SCRIPT_FNS = new Set([
 function hasSignificantScript(scripts: string[], skipCveh: boolean): boolean {
   for (const script of scripts) {
     const fn = script.trim().split(/\s+/)[0];
+    // spawnpos 过 CP 时不执行且终止整条脚本链（execCpScript return false）——
+    // 其后的脚本不会跑，不算显著（防 spawnpos 后的 speed 被误算而播 1133）
+    if (fn === "spawnpos") return false;
     if (SIGNIFICANT_SCRIPT_FNS.has(fn) && !(skipCveh && fn === "cveh")) return true;
   }
   return false;
