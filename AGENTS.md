@@ -46,6 +46,7 @@ pnpm serve              # 生产模式
 4. **GTA 角度是逆时针的**：0=北、90=**西**、180=南、270=东（与真实罗盘相反，open.mp 文档明确 "Angles are reversed in GTA:SA"）。车前方向（世界坐标）= `(-sinθ, -cosθ)`；位置偏移同式。CP 脚本 `speed`/`speedex` 是独立坐标系：x=速度·cos(na)、y=速度·sin(na)、角度基准=玩家朝向+90、`|` 模式=角度+90、角度 0=正东、只设速度不设朝向（`src/race/scripts.ts:setVehicleSpeed`）。
 5. **世界 id**：公共大世界 `PUBLIC_WORLD_ID = 0`（用常量，禁手写 0）；战局 1..1000；比赛房间独立世界从 `RACE_WORLD_BASE = 1001` 起（至 2000）；回放/挑战世界从 `REPLAY_WORLD_BASE = 2001` 起——三区间独立不叠加。
 6. **人数**：玩家上限 1000、NPC 上限 100（config.json `max_players`/`max_bots`）。回放/挑战共用 NPC 池，`MAX_REPLAY_NPC = 100`（`src/replay/playback.ts`，代码写死，与 config 的 max_bots 对齐）。所有事件回调统一排除 NPC。
+6b. **消息规范**：玩家可见消息一律带模块前缀 + 分级颜色，用 `src/utils/msg.ts` 的 `sysMsg(player, tag, text, level)`（tag 从 `PREFIX` 集中登记，level 选 `MSG_COLOR`：error=操作失败红 / warn=规则条件不满足橙 / info=信息浅蓝 / success=成功绿 / plain=常规白）。**禁止手写 `"[xxx]"` 前缀**；批量广播（session.broadcast 等）无 Player 对象时用 `PREFIX.tp` 拼接。`utils/colors.ts` 保留给非 sysMsg 场景。
 7. **config.json 现代键**：服务器名/模式用顶层 `name` 与 `game.mode`（UTF-8）；**不要**用 rcon legacy 键 `hostname`/`gamemodetext`（触发 "Legacy key supplied" 警告）。
 8. **对话框**：`TABLIST_HEADERS` 表头不占 listItem 行号（从 0 起）；e-selection `maxItemPerPage` 布局 = 第一行 6 + 第二行 8（一页 14 格铺满）。
 9. **colandreas**：`findZ_For2DCoord` 水域返回海底；`getSafeGroundZ` fallback -100；水中找陆地以 `SEA_LEVEL = 0` 以上 1.5 判陆地。

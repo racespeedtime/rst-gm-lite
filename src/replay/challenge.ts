@@ -36,7 +36,7 @@ import {
 } from "./playback";
 import { registerObserveCandidate, unregisterObserveCandidate } from "@/core/observe";
 import { DEFAULT_CHARSET } from "@/utils/constants";
-import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /**
  * 影子挑战：选一条"自己的该赛道比赛回放"当影子（NPC 车），
@@ -183,9 +183,11 @@ function renderGhost(ch: ChallengeSession): void {
     }
     const p = Player.getInstance(ch.playerId);
     if (p && p.isConnected()) {
-      p.sendClientMessage(
-        COLOR_RACE,
-        s.online ? `[影子] ${ch.recorderName} 已重新上线` : `[影子] ${ch.recorderName} 掉线了`,
+      sysMsg(
+        p,
+        "challenge",
+        s.online ? `${ch.recorderName} 已重新上线` : `${ch.recorderName} 掉线了`,
+        "info",
       );
     }
   }
@@ -273,7 +275,7 @@ function ensureChallengeCar(player: Player, ch: ChallengeSession): void {
     void spawnVehicle(player, ch.data.header.vehicleModelId, true).finally(() => {
       pendingRespawn.delete(player.id);
     });
-    player.sendClientMessage(COLOR_RACE, "[影子] 车辆已损毁，自动刷出挑战用车");
+    sysMsg(player, "challenge", "车辆已损毁，自动刷出挑战用车", "info");
   }
 }
 
@@ -380,7 +382,7 @@ function beginChallengeCountdown(player: Player, ch: ChallengeSession): void {
     if (player.isWasted()) {
       // 死亡打断倒计时 → 回待命（复活后玩家可 /challenge go 重来）
       ch.state = "STANDBY";
-      player.sendClientMessage(COLOR_RACE, "[影子] 死亡，已回到起点待命，/challenge go 重新开始");
+      sysMsg(player, "challenge", "死亡，已回到起点待命，/challenge go 重新开始", "info");
       return;
     }
     if (cd <= 0) {
@@ -412,21 +414,21 @@ function beginChallengeCountdown(player: Player, ch: ChallengeSession): void {
 export function goChallenge(player: Player): void {
   const ch = challenges.get(player.id);
   if (!ch) {
-    player.sendClientMessage(COLOR_ERROR, "你不在影子挑战中");
+    sysMsg(player, "challenge", "你不在影子挑战中", "warn");
     return;
   }
   if (ch.finished) return; // 结算中/已结束
   if (ch.state === "RACING") {
-    player.sendClientMessage(COLOR_ERROR, "[影子] 挑战已在比赛中，/challenge restart 可重置");
+    sysMsg(player, "challenge", "挑战已在比赛中，/challenge restart 可重置", "warn");
     return;
   }
   if (ch.state === "COUNTDOWN") {
-    player.sendClientMessage(COLOR_ERROR, "[影子] 已在倒计时中，请稍候");
+    sysMsg(player, "challenge", "已在倒计时中，请稍候", "warn");
     return;
   }
   // 待命检查：玩家已不在挑战世界（死亡/传送离开）→ 直接结束
   if (player.getVirtualWorld() !== ch.worldId) {
-    player.sendClientMessage(COLOR_RACE, "[影子] 你已离开挑战世界，挑战结束");
+    sysMsg(player, "challenge", "你已离开挑战世界，挑战结束", "warn");
     cleanupChallenge(player.id);
     return;
   }
@@ -453,7 +455,7 @@ export function goChallenge(player: Player): void {
 export function restartChallenge(player: Player): void {
   const ch = challenges.get(player.id);
   if (!ch) {
-    player.sendClientMessage(COLOR_ERROR, "你不在影子挑战中");
+    sysMsg(player, "challenge", "你不在影子挑战中", "warn");
     return;
   }
   // 打断进行中的计时/倒计时（tick 与倒计时链都以 state 门控，清理定时器防泄漏）。
@@ -467,9 +469,11 @@ export function restartChallenge(player: Player): void {
   standbyAtStart(player, ch);
   seatPlayerAtStart(player, ch);
   player.setFacingAngle(ch.cps[0]?.angle ?? 0);
-  player.sendClientMessage(
-    COLOR_SUCCESS,
-    "[影子] 已回到起点待命，/challenge go 重新开始（/challenge stop 退出）",
+  sysMsg(
+    player,
+    "challenge",
+    "已回到起点待命，/challenge go 重新开始（/challenge stop 退出）",
+    "success",
   );
 }
 
@@ -487,7 +491,7 @@ function tickChallenge(ch: ChallengeSession): void {
   // 玩家在线但已不在挑战世界（死亡重生回原世界/传送离开）→ 自动结束，
   // 防 ghost 在挑战世界挂到超时（重生后玩家已不在挑战上下文）
   if (p && p.isConnected() && p.getVirtualWorld() !== ch.worldId) {
-    p.sendClientMessage(COLOR_RACE, "[影子] 你已离开挑战世界，挑战结束");
+    sysMsg(p, "challenge", "你已离开挑战世界，挑战结束", "warn");
     cleanupChallenge(ch.playerId);
     return;
   }
@@ -511,7 +515,7 @@ function tickChallenge(ch: ChallengeSession): void {
   if (ch.ghost.playTime >= dur && !ch.shadowFinished && !ch.finished) {
     ch.shadowFinished = true;
     if (p && p.isConnected()) {
-      p.sendClientMessage(COLOR_RACE, "[影子] 影子已完赛，20 秒后挑战结束（倒计时内完成可继续）");
+      sysMsg(p, "challenge", "影子已完赛，20 秒后挑战结束（倒计时内完成可继续）", "info");
     }
     ch.endTimer = setTimeoutSafe(() => {
       if (ch.finished || !challenges.has(ch.playerId)) return;
@@ -574,9 +578,11 @@ function onChallengePlayerEnter(player: Player): void {
   } else {
     ahead = "与影子持平";
   }
-  player.sendClientMessage(
-    COLOR_RACE,
-    `[影子] CP ${pcp}/${ch.totalCp}（影子 ${gp.cp}/${ch.totalCp}）${ahead}`,
+  sysMsg(
+    player,
+    "challenge",
+    `CP ${pcp}/${ch.totalCp}（影子 ${gp.cp}/${ch.totalCp}）${ahead}`,
+    "info",
   );
 }
 
@@ -614,7 +620,7 @@ async function finishChallenge(player: Player, ch: ChallengeSession): Promise<vo
   } else {
     const owner = Player.getInstance(ch.playerId);
     if (owner && owner.isConnected()) {
-      owner.sendClientMessage(COLOR_SUCCESS, "影子挑战结束，可再选回放继续挑战");
+      sysMsg(owner, "challenge", "影子挑战结束，可再选回放继续挑战", "success");
     }
     cleanupChallenge(ch.playerId);
   }
@@ -645,19 +651,19 @@ function challengeFmtTime(d: Date): string {
 export async function startChallengeFromRace(player: Player, raceId: string): Promise<boolean> {
   const auth = getAuthState(player.id);
   if (!auth) {
-    player.sendClientMessage(COLOR_ERROR, "请先登录");
+    sysMsg(player, "challenge", "请先登录", "warn");
     return false;
   }
   if (challenges.has(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "你已在影子挑战中，先 /challenge stop");
+    sysMsg(player, "challenge", "你已在影子挑战中，先 /challenge stop", "warn");
     return false;
   }
   if (getReplaySession(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "你正在播放回放中，先 /rp stop");
+    sysMsg(player, "challenge", "你正在播放回放中，先 /rp stop", "warn");
     return false;
   }
   if (isInRace(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "比赛中不能进入影子挑战");
+    sysMsg(player, "challenge", "比赛中不能进入影子挑战", "warn");
     return false;
   }
   // 本人该赛道的比赛回放（完成比赛的优先，未完成也允许——影子只跑已录部分）
@@ -666,7 +672,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     orderBy: [{ finished: "desc" }, { createdAt: "desc" }],
   });
   if (races.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有该赛道的比赛回放（跑一场比赛后自动生成）");
+    sysMsg(player, "challenge", "你还没有该赛道的比赛回放（跑一场比赛后自动生成）", "warn");
     return false;
   }
   // 多场回放可选：跟"哪一场比赛"比由玩家决定（默认最近完成的一场）。
@@ -700,7 +706,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     data = loadReplayData(replay.fileName); // 只读缓存（与回放共享文件数据）
   } catch (e) {
     logger.error(`[replay] 挑战回放读取失败 ${replay.fileName}`, e);
-    player.sendClientMessage(COLOR_ERROR, "回放文件损坏或不存在");
+    sysMsg(player, "challenge", "回放文件损坏或不存在", "error");
     return false;
   }
   const cps = await prisma.raceCp.findMany({
@@ -708,7 +714,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     orderBy: { index: "asc" },
   });
   if (cps.length < 2) {
-    player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
+    sysMsg(player, "challenge", "该赛道至少需要 2 个检查点", "error");
     return false;
   }
   // 赛道圈数（多圈挑战：玩家累计跑 laps 圈才结算，与影子整场录像对比）
@@ -726,30 +732,30 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
 export async function startChallengeWithReplay(player: Player, replayId: string): Promise<boolean> {
   const auth = getAuthState(player.id);
   if (!auth) {
-    player.sendClientMessage(COLOR_ERROR, "请先登录");
+    sysMsg(player, "challenge", "请先登录", "warn");
     return false;
   }
   if (challenges.has(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "你已在影子挑战中，先 /challenge stop");
+    sysMsg(player, "challenge", "你已在影子挑战中，先 /challenge stop", "warn");
     return false;
   }
   if (getReplaySession(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "你正在播放回放中，先 /rp stop");
+    sysMsg(player, "challenge", "你正在播放回放中，先 /rp stop", "warn");
     return false;
   }
   if (isInRace(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "比赛中不能进入影子挑战");
+    sysMsg(player, "challenge", "比赛中不能进入影子挑战", "warn");
     return false;
   }
   const replay = await prisma.replay.findFirst({
     where: { id: replayId, type: "race", deletedAt: null }, // 任意玩家
   });
   if (!replay) {
-    player.sendClientMessage(COLOR_ERROR, "回放不存在或已删除");
+    sysMsg(player, "challenge", "回放不存在或已删除", "error");
     return false;
   }
   if (!replay.raceId) {
-    player.sendClientMessage(COLOR_ERROR, "该回放没有关联赛道，无法影子挑战");
+    sysMsg(player, "challenge", "该回放没有关联赛道，无法影子挑战", "error");
     return false;
   }
   let data: ReplayData;
@@ -757,7 +763,7 @@ export async function startChallengeWithReplay(player: Player, replayId: string)
     data = loadReplayData(replay.fileName); // 只读缓存（与回放共享文件数据）
   } catch (e) {
     logger.error(`[replay] 挑战回放读取失败 ${replay.fileName}`, e);
-    player.sendClientMessage(COLOR_ERROR, "回放文件损坏或不存在");
+    sysMsg(player, "challenge", "回放文件损坏或不存在", "error");
     return false;
   }
   // 赛道可能已被软删/禁用：此时 cps 查出来为空会误报"至少需要 2 个检查点"，
@@ -767,7 +773,7 @@ export async function startChallengeWithReplay(player: Player, replayId: string)
     select: { id: true, laps: true },
   });
   if (!race) {
-    player.sendClientMessage(COLOR_ERROR, "该赛道已被删除或禁用，无法进行影子挑战");
+    sysMsg(player, "challenge", "该赛道已被删除或禁用，无法进行影子挑战", "error");
     return false;
   }
   const cps = await prisma.raceCp.findMany({
@@ -775,7 +781,7 @@ export async function startChallengeWithReplay(player: Player, replayId: string)
     orderBy: { index: "asc" },
   });
   if (cps.length < 2) {
-    player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
+    sysMsg(player, "challenge", "该赛道至少需要 2 个检查点", "error");
     return false;
   }
   return startChallengeCore(player, replay, data, cps, Math.max(1, race.laps ?? 1));
@@ -803,7 +809,7 @@ async function startChallengeCore(
     const created = allocReplayNpc(`CHA_${Date.now()}`.slice(0, 24));
     if (!created) {
       freeReplayWorld(worldId); // 槽位不足即失败：回收已分配的世界 id
-      player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足，影子挑战创建失败");
+      sysMsg(player, "challenge", "NPC 槽位不足，影子挑战创建失败", "error");
       return false;
     }
     npc = created;
@@ -871,7 +877,7 @@ async function startChallengeCore(
       /* 已销毁/失效 */
     }
     freeReplayWorld(worldId);
-    player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足或创建失败");
+    sysMsg(player, "challenge", "NPC 槽位不足或创建失败", "error");
     return false;
   }
 
@@ -917,10 +923,12 @@ async function startChallengeCore(
     return false;
   }
   player.setFacingAngle(ch.cps[0]?.angle ?? 0);
-  player.sendClientMessage(
-    COLOR_SUCCESS,
-    `影子挑战开始！目标 ${replay.raceName ?? "该赛道"}，准备好了输入 /challenge go 起跑` +
+  sysMsg(
+    player,
+    "challenge",
+    `挑战开始！目标 ${replay.raceName ?? "该赛道"}，准备好了输入 /challenge go 起跑` +
       `（/challenge restart 重置 · /challenge stop 退出）`,
+    "success",
   );
   return true;
 }

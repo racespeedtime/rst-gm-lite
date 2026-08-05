@@ -11,7 +11,7 @@ import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 
-import { COLOR_INFO, COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
+import { sysMsg, PREFIX } from "@/utils/msg";
 const TP_TIMEOUT_MS = 18_000;
 /** 传送后冻结时长（对齐原版 DynUpdateStart：等待 obj 流式加载，避免下坠穿模） */
 const TELEPORT_FREEZE_MS = 2000;
@@ -139,48 +139,48 @@ export async function acceptsTeleport(player: Player): Promise<boolean> {
  */
 export async function requestTpa(player: Player, targetId: number): Promise<boolean> {
   if (tpGotoId.has(player.id) || tpFromId.has(player.id)) {
-    player.sendClientMessage(COLOR_WHITE, "[TP] 你已有未处理的传送请求");
+    sysMsg(player, "tp", "你已有未处理的传送请求", "warn");
     return false;
   }
   if (targetId === player.id) {
-    player.sendClientMessage(COLOR_WHITE, "[TP] 不能向自己发送传送请求");
+    sysMsg(player, "tp", "不能向自己发送传送请求", "warn");
     return false;
   }
   const target = Player.getInstance(targetId);
   if (!target) {
-    player.sendClientMessage(COLOR_WHITE, "[TP] 错误的玩家ID");
+    sysMsg(player, "tp", "错误的玩家ID", "error");
     return false;
   }
   if (target.isNpc()) {
-    player.sendClientMessage(COLOR_WHITE, "[TP] 不能向NPC发送传送请求");
+    sysMsg(player, "tp", "不能向NPC发送传送请求", "warn");
     return false;
   }
   if (!getAuthState(target.id)) {
-    player.sendClientMessage(COLOR_WHITE, "[TP] 对方尚未登录");
+    sysMsg(player, "tp", "对方尚未登录", "warn");
     return false;
   }
   // 比赛中禁止传送（请求方与目标方均检查）
   if (isInRace(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "[TP] 比赛中不能传送");
+    sysMsg(player, "tp", "比赛中不能传送", "warn");
     return false;
   }
   if (isInRace(target.id)) {
-    player.sendClientMessage(COLOR_WHITE, "[TP] 对方正在比赛中，无法传送");
+    sysMsg(player, "tp", "对方正在比赛中，无法传送", "warn");
     return false;
   }
   // 同战局限制
   const mySession = sessionManager.getPlayerSession(player);
   const targetSession = sessionManager.getPlayerSession(target);
   if (mySession.id !== targetSession.id) {
-    player.sendClientMessage(COLOR_ERROR, "[TP] 对方与你不在同一战局，无法传送");
+    sysMsg(player, "tp", "对方与你不在同一战局，无法传送", "warn");
     return false;
   }
   if (!(await acceptsTeleport(target))) {
-    player.sendClientMessage(COLOR_WHITE, "[TP] 对方关闭了接受传送");
+    sysMsg(player, "tp", "对方关闭了接受传送", "warn");
     return false;
   }
   if (tpFromId.has(target.id) || tpGotoId.has(target.id)) {
-    player.sendClientMessage(COLOR_WHITE, "[TP] 对方正在处理其他请求");
+    sysMsg(player, "tp", "对方正在处理其他请求", "warn");
     return false;
   }
   const timeout = Date.now() + TP_TIMEOUT_MS;
@@ -188,11 +188,13 @@ export async function requestTpa(player: Player, targetId: number): Promise<bool
   tpFromId.set(target.id, player.id);
   tpTimeoutAt.set(player.id, timeout);
   tpTimeoutAt.set(target.id, timeout);
-  target.sendClientMessage(
-    COLOR_INFO,
-    `[TP] ${player.getName().name}(${player.id}) 请求传送到你身边，/ta 同意 /td 拒绝`,
+  sysMsg(
+    target,
+    "tp",
+    `${player.getName().name}(${player.id}) 请求传送到你身边，/ta 同意 /td 拒绝`,
+    "info",
   );
-  player.sendClientMessage(COLOR_INFO, `[TP] 请求已发至 ${target.getName().name}(${target.id})`);
+  sysMsg(player, "tp", `请求已发至 ${target.getName().name}(${target.id})`, "info");
   new GameText("~n~~n~~n~~n~~n~~n~~n~~n~~w~Player want to move ~r~you~w~.", 3000, 3).forPlayer(
     target,
   );
@@ -212,7 +214,7 @@ export async function fallbackTeleport(player: Player, rawCommand: string): Prom
   if (!teleName) return false;
   // 比赛中禁止传送
   if (isInRace(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能传送");
+    sysMsg(player, "tp", "比赛中不能传送", "warn");
     return true;
   }
   try {
@@ -229,11 +231,13 @@ export async function fallbackTeleport(player: Player, rawCommand: string): Prom
       point.interiorId,
     );
     if (isUserTele) {
-      player.sendClientMessage(COLOR_WHITE, `[传送] 你传送到了 //${teleName}`);
+      sysMsg(player, "tp", `你传送到了 //${teleName}`, "success");
     } else {
       const session = sessionManager.getPlayerSession(player);
-      const msg = `[传送] ${player.getName().name} 传送到了 ${point.description || point.name} (/${teleName})`;
-      session.broadcast(msg);
+      // 批量广播不走 sysMsg（无 Player 对象），前缀用 PREFIX 常量保证与单聊一致
+      session.broadcast(
+        `${PREFIX.tp} ${player.getName().name} 传送到了 ${point.description || point.name} (/${teleName})`,
+      );
     }
     return true;
   } catch (e) {
@@ -256,14 +260,14 @@ export function initTeleport(): void {
       facingAngle: player.getFacingAngle().angle,
       zAngle: veh ? veh.getZAngle().angle : 0,
     });
-    player.sendClientMessage(COLOR_WHITE, "[传送] 当前位置已保存，输入 /l 返回");
+    sysMsg(player, "tp", "当前位置已保存，输入 /l 返回", "success");
     return next();
   });
 
   PlayerEvent.onCommandText(["l", "lp"], ({ player, next }) => {
     const saved = tempPos.get(player.id);
     if (!saved) {
-      player.sendClientMessage(COLOR_ERROR, "[传送] 请先使用 /s 保存位置");
+      sysMsg(player, "tp", "请先使用 /s 保存位置", "warn");
       return next();
     }
     player.setInterior(saved.interior);
@@ -277,7 +281,7 @@ export function initTeleport(): void {
       player.setPos(saved.x, saved.y, saved.z);
       player.setFacingAngle(saved.facingAngle);
     }
-    player.sendClientMessage(COLOR_WHITE, "[传送] 已传送回保存的位置");
+    sysMsg(player, "tp", "已传送回保存的位置", "success");
     return next();
   });
 
@@ -285,14 +289,11 @@ export function initTeleport(): void {
   PlayerEvent.onCommandText(["tp", "tpa"], async ({ player, subcommand, next }) => {
     const arg = subcommand[0];
     if (arg === "ban") {
-      player.sendClientMessage(
-        COLOR_WHITE,
-        "[TP] 当前精简版通过面板的『世界个性化→接受传送』控制是否接收请求",
-      );
+      sysMsg(player, "tp", "当前精简版通过面板的『世界个性化→接受传送』控制是否接收请求", "plain");
       return next();
     }
     if (!arg || Number.isNaN(+arg)) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 用法: /tpa 玩家ID");
+      sysMsg(player, "tp", "用法: /tpa 玩家ID", "plain");
       return next();
     }
     await requestTpa(player, +arg);
@@ -303,29 +304,29 @@ export function initTeleport(): void {
   PlayerEvent.onCommandText(["ta", "yes"], async ({ player, next }) => {
     const fromId = tpFromId.get(player.id);
     if (fromId == null) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 没有待处理的请求");
+      sysMsg(player, "tp", "没有待处理的请求", "warn");
       return next();
     }
     if (tpTimeoutAt.get(player.id)! < Date.now()) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 请求已超时");
+      sysMsg(player, "tp", "请求已超时", "warn");
       initTp(player.id);
       return next();
     }
     const from = Player.getInstance(fromId);
     if (!from) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 对方已离线");
+      sysMsg(player, "tp", "对方已离线", "warn");
       initTp(player.id);
       return next();
     }
     // 接受时重新校验：期间可能进入比赛/切换战局（竞态防护）
     if (isInRace(player.id) || isInRace(from.id)) {
-      player.sendClientMessage(COLOR_ERROR, "[TP] 比赛中不能传送");
+      sysMsg(player, "tp", "比赛中不能传送", "warn");
       initTp(player.id);
       initTp(from.id);
       return next();
     }
     if (!getAuthState(from.id)) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 对方已离线");
+      sysMsg(player, "tp", "对方已离线", "warn");
       initTp(player.id);
       initTp(from.id);
       return next();
@@ -333,7 +334,7 @@ export function initTeleport(): void {
     const mySession = sessionManager.getPlayerSession(player);
     const fromSession = sessionManager.getPlayerSession(from);
     if (mySession.id !== fromSession.id) {
-      player.sendClientMessage(COLOR_ERROR, "[TP] 你们已不在同一战局，传送取消");
+      sysMsg(player, "tp", "你们已不在同一战局，传送取消", "warn");
       initTp(player.id);
       initTp(from.id);
       return next();
@@ -349,14 +350,8 @@ export function initTeleport(): void {
       player.getFacingAngle().angle,
       player.getInterior(),
     );
-    from.sendClientMessage(
-      COLOR_INFO,
-      `[TP] ${player.getName().name}(${player.id}) 同意了你的传送请求`,
-    );
-    player.sendClientMessage(
-      COLOR_INFO,
-      `[TP] 你同意了 ${from.getName().name}(${from.id}) 的传送请求`,
-    );
+    sysMsg(from, "tp", `${player.getName().name}(${player.id}) 同意了你的传送请求`, "info");
+    sysMsg(player, "tp", `你同意了 ${from.getName().name}(${from.id}) 的传送请求`, "info");
     initTp(from.id);
     initTp(player.id);
     return next();
@@ -366,17 +361,14 @@ export function initTeleport(): void {
   PlayerEvent.onCommandText(["td", "no"], ({ player, next }) => {
     const fromId = tpFromId.get(player.id);
     if (fromId == null) {
-      player.sendClientMessage(COLOR_WHITE, "[TP] 没有待处理的请求");
+      sysMsg(player, "tp", "没有待处理的请求", "warn");
       return next();
     }
     const from = Player.getInstance(fromId);
     if (from) {
-      from.sendClientMessage(
-        COLOR_INFO,
-        `[TP] ${player.getName().name}(${player.id}) 拒绝了你的传送请求`,
-      );
+      sysMsg(from, "tp", `${player.getName().name}(${player.id}) 拒绝了你的传送请求`, "info");
     }
-    player.sendClientMessage(COLOR_INFO, `[TP] 你拒绝了传送请求`);
+    sysMsg(player, "tp", "你拒绝了传送请求", "info");
     initTp(fromId);
     initTp(player.id);
     return next();
@@ -386,7 +378,7 @@ export function initTeleport(): void {
   // 无参 → 打开面板创建流程（对话框收集名字/描述，兼容老玩家习惯）
   PlayerEvent.onCommandText("vmake", ({ player, subcommand, next }) => {
     if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      sysMsg(player, "tp", "当前流程中不可操作", "warn");
       return next();
     }
     const name = subcommand[0];
@@ -402,18 +394,20 @@ export function initTeleport(): void {
   // 原版 /vsmake（LV4+）。描述支持带空格（原版 sscanf 缺陷吞空格，这里修正）
   PlayerEvent.onCommandText("vsmake", ({ player, subcommand, next }) => {
     if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      sysMsg(player, "tp", "当前流程中不可操作", "warn");
       return next();
     }
     if (!isSuperAdmin(player)) {
-      player.sendClientMessage(COLOR_ERROR, "[传送] 只有管理员能创建系统传送点");
+      sysMsg(player, "tp", "只有管理员能创建系统传送点", "warn");
       return next();
     }
     const name = subcommand[0];
     if (!name) {
-      player.sendClientMessage(
-        COLOR_WHITE,
-        "[传送] 用法: /vsmake [名字] [描述] 例如 /vsmake sf SF机场（/名字 触发，全服共享）",
+      sysMsg(
+        player,
+        "tp",
+        "用法: /vsmake [名字] [描述] 例如 /vsmake sf SF机场（/名字 触发，全服共享）",
+        "plain",
       );
       return next();
     }
@@ -438,7 +432,7 @@ export function updateTpTimeouts(): void {
       if (targetId != null) {
         const target = Player.getInstance(targetId);
         if (target) {
-          target.sendClientMessage(COLOR_WHITE, "[TP] 传送请求已超时");
+          sysMsg(target, "tp", "传送请求已超时", "info");
         }
         // 双向清理：对方侧可能残留配对条目（tpFromId[tp] = pid）——只清 pid
         // 会让对方之后 /tpa 被"你已有未处理的传送请求"卡住（initTp 只清自身）
@@ -487,7 +481,7 @@ async function listSystemTeleports(player: Player, back?: MenuBack): Promise<voi
     orderBy: { name: "asc" },
   });
   if (points.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "暂无系统传送点");
+    sysMsg(player, "tp", "暂无系统传送点", "plain");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -507,7 +501,7 @@ async function listSystemTeleports(player: Player, back?: MenuBack): Promise<voi
     Number(point.angle),
     point.interiorId,
   );
-  player.sendClientMessage(COLOR_WHITE, `[传送] 你传送到了 ${point.name}`);
+  sysMsg(player, "tp", `你传送到了 ${point.name}`, "success");
   return back?.();
 }
 
@@ -523,7 +517,7 @@ async function listUserTeleports(player: Player, back?: MenuBack): Promise<void>
     orderBy: { name: "asc" },
   });
   if (points.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "暂无用户传送点，创建后输入 //名称 或在此选择使用");
+    sysMsg(player, "tp", "暂无用户传送点，创建后输入 //名称 或在此选择使用", "plain");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -543,7 +537,7 @@ async function listUserTeleports(player: Player, back?: MenuBack): Promise<void>
     Number(point.angle),
     point.interiorId,
   );
-  player.sendClientMessage(COLOR_WHITE, `[传送] 你传送到了 //${point.name}`);
+  sysMsg(player, "tp", `你传送到了 //${point.name}`, "success");
   return back?.();
 }
 
@@ -558,20 +552,20 @@ async function createTeleport(
 ): Promise<boolean> {
   const clean = name.replace(/^\/+/, "").trim();
   if (!clean) {
-    player.sendClientMessage(COLOR_ERROR, "[传送] 传送点名称不能为空");
+    sysMsg(player, "tp", "传送点名称不能为空", "error");
     return false;
   }
   if (clean.length > 48) {
-    player.sendClientMessage(COLOR_ERROR, "[传送] 名字过长，最多 48 个字符");
+    sysMsg(player, "tp", "名字过长，最多 48 个字符", "error");
     return false;
   }
   if (description && description.length > 48) {
-    player.sendClientMessage(COLOR_ERROR, "[传送] 描述过长，最多 48 个字符");
+    sysMsg(player, "tp", "描述过长，最多 48 个字符", "error");
     return false;
   }
   const exist = await prisma.teleport.findFirst({ where: { name: clean } });
   if (exist) {
-    player.sendClientMessage(COLOR_ERROR, `[传送] 该传送点 ${clean} 已存在`);
+    sysMsg(player, "tp", `该传送点 ${clean} 已存在`, "error");
     return false;
   }
   const auth = getAuthState(player.id);
@@ -591,14 +585,11 @@ async function createTeleport(
         userId: isSystem ? null : auth?.userId,
       },
     });
-    player.sendClientMessage(
-      COLOR_WHITE,
-      `[传送] 传送点 ${isSystem ? "/" : "//"}${clean} 创建成功`,
-    );
+    sysMsg(player, "tp", `传送点 ${isSystem ? "/" : "//"}${clean} 创建成功`, "success");
     return true;
   } catch (e) {
     logger.error(`[tp] 创建传送点失败 ${clean}`, e);
-    player.sendClientMessage(COLOR_ERROR, "[传送] 创建失败，名称可能已存在");
+    sysMsg(player, "tp", "创建失败，名称可能已存在", "error");
     return false;
   }
 }
@@ -620,7 +611,7 @@ async function createTeleportFlow(player: Player, back?: MenuBack): Promise<void
   if (nameRes.response !== 1) return back?.();
   let name = nameRes.inputText.trim();
   if (!name) {
-    player.sendClientMessage(COLOR_ERROR, "传送点名称不能为空");
+    sysMsg(player, "tp", "传送点名称不能为空", "error");
     return back?.();
   }
   // 去斜杠前缀
@@ -664,7 +655,7 @@ async function manageTeleports(player: Player, back?: MenuBack): Promise<void> {
     orderBy: [{ isSystem: "desc" }, { name: "asc" }],
   });
   if (points.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "暂无传送点");
+    sysMsg(player, "tp", "暂无传送点", "plain");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -694,6 +685,6 @@ async function manageTeleports(player: Player, back?: MenuBack): Promise<void> {
     where: { id: point.id },
     data: { deletedAt: new Date() },
   });
-  player.sendClientMessage(COLOR_WHITE, `[传送] 传送点已删除`);
+  sysMsg(player, "tp", "传送点已删除", "success");
   return back?.();
 }
