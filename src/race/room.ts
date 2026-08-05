@@ -1952,6 +1952,47 @@ function applyRollbackState(
   }
 }
 
+/** 重生时重执行该 CP 的脚本（对齐"触达即生效"语义——部分赛道靠 CP 弹射 speed /
+ *  cveh 换车才能继续过后续路段，重生回该 CP 后检查点已消耗、红圈在下一个，玩家
+ *  无法再次"触达"触发脚本 → 会被卡死或只能反复 /kill）：
+ * - spawnpos：位置已由 getRespawnPoint 单独处理，且它会终止整条脚本链——跳过
+ * - vgoto：会把刚放好的重生位置又传走——跳过
+ * - damage：重生已挪车+修复，重执行会刚修好又爆胎——跳过
+ * - 其余（speed/speedex/zspeed/angle/time/weather/cveh/fix/msg）照执行：弹射初速
+ *   恢复（必需场景）、车型/时间天气恢复、提示重演
+ * - 第一 CP 的 cveh 是赛道标准车（skipCveh，与过点语义一致） */
+function replayCpScriptsOnRespawn(player: Player, room: RaceRoom, prevIdx: number): void {
+  const cp = room.cps[prevIdx];
+  if (!cp) return;
+  const scripts = cp.scripts.filter((s) => {
+    const fn = s.trim().split(/\s+/)[0];
+    return fn !== "spawnpos" && fn !== "vgoto" && fn !== "damage";
+  });
+  if (scripts.length === 0) return;
+  const pr = playerRaces.get(player.id);
+  if (!pr) return;
+  const isFirstCp = cp.index === room.cps[0].index;
+  const scriptCtx: CpScriptContext = {
+    raceId: room.raceId,
+    cpid: cp.index,
+    raceName: room.raceName,
+    authorName: room.authorName,
+    cps: room.cps.map((c) => ({ index: c.index, x: c.x, y: c.y, z: c.z })),
+  };
+  try {
+    for (const script of scripts) {
+      if (!execCpScript(player, scriptCtx, script, { skipCveh: isFirstCp })) break;
+      // 脚本执行（同步）期间玩家可能已离开/比赛结束 → 终止后续脚本
+      if (!playerRaces.has(player.id) || rooms.get(pr.roomId)?.state !== "RACING" || pr.finished) {
+        break;
+      }
+    }
+  } catch (e) {
+    // 脚本执行异常（native 读取失败等）：不影响玩家状态（对齐过点脚本防御式执行）
+    logger.error(`[race] 重生重执行脚本异常 race=${room.raceId} cp=${cp.index}`, e);
+  }
+}
+
 /** 重生到指定 CP（位置 + 车就位 + 放回车里）：respawnPlayerToCp / respawnToLastCp 共用。
  * spawnpos 优先（对齐原版 ReSpawnRaceVehicle），否则 CP 坐标 + colandreas 抬升。
  * 车完好 → 挪到重生点 + 修复 + 加氮气 + 放回车里；车已毁（爆炸，getOwnedVehicle
@@ -1979,6 +2020,10 @@ function respawnToCpCore(
   }
   // 重新显示当前 CP（红箭头指向下一个）
   showNextCheckpoint(player, room.cps, prevIdx);
+  // 重生重执行该 CP 脚本（弹射/换车等必需效果恢复，跳过 spawnpos/vgoto/damage——
+  // 见 replayCpScriptsOnRespawn 注释）。放在 applyRollbackState 之前：重执行 cveh
+  // 已把车型换对，快照回撤的车型判断自然跳过（不重复刷车），time/weather 同值幂等。
+  replayCpScriptsOnRespawn(player, room, prevIdx);
 }
 
 /** 重生回上一 CP（死亡场景：setSpawnInfo + spawn 复活） */
