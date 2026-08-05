@@ -18,7 +18,13 @@ import {
   destroyPlayerVehicle,
   addVehicleComponentIfPossible,
 } from "@/vehicles";
-import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scripts";
+import {
+  execCpScript,
+  cleanupScriptVehicle,
+  getSuperStartKmh,
+  setVehicleSpeed,
+  type CpScriptContext,
+} from "./scripts";
 import {
   isEditing,
   enterRaceEdit,
@@ -868,6 +874,9 @@ export async function startRace(player: Player): Promise<void> {
 function beginRace(room: RaceRoom): void {
   room.state = "RACING";
   const now = Date.now();
+  // 超级起步速度：第一 CP 的 superstart 配置（无/非法 → 默认；写其他 CP 无效）。
+  // 不写默认生效——所有比赛开局倒计时结束即有超级起步（GO 瞬间沿车头给初速）。
+  const superStartKmh = getSuperStartKmh(room.cps);
   // 房间统一天气时间：按房主设置（syncGameTime 则跟随服务器真实时间，否则用房主 timeHour/timeMinute）
   void (async () => {
     const nowTime = new Date();
@@ -952,6 +961,12 @@ function beginRace(room: RaceRoom): void {
           raceName: room.raceName,
           raceRoomId: room.id,
         });
+      }
+      // 超级起步：GO 瞬间沿车头给一个向前初速（无需触碰 CP，全局仅开局这一次）。
+      // 无车（开局兜底刷车异步完成前）跳过——车就位后已不在起步加速时点。
+      const ssVeh = m.getVehicle();
+      if (superStartKmh > 0 && ssVeh) {
+        setVehicleSpeed(ssVeh, superStartKmh, ssVeh.getZAngle().angle + 90);
       }
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);

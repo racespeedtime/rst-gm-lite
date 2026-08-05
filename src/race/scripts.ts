@@ -139,10 +139,31 @@ function normOp(s: string): Op {
 /** 设置车辆速度：km/h → velocity 分量。
  * 坐标系对齐原版 speed/speedex：x = 速度·cos(na)、y = 速度·sin(na)，角度 0 = 正东
  * （SA-MP 方位角基准）。na 由调用方按"玩家朝向 + 90"（| 模式 = 角度 + 90）算好。 */
-function setVehicleSpeed(veh: Vehicle, kmh: number, angleDeg: number, z?: number): void {
+export function setVehicleSpeed(veh: Vehicle, kmh: number, angleDeg: number, z?: number): void {
   const units = kmh / KMH_UNIT;
   const rad = (angleDeg * Math.PI) / 180;
   veh.setVelocity(units * Math.cos(rad), units * Math.sin(rad), z ?? veh.getVelocity().z);
+}
+
+/**
+ * 超级起步（superstart）：开局 GO 瞬间沿车头方向给全车一个向前初速（对齐 speed 脚本
+ * 坐标系：角度 = 车头朝向 + 90）。只认第一 CP 的配置，写其他地方无效；不写默认生效
+ * （默认 SUPERSTART_DEFAULT_KMH）。参数：superstart 速度(KM/H)，无参数/非法 → 默认，
+ * 写 superstart 0 可关闭该赛道起步加速。全局仅开局一次（beginRace 触发），
+ * 重生不激活——过 CP 时 execCpScript 静默跳过（见 case "superstart"）。
+ */
+export const SUPERSTART_DEFAULT_KMH = 100;
+
+export function getSuperStartKmh(cps: { scripts: string[] }[]): number {
+  for (const script of cps[0]?.scripts ?? []) {
+    const [fn, raw] = script.trim().split(/\s+/);
+    if (fn === "superstart") {
+      const kmh = Number(raw);
+      if (Number.isFinite(kmh) && kmh >= 0) return kmh;
+      break;
+    }
+  }
+  return SUPERSTART_DEFAULT_KMH;
 }
 
 /** 执行一条 CP 脚本。返回 false 表示终止整条脚本链（对齐原版 Race_Cp_Script_Start：
@@ -171,6 +192,12 @@ export function execCpScript(
       // 碰到 spawnpos 直接 return 1 终止整条脚本链——该点后续脚本全部不执行）。
       // 过 CP 时不执行——否则玩家会被瞬移到重生点；重生坐标由 room 的重生逻辑处理。
       return false;
+    }
+    case "superstart": {
+      // 超级起步：开局 GO 时由 beginRace 统一触发（见 getSuperStartKmh），
+      // 过 CP / 重生不激活——这里静默跳过，防误报"不存在函数[superstart]"。
+      // 且 superstart 只认第一 CP 的配置，写在别处无效（也不报错）。
+      return true;
     }
     case "time": {
       // 对齐原版 time：时 0-24、分 0-59
