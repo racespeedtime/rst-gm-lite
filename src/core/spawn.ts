@@ -7,6 +7,7 @@ import { showDialog } from "@/utils/dialog";
 import { setIntervalSafe } from "@/core/timers";
 import { getSpawnGroundZ } from "@/core/colandreas";
 import { isInRace } from "@/race/room";
+import { REPLAY_WORLD_BASE } from "@/replay/playback";
 import { isEditing } from "@/race/editor";
 import { reapplyCurrentPlayerPreset } from "@/attire";
 import { isInsideMap } from "@/utils/map";
@@ -94,7 +95,7 @@ export async function savePlayerPosition(player: Player): Promise<void> {
   if (!auth) return;
   // 比赛中：玩家在比赛独立世界（world≥1001，RACE_WORLD_BASE），保存会污染
   // LAST_POSITION 出生点，跳过
-  if (isInRace(player.id)) return;
+  if (isInRace(player.id) || player.getVirtualWorld() >= REPLAY_WORLD_BASE) return;
   const pos = player.getPos();
   const angle = player.getFacingAngle().angle;
   if (!isInsideMap(pos.x, pos.y, pos.z)) return;

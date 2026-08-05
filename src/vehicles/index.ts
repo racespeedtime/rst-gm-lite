@@ -13,6 +13,7 @@ import { getAuthState } from "@/auth/auth";
 import { cleanupAttire, applyVehiclePreset } from "@/attire";
 import { isInRace } from "@/race/room";
 import { isInChallenge } from "@/replay/challenge";
+import { REPLAY_WORLD_BASE } from "@/replay/playback";
 import { sysMsg } from "@/utils/msg";
 import { isPlayerLocked } from "@/core/interaction";
 import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
@@ -183,7 +184,8 @@ export async function savePlayerVehiclePosition(player: Player): Promise<void> {
   const veh = playerVehs.get(player.id);
   if (!auth || !veh || !veh.isValid()) return;
   // 比赛中：爱车被切到比赛独立世界，保存会污染位置数据（重启后坐标错位），跳过
-  if (isInRace(player.id)) return;
+  // 挑战/回放：爱车被挪到挑战/回放世界起点，同样跳过（否则重启后爱车刷在赛道起点）
+  if (isInRace(player.id) || veh.getVirtualWorld() >= REPLAY_WORLD_BASE) return;
   const modelId = veh.getModel();
   const pos = veh.getPos();
   const angle = veh.getZAngle().angle;

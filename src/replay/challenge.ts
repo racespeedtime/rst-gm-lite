@@ -321,9 +321,21 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
     // 异步窗口）不重复刷，防 restart↔go 交错双车；finally 兜底——刷车失败
     //（如中途断线/实体创建异常）也放行，防守卫永久卡死阻断后续救援
     pendingRespawn.add(player.id);
-    await spawnVehicle(player, ch.data.header.vehicleModelId, true).finally(() => {
+    const spawned = await spawnVehicle(player, ch.data.header.vehicleModelId, true).finally(() => {
       pendingRespawn.delete(player.id);
     });
+    // 无爱车分支：spawnVehicle 在玩家当前世界/位置刷车（旧世界），车不随人走——
+    // 显式挪到起点 + 切挑战世界（对齐有车分支的 owned.setPos/setVirtualWorld）。
+    // 玩家本人随后 setVirtualWorld + setPos 归位，车若留在旧世界，GO 后 tick 会
+    // putPlayerIn 把玩家拉回旧世界 → 世界错位判"离开挑战"直接结束。
+    if (spawned) {
+      const veh = getOwnedVehicle(player.id);
+      if (veh && veh.isValid()) {
+        veh.setPos(first.x, first.y, first.z);
+        veh.setZAngle(first.angle);
+        veh.setVirtualWorld(ch.worldId);
+      }
+    }
   }
   player.setVirtualWorld(ch.worldId);
   player.setPos(first.x, first.y, first.z);

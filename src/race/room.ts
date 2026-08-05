@@ -1475,7 +1475,10 @@ function endRoom(room: RaceRoom): void {
 }
 
 function checkRoomState(room: RaceRoom): void {
-  if (room.members.size === 0) {
+  // 全员离开但仍有重连窗口 → 不销毁：重连是"成员全掉线也靠窗口存活"的场景
+  //（单人房掉线是重连功能最典型用法）。窗口全部到期后 cleanupExpiredReconnects
+  // 会再调本函数，此时窗口空、members 仍空 → 正常销毁。
+  if (room.members.size === 0 && room.reconnectSlots.size === 0 && room.reconnectUntil.size === 0) {
     // 置 FINISHED：COUNTDOWN 中全员离开时，倒计时链每步都查 state，置位后
     // beginRace 不再被调用（防闭包链空转几秒无效执行）
     room.state = "FINISHED";
@@ -2093,10 +2096,19 @@ function writeBackRollbackProgress(
     pr.cpIndex = target.cumIdx % len;
   }
   // 圈内进度 = 目标累计序号 % 一圈CP数 + 1（末 CP 情形 = len，与正常翻圈后的显示一致）
+  // 玩家自身 + 观战他的观察者（对齐过 CP 时 onPlayerReachCp 的同步口径——否则
+  // 观战者右上角停在回退前的高进度，直到下次过 CP 才被拉回）
   const cpDone = (target.cumIdx % len) + 1;
+  const cpText = `C  P / ~p~${cpDone}~w~/~y~${len}`;
   const raceTds = room.raceTextTds.get(player.id);
   if (raceTds) {
-    raceTds.cp.setString(`C  P / ~p~${cpDone}~w~/~y~${len}`);
+    raceTds.cp.setString(cpText);
+  }
+  for (const oid of getObserverIdsOf(player.id)) {
+    const ot = room.raceTextTds.get(oid);
+    if (ot) {
+      ot.cp.setString(cpText);
+    }
   }
   // 录制会话的 cpProgress 同步回退：否则回放帧残留回退前的高进度，C P TD 与
   // seek 显示玩家实际未跑到的进度（对齐过 CP 时的 noteCpProgress 口径）

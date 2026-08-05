@@ -402,7 +402,13 @@ export async function stopRecording(
   // 算播放总时长——若固定写 33ms 而实际帧间隔是 100ms（兜底采样），总时长
   // 会远小于真实录制时长，播放超 0.23s 即 clamp 到尾帧（"瞬移+原地开"）。
   // 用实际间隔让播放时间轴与帧一一对应（帧少时慢放但位置正确）。
-  const frameIntervalMs = Math.round(durationMs / Math.max(1, session.frames.length - 1));
+  // 钳制到 u16 上限（encodeHeader 写 UInt16LE）：车辆失效期间长时间无帧（爱车爆了
+  // 步行几分钟再 /rec stop），间隔会超 65535 → writeUInt16LE 抛 RangeError、整个
+  // 录制静默丢失。钳制后帧少段播放时间轴轻微缩短，可接受。
+  const frameIntervalMs = Math.min(
+    0xffff,
+    Math.round(durationMs / Math.max(1, session.frames.length - 1)),
+  );
   const header: ReplayHeader = {
     type: session.type === "race" ? REPLAY_TYPE_RACE : REPLAY_TYPE_GHOST,
     frameIntervalMs, // 实际帧间隔（播放推进基准；兜底采样时 ≈100ms，RakNet 拦截时 ≈33ms）

@@ -99,6 +99,13 @@ export async function closePlayerSession(playerId: number): Promise<void> {
     clearAuthState(playerId);
   } else if (!cur && !sessionId) {
     clearAuthState(playerId);
+  } else if (!cur && sessionId) {
+    // 认证中途断线（pendingSessions 兜底分支）：authStates 无登记、会话刚在 DB
+    // 关闭——残留 pendingSessions 会让 getOnlineSessionIds 持续报该会话（心跳
+    // 刷新 lastHeartbeatAt → DB 永久 ONLINE 幽灵会话），且 playerId 被新连接复用
+    // 后 findOnlinePlayerIdByUserId 会误判"账号他处登录"踢掉无关玩家。
+    pendingSessions.delete(playerId);
+    sessionStartedAt.delete(playerId);
   }
 }
 
