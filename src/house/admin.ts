@@ -176,7 +176,8 @@ async function houseActions(
             `输入 house_import/ 下的文件名（每行 "type args"，// # 注释）：\n` +
             (files.length
               ? `可用文件：${files.join("、")}`
-              : `（目录为空，先把 .txt/.map 源文件放进 scriptfiles/house_import/）`),
+              : `（目录为空，先把 .txt/.map 源文件放进 scriptfiles/house_import/）`) +
+            `\n提示：3dtext 的 text、materialtext 的 text/fontFace 含空格/中文时需 URL 编码（对齐后端导入约定）`,
           button1: "确定",
           button2: "取消",
         }),

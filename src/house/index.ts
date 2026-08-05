@@ -105,6 +105,21 @@ function num(raw: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/**
+ * 解码文本字段（对齐 rst-backend/frontend 的 URL 编码约定）：
+ * 3dtext 的 text、materialtext 的 text/fontFace 因 args 是空格分隔单字段，
+ * 含空格/中文的文本在导入文件中用 encodeURIComponent 编码。这里解码：
+ * - 普通文本（无 %）原样返回（幂等，OP 手动输入中文不受影响）
+ * - 非法 % 序列（如文本恰含 "100%"）try/catch 原样返回
+ */
+function decodeText(raw: string): string {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
 /** 房屋级加载统计（用于日志） */
 interface HouseLoadStats {
   obj: number;
@@ -259,7 +274,8 @@ export async function loadAllHouseObjects(): Promise<void> {
             const fontColor = parseColor(parts[6]);
             const bgColor = parseColor(parts[7]);
             const alignment = num(parts[8]);
-            const text = parts[1];
+            // text / fontFace：导入文件里可能是 URL 编码的（对齐 frontend 约定）→ 解码
+            const text = decodeText(parts[1]);
             if (textSize == null || fontSize == null || alignment == null) {
               logger.warn(`[house] materialtext 数值无效 house=${hname} args=${m.args}`);
               stats.errors++;
@@ -272,7 +288,7 @@ export async function loadAllHouseObjects(): Promise<void> {
               0,
               text,
               textSize,
-              parts[3],
+              decodeText(parts[3]), // fontFace 同约定：可能是 URL 编码
               fontSize,
               bold ? 1 : 0,
               fontColor ?? 0xffffffff,
@@ -317,7 +333,8 @@ export async function loadAllHouseObjects(): Promise<void> {
               break;
             }
             const label = new Dynamic3DTextLabel({
-              text: parts.slice(0, parts.length - 3).join(" "),
+              // text：导入文件里可能是 URL 编码的（对齐 frontend 约定）→ 解码
+              text: decodeText(parts.slice(0, parts.length - 3).join(" ")),
               color: "#ffd700",
               x,
               y,
