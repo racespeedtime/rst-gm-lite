@@ -203,6 +203,13 @@ interface RaceRoom {
 const rooms = new Map<number, RaceRoom>();
 const playerRaces = new Map<number, PlayerRace>();
 let nextRoomId = 1;
+/** 挂机检测参数（对齐原版 AFKTimes：静止累计超时移出比赛，防占坑不跑） */
+const AFK_IDLE_MS = 45_000; // 静止累计超 45s 移出比赛
+const AFK_WARN_MS = 30_000; // 静止累计超 30s 提示一次
+/** 200ms 内位移 < 0.1（≈0.5m/s）判静止——比原版 0.001/s 宽松：防撞墙顶油门/
+ *  被车流堵塞缓慢蠕动的活跃玩家被误判挂机（原版阈值过严曾被投诉误封） */
+const AFK_MOVE_EPS = 0.1;
+const AFK_TICK_MS = 200; // 与 tickRooms 周期一致（每 tick 固定累计）
 /** 重连窗口参数：预计时长 × 20%，上限 5 分钟、下限 30 秒；<2.5 分钟不支持 */
 const RECONNECT_RATIO = 0.2;
 const RECONNECT_MAX_MS = 5 * 60_000;
@@ -1600,15 +1607,9 @@ function tickRooms(): void {
     }
     if (room.state !== "RACING") continue;
     // 挂机检测（对齐原版 AFKTimes：静止累计超时移出比赛，防占坑不跑）。
-    // 200ms tick 采样位置：位移 < 阈值判静止累计（每 tick 固定 +200ms，与 tickRooms
-    // 周期一致），有位移清零；累计超 30 秒提示一次、45 秒移出（leaveRace 广播 +
-    // 清成员 + 录制落盘）。断线玩家已在重连窗口不在 members。
-    const AFK_IDLE_MS = 45_000;
-    const AFK_WARN_MS = 30_000;
-    // 200ms 内位移 < 0.1（≈0.5m/s）判静止——比原版 0.001/s 宽松：防撞墙顶油门/
-    // 被车流堵塞缓慢蠕动的活跃玩家被误判挂机（原版阈值过严曾被投诉误封）
-    const AFK_MOVE_EPS = 0.1;
-    const AFK_TICK_MS = 200;
+    // 200ms tick 采样位置：位移 < 阈值判静止累计（每 tick 固定 +AFK_TICK_MS，与
+    // tickRooms 周期一致），有位移清零；累计超 AFK_WARN_MS 提示一次、AFK_IDLE_MS
+    // 移出（leaveRace 广播 + 清成员 + 录制落盘）。断线玩家已在重连窗口不在 members。
     for (const m of room.members.values()) {
       // 已完赛者跳过：停在终点等待结算/观战，位移恒 <0.1，不挂机检测
       //（多圈赛道早完赛者 idle 超 45s 会被误踢出房间、错过结算）

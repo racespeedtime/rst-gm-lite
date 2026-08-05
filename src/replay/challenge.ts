@@ -624,7 +624,15 @@ async function finishChallenge(player: Player, ch: ChallengeSession): Promise<vo
   // 会话已被清理（掉线等）→ 不再操作
   if (!challenges.has(ch.playerId)) return;
   if (res && res.response === 1) {
-    // 再跑一次：同一影子回起点待命，玩家就绪后 /challenge go（不再重选影子）
+    // 再跑一次：同一影子回起点待命，玩家就绪后 /challenge go（不再重选影子）。
+    // 校验玩家仍在挑战世界：结算框展示期间玩家可能已离开（被传走/进比赛/死亡
+    // 重生回大世界），restartChallenge 的 seatPlayerAtStart 会无条件拉回挑战世界
+    // ——此时应视为挑战已结束（对齐 goChallenge 的离场校验）
+    if (!player.isConnected() || player.getVirtualWorld() !== ch.worldId) {
+      sysMsg(player, "challenge", "你已离开挑战世界，挑战结束", "warn");
+      cleanupChallenge(ch.playerId);
+      return;
+    }
     restartChallenge(player);
   } else {
     const owner = Player.getInstance(ch.playerId);
