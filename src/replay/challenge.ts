@@ -14,7 +14,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isInRace } from "@/race/room";
-import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
+import { getOwnedVehicle, spawnVehicle, destroyPlayerVehicle } from "@/vehicles";
 import {
   setIntervalSafe,
   clearIntervalSafe,
@@ -62,6 +62,9 @@ interface ChallengeGhost {
   online: boolean;
 }
 
+/** 挑战进行状态：待命（起点停影，等 /challenge go）→ 倒计时 → 比赛中 */
+export type ChallengeState = "STANDBY" | "COUNTDOWN" | "RACING";
+
 export interface ChallengeSession {
   playerId: number;
   worldId: number;
@@ -77,7 +80,7 @@ export interface ChallengeSession {
   ghost: ChallengeGhost;
   /** 影子起始播放帧（= 录制发车帧；倒计时期间停在起始帧，GO 后从这里开始播） */
   startFrame: number;
-  cps: { x: number; y: number; z: number; size: number }[];
+  cps: { x: number; y: number; z: number; angle: number; size: number }[];
   /** 赛道圈数（多圈挑战：玩家累计跑 laps×一圈CP 个检查点才结算） */
   laps: number;
   /** 玩家已过的 CP 数（累计，0 = 未过任何 CP；跨圈用 cps[cpIndex % cps.length] 取目标） */
@@ -88,6 +91,11 @@ export interface ChallengeSession {
   shadowLapOffset: number;
   /** 上一采样帧的圈内 cpProgress（-1 = 尚未采样；回退检测用） */
   lastShadowCp: number;
+  /** 进行状态：待命/倒计时/比赛中。待命与倒计时期间不计时、不算 CP（无界待命防提前刷 CP） */
+  state: ChallengeState;
+  /** 倒计时代数：每次 /challenge go 递增。倒计时链每步比对，restart 后旧链
+   * （无法直接取消的 setTimeoutSafe 链）靠代数失配自停，防新旧双链并行双 GO */
+  countdownEpoch: number;
   startAt: number;
   /** 实际发车时间（倒计时结束 GO 时刻；结算/超时用真实时间差，不用帧数累计防漂移） */
   goAt: number;
@@ -102,6 +110,8 @@ export interface ChallengeSession {
 }
 
 const challenges = new Map<number, ChallengeSession>();
+/** 刷车在途标记（防 60fps tick 在 spawnVehicle await 期间重复触发双车） */
+const pendingRespawn = new Set<number>();
 
 export function isInChallenge(playerId: number): boolean {
   return challenges.has(playerId);
@@ -114,6 +124,7 @@ export function cleanupChallenge(playerId: number): void {
   const ch = challenges.get(playerId);
   if (!ch) return;
   challenges.delete(playerId);
+  pendingRespawn.delete(playerId);
   if (ch.timer) clearIntervalSafe(ch.timer);
   if (ch.endTimer) clearTimeoutSafe(ch.endTimer);
   try {
@@ -243,9 +254,207 @@ function ghostProgress(ch: ChallengeSession): { cp: number; dist: number } {
 /** 影子挑战冲线倒计时（对齐真人比赛 END_GRACE：第一名冲线 → 20 秒宽限） */
 const CHALLENGE_END_GRACE_MS = 20_000;
 
+/**
+ * 挑战用车兜底：玩家应始终在车上（对齐比赛"无车兜底"语义）。
+ * 仅当"不在任何车里"时才检测——正常行驶（在车里）零开销。
+ * 车完好但人被弹出/下车 → 放回；车已毁 → 刷录制车型（懒创建爱车）继续，
+ * 否则爆车后只能步行看着影子跑完。pendingRespawn 防 60fps tick 双车。
+ * isWasted（爆车连带死亡）不处理：死亡后走通用重生回大世界 → 世界检查自动
+ * 结束挑战，车由 challenge 清理统一销毁（不给尸体刷车）。
+ */
+function ensureChallengeCar(player: Player, ch: ChallengeSession): void {
+  if (player.isWasted() || player.isInAnyVehicle() || pendingRespawn.has(player.id)) return;
+  const owned = getOwnedVehicle(player.id);
+  if (owned && owned.isValid()) {
+    owned.putPlayerIn(player, 0);
+  } else {
+    if (owned) destroyPlayerVehicle(player.id); // 清理爆炸后残留的失效实体引用
+    pendingRespawn.add(player.id);
+    void spawnVehicle(player, ch.data.header.vehicleModelId, true).finally(() => {
+      pendingRespawn.delete(player.id);
+    });
+    player.sendClientMessage(COLOR_RACE, "[影子] 车辆已损毁，自动刷出挑战用车");
+  }
+}
+
+/** 玩家位置挪到起点 CP（车就位 + 放回车里；restart 与首进共用）。
+ * async：无车时刷车是异步的，调用方 await 后需自行做断线检查。 */
+async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<void> {
+  const first = ch.cps[0];
+  if (!first) return;
+  const owned = getOwnedVehicle(player.id);
+  if (owned && owned.isValid()) {
+    owned.setPos(first.x, first.y, first.z);
+    owned.setZAngle(first.angle);
+    owned.setVirtualWorld(ch.worldId);
+    owned.setHealth(1000);
+    owned.repair();
+    owned.addComponent(1010);
+    owned.putPlayerIn(player, 0);
+  } else {
+    if (owned) destroyPlayerVehicle(player.id); // 车已毁（爆炸残留失效实体）
+    // pendingRespawn 与 ensureChallengeCar 共用：刷车期间（可能跨 tick/go 的
+    // 异步窗口）不重复刷，防 restart↔go 交错双车
+    pendingRespawn.add(player.id);
+    await spawnVehicle(player, ch.data.header.vehicleModelId, true);
+    pendingRespawn.delete(player.id);
+  }
+  player.setVirtualWorld(ch.worldId);
+  player.setPos(first.x, first.y, first.z);
+  // 第一个 CP 箭头（指向第二个）
+  const nxt2 = ch.cps[1];
+  if (nxt2) {
+    RaceCheckpoint.set(player, 0, first.x, first.y, first.z, nxt2.x, nxt2.y, nxt2.z, first.size);
+  }
+}
+
+/** 起点待命：影子归位起始帧 + 渲染一次（起点车可见）+ 提示 go 命令。
+ * 首次进入与局内重开共用；待命期间不计时、不算 CP。 */
+function standbyAtStart(player: Player, ch: ChallengeSession): void {
+  ch.state = "STANDBY";
+  ch.finished = false;
+  ch.shadowFinished = false;
+  ch.cpIndex = 0;
+  ch.shadowLapOffset = 0;
+  ch.lastShadowCp = -1;
+  ch.goAt = 0;
+  // 影子重置到录制起点（车就位 + 修复），强制重渲染起始帧
+  ch.ghost.playTime = 0;
+  ch.ghost.lastEmulateAt = 0;
+  try {
+    ch.ghost.vehicle.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
+    ch.ghost.vehicle.setZAngle(0);
+    ch.ghost.vehicle.setHealth(1000);
+    ch.ghost.vehicle.repair();
+  } catch {
+    /* 已失效，清理兜底 */
+  }
+  // 直接复位影子标签（不发"重新上线"的聊天提示；renderGhost 检测不到翻转即静默）
+  const s0 = sampleAt(ch.data, 0);
+  if (s0) {
+    ch.ghost.online = s0.online;
+    try {
+      ch.ghost.label.updateText(
+        "#ffffff",
+        shadowLabelText(ch.recorderName, s0.online),
+        DEFAULT_CHARSET,
+      );
+    } catch {
+      /* 标签已失效 */
+    }
+  }
+  renderGhost(ch);
+}
+
+/** 玩家触发开始（/challenge go）：待命 → 3 秒倒计时 → GO。倒计时期间玩家可控：
+ * restart 打断回待命；死亡打断回待命（车可能已爆，restart/ensureChallengeCar 兜底）。 */
+function beginChallengeCountdown(player: Player, ch: ChallengeSession): void {
+  if (ch.state !== "STANDBY") return;
+  ch.state = "COUNTDOWN";
+  ch.countdownEpoch++; // 打断任何旧倒计时链（restart 后旧链的 pending 步骤靠代数失配自停）
+  const epoch = ch.countdownEpoch;
+  let cd = 3;
+  const countdown = (): void => {
+    // 挑战已被清理（中途 stop/掉线）→ 停倒计时（防泄漏）
+    if (!challenges.has(player.id)) return;
+    // 代数失配：期间发生过 restart / 新的 go，旧链必须自停（防双链并行双 GO）
+    if (epoch !== ch.countdownEpoch) return;
+    if (!player.isConnected()) {
+      cleanupChallenge(player.id);
+      return;
+    }
+    // 状态已被 restart 打断（回 STANDBY）→ 停倒计时链
+    if (ch.state !== "COUNTDOWN") return;
+    if (player.isWasted()) {
+      // 死亡打断倒计时 → 回待命（复活后玩家可 /challenge go 重来）
+      ch.state = "STANDBY";
+      player.sendClientMessage(COLOR_RACE, "[影子] 死亡，已回到起点待命，/challenge go 重新开始");
+      return;
+    }
+    if (cd <= 0) {
+      if (!challenges.has(player.id)) return; // 双保险
+      ch.state = "RACING";
+      ch.goAt = Date.now(); // 真实起跑时刻（结算/超时计时基准）
+      ch.lastTickAt = Date.now(); // 重置影子推进基准（待命可能等很久，防首帧跳变）
+      const go = new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
+      go.forPlayer(player);
+      player.playSound(1057);
+      ch.timer = setIntervalSafe(() => tickChallenge(ch), 16);
+      return;
+    }
+    const gt = new GameText(`~y~${cd}`, 850, 3);
+    gt.forPlayer(player);
+    player.playSound(1056);
+    cd--;
+    setTimeoutSafe(countdown, 1000);
+  };
+  countdown();
+}
+
+/** /challenge go：待命 → 倒计时（统一待命制——开始时机由玩家掌控）。
+ * 先归位起点 + 车兜底（死亡/下车/爆车后 go 前先就位到起点线），车就位后才进倒计时。 */
+export function goChallenge(player: Player): void {
+  const ch = challenges.get(player.id);
+  if (!ch) {
+    player.sendClientMessage(COLOR_ERROR, "你不在影子挑战中");
+    return;
+  }
+  if (ch.finished) return; // 结算中/已结束
+  if (ch.state === "RACING") {
+    player.sendClientMessage(COLOR_ERROR, "[影子] 挑战已在比赛中，/challenge restart 可重置");
+    return;
+  }
+  if (ch.state === "COUNTDOWN") {
+    player.sendClientMessage(COLOR_ERROR, "[影子] 已在倒计时中，请稍候");
+    return;
+  }
+  // 待命检查：玩家已不在挑战世界（死亡/传送离开）→ 直接结束
+  if (player.getVirtualWorld() !== ch.worldId) {
+    player.sendClientMessage(COLOR_RACE, "[影子] 你已离开挑战世界，挑战结束");
+    cleanupChallenge(player.id);
+    return;
+  }
+  // 归位起点 + 刷车兜底；await 期间玩家可能又 restart/死亡/离开 → .then 里再校验
+  void seatPlayerAtStart(player, ch).then(() => {
+    if (
+      challenges.has(player.id) &&
+      ch.state === "STANDBY" &&
+      player.isConnected() &&
+      !player.isWasted() &&
+      player.getVirtualWorld() === ch.worldId
+    ) {
+      beginChallengeCountdown(player, ch);
+    }
+  });
+}
+
+/** /challenge restart：任意时刻（待命/倒计时/比赛中）重置回起点待命。
+ * 影子与玩家车都归位起点、进度清零，玩家就绪后 /challenge go 重跑同一影子。 */
+export function restartChallenge(player: Player): void {
+  const ch = challenges.get(player.id);
+  if (!ch) {
+    player.sendClientMessage(COLOR_ERROR, "你不在影子挑战中");
+    return;
+  }
+  // 打断进行中的计时/倒计时（tick 与倒计时链都以 state 门控，清理定时器防泄漏）
+  if (ch.timer) clearIntervalSafe(ch.timer);
+  ch.timer = undefined;
+  if (ch.endTimer) clearTimeoutSafe(ch.endTimer);
+  ch.endTimer = undefined;
+  standbyAtStart(player, ch);
+  seatPlayerAtStart(player, ch);
+  player.setFacingAngle(ch.cps[0]?.angle ?? 0);
+  player.sendClientMessage(
+    COLOR_SUCCESS,
+    "[影子] 已回到起点待命，/challenge go 重新开始（/challenge stop 退出）",
+  );
+}
+
 /** 60fps 推进影子（玩家自己动，影子按录制时间推进） */
 function tickChallenge(ch: ChallengeSession): void {
   if (ch.finished) return;
+  // 非比赛状态（待命/倒计时）不进 tick——timer 只在 GO 后启动，restart 已清 timer
+  if (ch.state !== "RACING") return;
   // 会话已被清理（中途 stop/掉线）→ 停掉定时器，防空转泄漏
   if (!challenges.has(ch.playerId)) {
     if (ch.timer) clearIntervalSafe(ch.timer);
@@ -258,6 +467,9 @@ function tickChallenge(ch: ChallengeSession): void {
     p.sendClientMessage(COLOR_RACE, "[影子] 你已离开挑战世界，挑战结束");
     cleanupChallenge(ch.playerId);
     return;
+  }
+  if (p && p.isConnected()) {
+    ensureChallengeCar(p, ch);
   }
   // 影子播完时间 = 播放终点 (frameCount-1)×interval（对齐 playback）
   const dur = (ch.data.header.frameCount - 1) * ch.data.header.frameIntervalMs;
@@ -299,6 +511,9 @@ function tickChallenge(ch: ChallengeSession): void {
 function onChallengePlayerEnter(player: Player): void {
   const ch = challenges.get(player.id);
   if (!ch || ch.finished) return;
+  // 只有比赛中算 CP：待命/倒计时期间（无界待命、起点在 CP 检测范围内）忽略，
+  // 防止未 start 就提前刷 CP/卡起跑
+  if (ch.state !== "RACING") return;
   // 目标 CP = 当前进度（RaceCheckpoint.set 维护的箭头流指向它）；跨圈取模
   const next = ch.cps[ch.cpIndex % ch.cps.length];
   if (!next) return;
@@ -342,14 +557,14 @@ function onChallengePlayerEnter(player: Player): void {
   );
 }
 
-/** 完成结算（玩家用时 vs 影子用时 = 录制时长） */
+/** 完成结算（玩家用时 vs 影子用时 = 录制时长）；「再跑一次」重置回起点待命 */
 async function finishChallenge(player: Player, ch: ChallengeSession): Promise<void> {
   // 真实时间差（从 GO 起跑，不用帧数累计防漂移）
   const playerMs = Math.max(0, Date.now() - ch.goAt);
   const ghostMs = ch.data.header.durationMs;
   const diff = playerMs - ghostMs;
   const verdict = diff <= -500 ? "你赢了！" : diff >= 500 ? "影子赢了" : "势均力敌！";
-  await showDialog(
+  const res = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.MSGBOX,
@@ -364,15 +579,22 @@ async function finishChallenge(player: Player, ch: ChallengeSession): Promise<vo
         "",
         `{FFD700}${verdict}`,
       ].join("\n"),
-      button1: "确定",
+      button1: "再跑一次",
+      button2: "退出",
     }),
   );
-  // 结算后自动退出挑战（跑完自动结束；玩家可再选回放继续挑战）
-  const owner = Player.getInstance(ch.playerId);
-  if (owner && owner.isConnected()) {
-    owner.sendClientMessage(COLOR_SUCCESS, "影子挑战结束，可再选回放继续挑战");
+  // 会话已被清理（掉线等）→ 不再操作
+  if (!challenges.has(ch.playerId)) return;
+  if (res && res.response === 1) {
+    // 再跑一次：同一影子回起点待命，玩家就绪后 /challenge go（不再重选影子）
+    restartChallenge(player);
+  } else {
+    const owner = Player.getInstance(ch.playerId);
+    if (owner && owner.isConnected()) {
+      owner.sendClientMessage(COLOR_SUCCESS, "影子挑战结束，可再选回放继续挑战");
+    }
+    cleanupChallenge(ch.playerId);
   }
-  cleanupChallenge(ch.playerId);
 }
 
 function fmtMs(ms: number): string {
@@ -641,94 +863,42 @@ async function startChallengeCore(
     data,
     ghost,
     startFrame: 0, // 录制发车帧（倒计时期间停在起始帧，GO 后从这里播）
-    cps: cps.map((c) => ({ x: Number(c.x), y: Number(c.y), z: Number(c.z), size: Number(c.size) })),
+    cps: cps.map((c) => ({
+      x: Number(c.x),
+      y: Number(c.y),
+      z: Number(c.z),
+      angle: Number(c.angle ?? 0),
+      size: Number(c.size),
+    })),
     laps,
     cpIndex: 0,
     // 多圈：总 CP = 圈数 × 一圈 CP 数（玩家累计跑满才结算，与影子整场时长对比）
     totalCp: Math.max(1, laps) * cps.length,
     shadowLapOffset: 0,
     lastShadowCp: -1, // 首帧采样时初始化（-1 跳过首帧回退检测）
+    state: "STANDBY",
+    countdownEpoch: 0,
     startAt: Date.now(),
-    goAt: Date.now(),
+    goAt: 0, // 待命期间无发车时刻（/challenge go 倒计时结束才置）
     finished: false,
     shadowFinished: false,
     lastTickAt: Date.now(),
   };
   challenges.set(player.id, ch);
-  // 倒计时期间：影子停在起始帧（playTime==startFrame → atStart 静止帧渲染），
-  // 只渲染一次（起点车可见）；GO 后 tick 启动、playTime 才离开 startFrame 正常播
-  renderGhost(ch);
-
-  // 玩家放入（有爱车则用（模型不符也直接用——挑战自由），无则刷标准车型）
-  const owned = getOwnedVehicle(player.id);
-  if (owned && owned.isValid()) {
-    owned.setPos(ch.cps[0].x, ch.cps[0].y, ch.cps[0].z);
-    owned.setZAngle(Number(cps[0].angle ?? 0));
-    owned.setVirtualWorld(worldId);
-    owned.putPlayerIn(player, 0);
-  } else {
-    // 玩家车模型与影子一致（录制车型）——cveh 换车脚本赛道（如 562 漂移）上
-    // 用 getDefaultRaceModel（读不到 cveh 恒 411）会与影子车不同型，对比失实
-    await spawnVehicle(player, data.header.vehicleModelId, true);
-    if (!player.isConnected()) {
-      cleanupChallenge(player.id); // await 期间断线 → 清理 ghost
-      return false;
-    }
-    const v = getOwnedVehicle(player.id);
-    if (v && v.isValid()) {
-      v.setPos(ch.cps[0].x, ch.cps[0].y, ch.cps[0].z);
-      v.setZAngle(Number(cps[0].angle ?? 0));
-      v.setVirtualWorld(worldId);
-      v.putPlayerIn(player, 0);
-    }
+  // 统一待命制：影子停在起始帧只渲染一次（起点车可见），玩家就位后由
+  // /challenge go 触发倒计时 → GO（首次进入与局内重开同一套交互）
+  standbyAtStart(player, ch);
+  await seatPlayerAtStart(player, ch);
+  if (!player.isConnected()) {
+    cleanupChallenge(player.id); // await 期间断线 → 清理 ghost
+    return false;
   }
-  player.setVirtualWorld(worldId);
-  player.setPos(ch.cps[0].x, ch.cps[0].y, ch.cps[0].z);
-  // 第一个 CP 箭头（指向第二个）
-  const nxt2 = ch.cps[1];
-  RaceCheckpoint.set(
-    player,
-    0,
-    ch.cps[0].x,
-    ch.cps[0].y,
-    ch.cps[0].z,
-    nxt2.x,
-    nxt2.y,
-    nxt2.z,
-    ch.cps[0].size,
-  );
+  player.setFacingAngle(ch.cps[0]?.angle ?? 0);
   player.sendClientMessage(
     COLOR_SUCCESS,
-    `影子挑战开始！目标 ${replay.raceName ?? "该赛道"}，跑完自动结算（中途 /challenge stop 可退出）`,
+    `影子挑战开始！目标 ${replay.raceName ?? "该赛道"}，准备好了输入 /challenge go 起跑` +
+      `（/challenge restart 重置 · /challenge stop 退出）`,
   );
-
-  // 发车倒计时 3 秒（对齐比赛：~y~N + 音效 1056；倒计时期间 ghost 停在起点、不计玩家用时）。
-  // 倒计时结束才启动 ghost 推进定时器（登记制）。
-  // 挑战自动结束路径：跑完（过终点）结算 / 掉线清理 / 超时（影子播完 + 宽限未完成）。
-  let cd = 3;
-  const countdown = (): void => {
-    // 挑战已被清理（中途 stop/掉线）→ 停倒计时，不再启动 ghost 定时器（防泄漏）
-    if (!challenges.has(player.id)) return;
-    if (!player.isConnected()) {
-      cleanupChallenge(player.id);
-      return;
-    }
-    if (cd <= 0) {
-      if (!challenges.has(player.id)) return; // 双保险
-      ch.goAt = Date.now(); // 真实起跑时刻（结算/超时计时基准）
-      const go = new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
-      go.forPlayer(player);
-      player.playSound(1057);
-      ch.timer = setIntervalSafe(() => tickChallenge(ch), 16);
-      return;
-    }
-    const gt = new GameText(`~y~${cd}`, 850, 3);
-    gt.forPlayer(player);
-    player.playSound(1056);
-    cd--;
-    setTimeoutSafe(countdown, 1000);
-  };
-  countdown();
   return true;
 }
 

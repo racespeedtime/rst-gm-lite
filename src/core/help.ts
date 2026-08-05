@@ -27,7 +27,7 @@ const HELP_LINES = [
   "{FFFFFF}/s /l — 保存当前位置 / 传送回去",
   "{FFFFFF}/rec — 自由录制回放（/rec start 开始 · /rec stop 停止 · /rec list 我的录制）",
   "{FFFFFF}/rp — 回放控制（/rp play · pause · speed · seek · watch · stop）",
-  "{FFFFFF}/challenge — 影子挑战（赛道详情进入 · /challenge stop 中途退出）",
+  "{FFFFFF}/challenge — 影子挑战（赛道详情进入 · /challenge go 起跑 · restart 重开 · stop 退出）",
   "{FFFFFF}/pm 玩家ID 消息 — 私聊（比赛中可用）",
   "{FFFFFF}/house list — 房屋列表 · /house goto 名称 传送",
   "{FFFFFF}/名字 — 系统传送点（如 /sf）· //名字 — 用户传送点（/vmake 创建）",

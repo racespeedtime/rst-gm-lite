@@ -5,7 +5,7 @@ import { isInRace } from "@/race/room";
 import { showDialog } from "@/utils/dialog";
 import { startRecording, stopRecording, isRecording } from "./recorder";
 import { controlReplay, getReplaySession, REPLAY_SPEEDS } from "./playback";
-import { isInChallenge, cleanupChallenge } from "./challenge";
+import { isInChallenge, cleanupChallenge, goChallenge, restartChallenge } from "./challenge";
 import { openReplayMenu } from "./menu";
 import { COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
 
@@ -136,6 +136,16 @@ export function initReplayCommands(): void {
   PlayerEvent.onCommandText("challenge", ({ player, subcommand, next }) => {
     if (!guard(player, next)) return;
     const arg = subcommand[0] ?? "help";
+    if (arg === "go") {
+      // 统一待命制：待命/重开后就绪后由玩家自己触发开始（倒计时 3 秒）
+      goChallenge(player);
+      return next();
+    }
+    if (arg === "restart") {
+      // 局内重开：任意时刻重置回起点待命（同影子再跑，不重选）
+      restartChallenge(player);
+      return next();
+    }
     if (arg === "stop") {
       if (!isInChallenge(player.id)) {
         player.sendClientMessage(COLOR_ERROR, "你不在影子挑战中");
@@ -145,7 +155,10 @@ export function initReplayCommands(): void {
       player.sendClientMessage(COLOR_SUCCESS, "影子挑战已退出");
       return next();
     }
-    player.sendClientMessage(COLOR_INFO, "用法: /challenge stop 退出影子挑战（入口在赛道详情）");
+    player.sendClientMessage(
+      COLOR_INFO,
+      "用法: /challenge go 起跑 · /challenge restart 重开 · /challenge stop 退出（入口在赛道详情）",
+    );
     return next();
   });
 }
