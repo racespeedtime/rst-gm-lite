@@ -121,12 +121,13 @@ RST-GM-Lite 是 `open.mp + samp-node + @infernus/core` 纯 TypeScript 实现的�
 | 动作 | `/anim <1-21>`（21 号映射对齐原版 Action_Play）+ `/anim 0\|off\|无参` · `/fxq` `/jetpack` 喷气背包 · `/jls` 降落伞 · `/stuck` `/xiufu` 脱离卡死 · `/djs` `/count` `/daojishi` 范围倒计时（20 单位同世界） |
 | 赛车 | `/r`（无参弹列表）· `/r s [赛道名]` · `/r j` · `/r l\|leave` · `/r info` · `/r page` · `/r create` · `/r edit`（赛道名进编辑 / cp 放 CP / cpsize [值] 设置 CP 尺寸 / trg 脚本说明 / q 退出 / d 编辑菜单） |
 | 爱车 | `/cars` `/ac`（list / wode / lock / chepai / kick / color / 3d / buyobj 车辆装扮）· `/wdac`（管理菜单）· `/llac`（列表）· `/aczb` 爱车装扮 |
+| 我的设置 | `/sz` `/wdsz`（我的设置聚合菜单：装扮 / 爱车 / 称号前缀后缀 / 个性化 / 信息 / 登录记录 / 改密 / 快捷操作，对齐原版 PlayerInfoDialog） |
 | 刷车 | `/c [车辆ID]` · `/c list` · `/c wode` · `/c lock` · `/cc` `/c color` · `/c chepai` · `/c kick` · `/c 3d` |
 | 车辆杂项 | `/f` 翻正 · `/fix` 修车 · `/kill`（比赛内重生）· `/dcar` `/autofix` 载具无敌 · `/hys` 变色龙 · `/infobj`（警灯尾翼引导 → 车辆装扮预设） |
 
 **部分兼容**（不报错，给引导提示）：`/cars buy`、`/cars create`——gm-lite 无"购买/造车"概念（刷车即自动登记爱车），提示引导。
 
-**未做命令入口**（有面板等价功能或刻意不做）：`/wudi`（无敌，在 `个性化 → 人物`）、`/sz` `/wdsz`（我的设置，在面板 `我的`）——在面板中有等价功能。
+**未做命令入口**（有面板等价功能或刻意不做）：`/wudi`（无敌，在 `个性化 → 人物`）——在面板中有等价功能。
 
 ## 起步
 
