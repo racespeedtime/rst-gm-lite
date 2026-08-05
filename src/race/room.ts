@@ -1073,6 +1073,29 @@ function destroyRaceTds(room: RaceRoom): void {
   room.raceTextTds.clear();
 }
 
+/** 特殊音效脚本函数（过此 CP 有显著动作）：cveh 换车 / speed* 变速 / angle 转向 /
+ *  vgoto 传送 / fix 修复 / damage 破坏——播特殊音效 1133 提示"此 CP 有特殊效果"。
+ *  time/weather/msg 属环境/文案类（无车辆动作），保持普通 CP 音效 1056。
+ *  skipCveh 时忽略 cveh（第一 CP 的 cveh 是赛道标准车，进赛道已换好，不算显著动作）。 */
+const SIGNIFICANT_SCRIPT_FNS = new Set([
+  "cveh",
+  "speed",
+  "speedex",
+  "zspeed",
+  "angle",
+  "vgoto",
+  "fix",
+  "damage",
+]);
+
+function hasSignificantScript(scripts: string[], skipCveh: boolean): boolean {
+  for (const script of scripts) {
+    const fn = script.trim().split(/\s+/)[0];
+    if (SIGNIFICANT_SCRIPT_FNS.has(fn) && !(skipCveh && fn === "cveh")) return true;
+  }
+  return false;
+}
+
 /** 玩家到达 CP（RaceCpEvent 触发） */
 async function onPlayerReachCp(player: Player): Promise<void> {
   const pr = playerRaces.get(player.id);
@@ -1130,9 +1153,12 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   // 其余 CP 的 cveh（如 Car 赛道 CP11 的 562 中途换车）照常执行。
   // 显示下一个 CP 与音效放在脚本循环之前——spawnpos 返回 false 会终止脚本链，
   // 若放在循环后，CP 箭头/红圈会残留错位一整段（cpIndex 已推进但视觉停在旧 CP）。
-  showNextCheckpoint(player, room.cps, pr.cpIndex);
-  player.playSound(1056);
   const isFirstCp = nextCp.index === room.cps[0].index;
+  showNextCheckpoint(player, room.cps, pr.cpIndex);
+  // 有显著动作脚本的 CP（换车/变速/转向/传送/修车/破坏）播特殊音效 1133，提示
+  // "这个 CP 有特殊效果"；普通 CP（含仅 time/weather/msg）用 1056。
+  // 第一 CP 的 cveh 是赛道标准车（skipCveh 跳过、进赛道已换好）——不算显著动作。
+  player.playSound(hasSignificantScript(nextCp.scripts, isFirstCp) ? 1133 : 1056);
   const scriptCtx: CpScriptContext = {
     raceId: room.raceId,
     cpid: nextCp.index,
