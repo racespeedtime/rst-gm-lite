@@ -19,6 +19,7 @@ import {
   startObserveVehicle,
   stopObserve,
   isObserving,
+  getObserveTarget,
   registerObserveCandidate,
   unregisterObserveCandidate,
 } from "@/core/observe";
@@ -423,6 +424,7 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
   ghost.model = model;
   try {
     const pos = ghost.vehicle.getPos();
+    const oldVehId = ghost.vehicle.id; // 换车前先记录旧车 id（换后观战重挂匹配用）
     // 换车型：销毁旧车、建新车、NPC 立即上车（位置延续）
     unregisterObserveCandidate(ghost.vehicle.id, "vehicle"); // 旧车移出观战切换候选
     ghost.vehicle.destroy();
@@ -444,6 +446,17 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
     ghost.npc.putInVehicle(v, 0);
     ghost.vehicle = v;
     registerObserveCandidate(v.id, "vehicle"); // 新车登记进观战切换候选（否则该 ghost 无法被切到）
+    // 观战者重挂：旧车已销毁，其 spectate 目标随之失效（onStreamOut 会弹"对象已
+    // 无法跟踪"打断观战）——把仍观战旧车的观察者重挂到新车（startObserveVehicle
+    // 内部保留 originPlayerId，下车后仍能重跟踪）
+    for (const wid of session.watchers) {
+      const w = Player.getInstance(wid);
+      if (!w || !w.isConnected() || !isObserving(wid)) continue;
+      const st = getObserveTarget(wid);
+      if (st?.kind === "vehicle" && st.targetId === oldVehId) {
+        startObserveVehicle(w, v, st.originPlayerId);
+      }
+    }
   } catch (e) {
     logger.warn(`[replay] 换车型失败 ${oldModel} -> ${model}`, e);
     ghost.model = oldModel;

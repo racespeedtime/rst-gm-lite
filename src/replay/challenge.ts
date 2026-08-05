@@ -129,6 +129,8 @@ export function cleanupChallenge(playerId: number): void {
   const ch = challenges.get(playerId);
   if (!ch) return;
   challenges.delete(playerId);
+  ch.countdownEpoch++; // 代数兜底：清理后任何在途续体/定时链判"代数失配"自停，
+  // 防 stop→重开（worldId 复用）后旧对象残留的 async 续体误对新会话起倒计时
   pendingRespawn.delete(playerId);
   if (ch.timer) clearIntervalSafe(ch.timer);
   if (ch.endTimer) clearTimeoutSafe(ch.endTimer);
@@ -390,8 +392,10 @@ function beginChallengeCountdown(player: Player, ch: ChallengeSession): void {
   const epoch = ch.countdownEpoch;
   let cd = 3;
   const countdown = (): void => {
-    // 挑战已被清理（中途 stop/掉线）→ 停倒计时（防泄漏）
-    if (!challenges.has(player.id)) return;
+    // 挑战已被清理（中途 stop/掉线）或会话对象已更换（stop→重开，worldId 复用）→
+    // 停倒计时（防泄漏）。用身份判定而非 challenges.has：has 只能证明"当前存在某个
+    // 会话"，不能证明还是本会话——旧对象的续体对上新会话会误起倒计时/双 GO
+    if (challenges.get(player.id) !== ch) return;
     // 代数失配：期间发生过 restart / 新的 go，旧链必须自停（防双链并行双 GO）
     if (epoch !== ch.countdownEpoch) return;
     if (!player.isConnected()) {
@@ -407,7 +411,7 @@ function beginChallengeCountdown(player: Player, ch: ChallengeSession): void {
       return;
     }
     if (cd <= 0) {
-      if (!challenges.has(player.id)) return; // 双保险
+      if (challenges.get(player.id) !== ch) return; // 双保险（身份判定）
       ch.state = "RACING";
       ch.goAt = Date.now(); // 真实起跑时刻（结算/超时计时基准）
       ch.lastTickAt = Date.now(); // 重置影子推进基准（待命可能等很久，防首帧跳变）
@@ -459,7 +463,7 @@ export function goChallenge(player: Player): void {
   const epoch = ch.countdownEpoch;
   void seatPlayerAtStart(player, ch).then(() => {
     if (
-      challenges.has(player.id) &&
+      challenges.get(player.id) === ch &&
       epoch === ch.countdownEpoch &&
       ch.state === "STANDBY" &&
       player.isConnected() &&
@@ -503,8 +507,8 @@ function tickChallenge(ch: ChallengeSession): void {
   if (ch.finished) return;
   // 非比赛状态（待命/倒计时）不进 tick——timer 只在 GO 后启动，restart 已清 timer
   if (ch.state !== "RACING") return;
-  // 会话已被清理（中途 stop/掉线）→ 停掉定时器，防空转泄漏
-  if (!challenges.has(ch.playerId)) {
+  // 会话已被清理或对象已更换（stop→重开）→ 停掉定时器，防空转泄漏
+  if (challenges.get(ch.playerId) !== ch) {
     if (ch.timer) clearIntervalSafe(ch.timer);
     return;
   }
@@ -539,7 +543,7 @@ function tickChallenge(ch: ChallengeSession): void {
       sysMsg(p, "challenge", "影子已完赛，20 秒后挑战结束（倒计时内完成可继续）", "info");
     }
     ch.endTimer = setTimeoutSafe(() => {
-      if (ch.finished || !challenges.has(ch.playerId)) return;
+      if (ch.finished || challenges.get(ch.playerId) !== ch) return;
       ch.finished = true;
       const pp = Player.getInstance(ch.playerId);
       if (pp && pp.isConnected()) {
@@ -633,8 +637,8 @@ async function finishChallenge(player: Player, ch: ChallengeSession): Promise<vo
       button2: "退出",
     }),
   );
-  // 会话已被清理（掉线等）→ 不再操作
-  if (!challenges.has(ch.playerId)) return;
+  // 会话已被清理或对象已更换（掉线/stop→重开）→ 不再操作
+  if (challenges.get(ch.playerId) !== ch) return;
   if (res && res.response === 1) {
     // 再跑一次：同一影子回起点待命，玩家就绪后 /challenge go（不再重选影子）。
     // 校验玩家仍在挑战世界：结算框展示期间玩家可能已离开（被传走/进比赛/死亡

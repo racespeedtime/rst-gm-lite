@@ -162,6 +162,9 @@ interface RaceRoom {
   /** 挂机检测：playerId -> 上次采样位置 + 已静止累计毫秒（仅 RACING 检测；
    *  对齐原版 AFKTimes 每秒位移 <0.001 累计 45 秒移出赛道） */
   afk: Map<number, { x: number; y: number; z: number; idleMs: number }>;
+  /** 最近一次 tickRooms 采样的成员位置（200ms 更新；掉线快照兜底——onDisconnect 时
+   *  Player.getInstance 可能已失效取不到坐标，用最近采样位置恢复重连定位） */
+  lastPositions: Map<number, { x: number; y: number; z: number }>;
   countdownTimer?: NodeJS.Timeout;
   endTimer?: NodeJS.Timeout;
   /** 每个成员的比赛信息 TextDraw（playerId -> 4 行 TD，开赛时创建） */
@@ -195,6 +198,9 @@ interface RaceRoom {
       x: number;
       y: number;
       z: number;
+      /** 掉线瞬间原战局房主（getPlayerSession 快照）：worldId 会被解散战局回收
+       *  复用，重连时仅按 worldId 匹配可能塞进无关的新战局——房主一致才认 */
+      sessionOwnerId?: string | null;
     }
   >;
   /** 本场比赛参与过录制的成员（playerId → userId 快照：房间销毁且无人完成时
@@ -334,9 +340,13 @@ export function cleanupRacePlayer(playerId: number): void {
           Math.max(RECONNECT_MIN_MS, estMs * RECONNECT_RATIO),
         );
         room.reconnectUntil.set(uid, Date.now() + window);
-        // 快照含"距下一 CP 距离"：掉线玩家按掉线瞬间位置/CP 继续参与排名
+        // 快照含"距下一 CP 距离"：掉线玩家按掉线瞬间位置/CP 继续参与排名。
+        // onDisconnect 时 getPos 可能已失效（返回 undefined）→ 退化为 0,0,0，重连
+        // 后玩家会出生在默认出生点、与"继续第 N 圈"脱节——用 tickRooms 最近一次
+        // 采样位置兜底（200ms 内的最后已知位置，比 0,0,0 精确得多）
+        const discPlayer = Player.getInstance(playerId);
+        const dpos = discPlayer?.getPos() ?? room.lastPositions.get(playerId);
         const nextCp = room.cps[pr.cpIndex + 1];
-        const dpos = Player.getInstance(playerId)?.getPos();
         let dist = 0;
         if (nextCp && dpos) {
           dist = Math.hypot(dpos.x - nextCp.x, dpos.y - nextCp.y, dpos.z - nextCp.z);
@@ -348,11 +358,15 @@ export function cleanupRacePlayer(playerId: number): void {
           startTime: pr.startTime,
           prevWorld: pr.prevWorld,
           dist,
-          name: Player.getInstance(playerId)?.getName().name ?? `玩家${playerId}`,
+          name: discPlayer?.getName().name ?? `玩家${playerId}`,
           // 掉线瞬间位置：重连是全新连接，恢复时 setPos 回此处（防出现在默认出生点）
           x: dpos?.x ?? 0,
           y: dpos?.y ?? 0,
           z: dpos?.z ?? 0,
+          // 掉线瞬间原战局房主快照（worldId 复用校验用；auth 断线后仍可用）
+          sessionOwnerId: discPlayer
+            ? sessionManager.getPlayerSession(discPlayer).ownerUserId
+            : undefined,
         });
         room.members.delete(playerId);
         playerRaces.delete(playerId);
@@ -543,6 +557,7 @@ export async function createRaceRoom(
     })),
     results: [],
     afk: new Map(),
+    lastPositions: new Map(),
     raceTextTds: new Map(),
     bestTimes: new Map(),
     resultIndex: new Map(),
@@ -1651,6 +1666,8 @@ function tickRooms(): void {
         continue;
       }
       const pos = m.getPos();
+      // 缓存最近采样位置：掉线快照兜底（onDisconnect 取不到坐标时用——见 cleanupRacePlayer）
+      room.lastPositions.set(m.id, { x: pos.x, y: pos.y, z: pos.z });
       const st = room.afk.get(m.id);
       if (!st) {
         room.afk.set(m.id, { x: pos.x, y: pos.y, z: pos.z, idleMs: 0 });
@@ -2553,10 +2570,14 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     }
     room.members.set(player.id, player);
     room.raceMembersLast.set(player.id, auth.userId); // 重新登记本场录制成员（userId 快照供离线作废）
-    // 恢复战局归属：prevWorld 对应战局若仍存在则加回，否则回公共大世界并修正
-    // prevWorld=0（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
+    // 恢复战局归属：prevWorld 对应战局若仍存在（且房主与掉线时一致——worldId 会被
+    // 解散战局回收复用，仅按 worldId 匹配可能塞进无关的新战局）则加回，否则回公共
+    // 大世界并修正 prevWorld=0（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
     const prevWorld = slot?.prevWorld ?? player.getVirtualWorld();
-    const joinedSession = sessionManager.rejoinPlayerSessionByWorld(player, prevWorld);
+    const joinedSession =
+      slot?.sessionOwnerId != null
+        ? sessionManager.rejoinPlayerSessionByWorld(player, prevWorld, slot.sessionOwnerId)
+        : sessionManager.rejoinPlayerSessionByWorld(player, prevWorld);
     playerRaces.set(player.id, {
       roomId: room.id,
       cpIndex: slot?.cpIndex ?? -1,

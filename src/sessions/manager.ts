@@ -294,12 +294,23 @@ export class SessionManager {
    * 掉线时玩家已被移出战局（战局可能已解散）；重连后把玩家登记回
    * prevWorld 对应的战局（若仍存在），否则回公共大世界。
    * 返回是否加入了私人战局（供调用方决定 prevWorld 是否有效）。
+   * ownerUserId：掉线瞬间原战局的房主快照——worldId 会被解散战局回收复用，
+   * 仅按 worldId 匹配会把重连玩家塞进无关的新战局（凭空成为陌生私人战局成员）；
+   * 快照存在且与当前战局房主不符 → 视为原战局已解散，回公共大世界。
    */
-  rejoinPlayerSessionByWorld(player: Player, worldId: number): boolean {
+  rejoinPlayerSessionByWorld(
+    player: Player,
+    worldId: number,
+    ownerUserId?: string | null,
+  ): boolean {
     this.publicWorld.members.delete(player.id);
     this.playerSessions.delete(player.id);
     const session = [...this.privateSessions.values()].find((s) => s.worldId === worldId);
-    if (session && !session.isFull) {
+    if (
+      session &&
+      !session.isFull &&
+      (ownerUserId == null || session.ownerUserId === ownerUserId)
+    ) {
       session.members.set(player.id, player);
       this.playerSessions.set(player.id, session.id);
       return true;

@@ -383,7 +383,11 @@ export async function stopRecording(
   // （补帧用 getRotationQuat 的 {w,x,y,z} 成员序，与 RakNet 拦截帧的
   // quaternion [w,x,y,z] 统一写帧为 qx=x/qy=y/qz=z/qw=w，两路数据同约定，
   // 不会错位。）
-  if (player && player.isConnected()) {
+  // 身份校验：落盘路径（断线重连窗口到期/房间销毁等）在玩家断线后执行，playerId
+  // 可能已被新连接复用——此时 getInstance 返回新玩家，补帧会把新玩家的车写进旧
+  // 录制（尾帧坐标/车型错乱）。auth 为空（已断线）或 userId 对不上（被复用）→ 跳过。
+  const auth = getAuthState(playerId);
+  if (player && player.isConnected() && auth && auth.userId === session.userId) {
     const f = captureVehicleFrame(player, session);
     if (f) sample(session, f);
   }

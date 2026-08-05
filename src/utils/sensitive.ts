@@ -98,6 +98,7 @@ function loadWords(): string[] {
     return [];
   }
   return readFileSync(file, "utf8")
+    .replace(/^\uFEFF/, "") // 去 UTF-8 BOM（Windows 编辑器保存的首行会带，trim 不去除）
     .split("\n")
     .map((w) => w.trim())
     .filter(Boolean);
