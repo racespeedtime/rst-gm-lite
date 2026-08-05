@@ -1687,22 +1687,64 @@ function getSafeRespawnZ(cp: { x: number; y: number; z: number }): number {
   return ground > MIN_Z ? Math.max(cp.z, ground) : cp.z;
 }
 
+/**
+ * 从 CP 脚本数组解析 spawnpos 重生点（原版 ReSpawnRaceVehicle 重生优先用 spawnpos）。
+ * spawnpos x y z a —— 过 CP 时它只终止脚本链（防瞬移，见 execCpScript），
+ * 重生时才单独解析坐标：原版在 ReSpawnRaceVehicle 里扫描脚本数组、有 spawnpos 即
+ * 调用（RaceCpScript_func_spawnpos：人车一起挪到指定坐标 + 朝向），没有才用 CP 坐标。
+ */
+function parseSpawnPos(
+  scripts: string[],
+): { x: number; y: number; z: number; angle: number } | null {
+  for (const script of scripts) {
+    const [fn, sx, sy, sz, sa] = script.trim().split(/\s+/);
+    if (fn === "spawnpos") {
+      const x = Number(sx);
+      const y = Number(sy);
+      const z = Number(sz);
+      const angle = Number(sa);
+      if ([x, y, z, angle].every(Number.isFinite)) {
+        return { x, y, z, angle };
+      }
+      return null; // 坐标残缺：作废该 spawnpos，回退 CP 坐标
+    }
+  }
+  return null;
+}
+
+/** 重生点计算：优先该 CP 的 spawnpos 坐标（原版语义），否则 CP 原始坐标 + colandreas 抬升。
+ * spawnpos 是作者精确放置的重生点，直接信其坐标；z 异常（数据错误/水下）时用
+ * colandreas 抬升到实际地面（与 getSafeRespawnZ 同口径）。 */
+function getRespawnPoint(cp: RaceRoom["cps"][number]): {
+  x: number;
+  y: number;
+  z: number;
+  angle: number;
+} {
+  const sp = parseSpawnPos(cp.scripts);
+  if (sp) {
+    const ground = getSafeGroundZ(sp.x, sp.y, sp.z);
+    const z = ground > MIN_Z ? Math.max(sp.z, ground) : sp.z;
+    return { x: sp.x, y: sp.y, z, angle: sp.angle };
+  }
+  return { x: cp.x, y: cp.y, z: getSafeRespawnZ(cp), angle: cp.angle };
+}
+
 /** 重生回上一 CP（死亡场景：setSpawnInfo + spawn 复活） */
 function respawnPlayerToCp(player: Player, pr: PlayerRace, room: RaceRoom): void {
   const prevIdx = Math.max(0, pr.cpIndex);
   const prev = room.cps[prevIdx];
   if (!prev) return;
-  const z = getSafeRespawnZ(prev);
-  player.setSpawnInfo(0, player.getSkin(), prev.x, prev.y, z, prev.angle, 0, 0, 0, 0, 0, 0);
+  const pt = getRespawnPoint(prev);
+  player.setSpawnInfo(0, player.getSkin(), pt.x, pt.y, pt.z, pt.angle, 0, 0, 0, 0, 0, 0);
   player.spawn();
-  // 对齐原版 ReSpawnRaceVehicle（死亡重生 → 把车挪到 CP + 修复 + 加氮气 + 放回车里）：
-  // 车完好 → 挪到 CP 并放回；车已毁（爆炸，getOwnedVehicle 失效）→ 刷默认比赛车兜底
-  //（懒创建爱车，与 beginRace/reconnect 的无车兜底一致）。否则玩家死亡重生后只能
-  // 步行跑完（原版重生的核心就是"人车一起回 CP"）。
+  // 对齐原版 ReSpawnRaceVehicle（死亡重生 → 把车挪到重生点 + 修复 + 加氮气 + 放回车里）：
+  // 车完好 → 挪到重生点（spawnpos 坐标或 CP 坐标）并放回；车已毁（爆炸，getOwnedVehicle
+  // 失效）→ 刷默认比赛车兜底（懒创建爱车，与 beginRace/reconnect 的无车兜底一致）。
   const owned = getOwnedVehicle(player.id);
   if (owned && owned.isValid()) {
-    owned.setPos(prev.x, prev.y, z);
-    owned.setZAngle(prev.angle);
+    owned.setPos(pt.x, pt.y, pt.z);
+    owned.setZAngle(pt.angle);
     owned.setHealth(1000);
     owned.repair();
     owned.addComponent(1010);
@@ -1721,14 +1763,16 @@ export function respawnToLastCp(player: Player, pr: PlayerRace, room: RaceRoom):
   const prevIdx = Math.max(0, pr.cpIndex);
   const prev = room.cps[prevIdx];
   if (!prev) return;
-  const z = getSafeRespawnZ(prev);
+  const pt = getRespawnPoint(prev);
   if (player.isInAnyVehicle()) {
     const veh = player.getVehicle()!;
-    veh.setPos(prev.x, prev.y, z);
+    veh.setPos(pt.x, pt.y, pt.z);
+    veh.setZAngle(pt.angle);
     veh.setHealth(1000);
     veh.repair();
   } else {
-    player.setPos(prev.x, prev.y, z);
+    player.setPos(pt.x, pt.y, pt.z);
+    player.setFacingAngle(pt.angle);
     player.setHealth(100);
   }
   // 重新显示当前 CP（红箭头指向下一个）
