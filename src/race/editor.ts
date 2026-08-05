@@ -466,7 +466,7 @@ async function insertCp(
         y: pos.y,
         z: pos.z,
         angle: player.getFacingAngle().angle,
-        size: 8,
+        size: state.cpSize, // 与 addCp 同口径：用 /r edit cpsize 设置的默认尺寸
       },
     });
     await recalcRaceLength(raceId, tx);

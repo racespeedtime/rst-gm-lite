@@ -480,10 +480,14 @@ export function initVehicleCommands(): void {
     if (!setting) return next();
     const nextOn = !setting.vehicleColorCycle;
     await updateSetting(player, { vehicleColorCycle: nextOn });
-    // 开启瞬间立即换一次色（对齐原版开启即有视觉效果，不等下一秒 tick）
+    // 开启瞬间立即换一次色（对齐原版开启即有视觉效果，不等下一秒 tick）。
+    // 只换本人的爱车实体——玩家坐在别人车里（乘客）开 /hys 不能改别人车的颜色
+    //（vehicleTick 的变色龙每 tick 也有 isOwnVehicle 守卫，此处同口径）
     if (nextOn) {
-      const veh = player.getVehicle();
-      if (veh) veh.changeColors(Math.floor(Math.random() * 256), Math.floor(Math.random() * 256));
+      const veh = getOwnedVehicle(player.id);
+      if (veh && veh.isValid()) {
+        veh.changeColors(Math.floor(Math.random() * 256), Math.floor(Math.random() * 256));
+      }
     }
     notifySaved(player, `变色龙已${nextOn ? "开启" : "关闭"}（每秒随机换色）`);
     return next();

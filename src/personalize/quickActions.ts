@@ -32,8 +32,6 @@ const DJS_COUNT = 5;
 const DJS_COOLDOWN_MS = 5000;
 /** playerId -> 下一轮可发起时刻 */
 const djsCooldownUntil = new Map<number, number>();
-/** playerId -> 本轮倒计时开始时刻（每轮引用基点，冷却内不可并发，天然无重叠） */
-const djsCooldownAt = new Map<number, number>();
 
 /** 执行一轮 20 单位范围倒计时（对齐原版 CountDown：数字 + 音效 1056，GO + 音效 1057）。
  * 计时器登记制（setTimeoutSafe 链）；发起人掉线即停（不残留刷屏）。 */
@@ -56,7 +54,7 @@ function runDjsCountdown(host: Player): void {
         go.forPlayer(p);
         p.playSound(1057);
       }
-      djsCooldownAt.delete(host.id); // 本轮结束，允许下一轮（冷却仍在）
+      djsCooldownUntil.delete(host.id); // 本轮结束，允许下一轮（冷却独立计时）
       return;
     }
     const gt = new GameText(`~w~${count}`, 3000, 3);
@@ -420,7 +418,6 @@ export function initQuickCommands(): void {
       return next();
     }
     djsCooldownUntil.set(player.id, now + DJS_COOLDOWN_MS);
-    djsCooldownAt.set(player.id, now); // 每轮引用基点（restart 无并发：冷却内不可再发起）
     void runDjsCountdown(player);
     return next();
   });
@@ -454,6 +451,12 @@ export function initQuickCommands(): void {
     flipVehicle(vehicle, 2);
     // 同上：只翻正不修车，文案如实
     notifySaved(player, "车辆已翻正");
+    return next();
+  });
+
+  // 断线清理 /djs 冷却记录（playerId 键，防复用后被误拒；对齐其他模块的 onDisconnect 清理）
+  PlayerEvent.onDisconnect(({ player, next }) => {
+    djsCooldownUntil.delete(player.id);
     return next();
   });
 }

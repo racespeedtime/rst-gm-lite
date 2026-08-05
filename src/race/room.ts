@@ -1650,6 +1650,8 @@ export function initRaceSystem(): void {
 
   // 到达检查点事件
   RaceCpEvent.onPlayerEnter(({ player, next }) => {
+    // 统一排除 NPC（对齐项目约定：所有事件回调排除 NPC）
+    if (player.isNpc()) return next();
     if (isInRace(player.id) && !isEditing(player.id)) {
       void onPlayerReachCp(player);
     }
@@ -1865,11 +1867,14 @@ function respawnPlayerToCp(
   rollback?: number,
 ): void {
   const target = computeTargetCp(pr, room, rollback);
-  const pt = getRespawnPoint(target.prev!);
+  const prev = target.prev;
+  if (!prev) return;
+  const pt = getRespawnPoint(prev);
   player.setSpawnInfo(0, player.getSkin(), pt.x, pt.y, pt.z, pt.angle, 0, 0, 0, 0, 0, 0);
   player.spawn();
   respawnToCpCore(player, room, target);
   applyRollbackState(player, pr, target);
+  writeBackRollbackProgress(player, pr, room, target, rollback);
   player.sendClientMessage(
     COLOR_RACE,
     `[赛车] 已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`,
@@ -1887,10 +1892,34 @@ export function respawnToLastCp(
   if (!target.prev) return;
   respawnToCpCore(player, room, target);
   applyRollbackState(player, pr, target);
+  writeBackRollbackProgress(player, pr, room, target, rollback);
   player.sendClientMessage(
     COLOR_RACE,
     `[赛车] 已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`,
   );
+}
+
+/** 回退（rollback>0）时把玩家进度回写到目标 CP：否则 onPlayerReachCp 仍按旧
+ * cpIndex+1 取目标，红圈在回退目标、事件却期待更后面的 CP——脚本在错误位置触发
+ * 且目标 CP 永远重跑不到（cveh 换车类赛道回退后车型/时间错乱）。
+ * 普通重生（rollback=0）进度本就一致（playerRaces 与位置同步推进），不回写——
+ * 跨圈瞬间 cpIndex=-1 时回写会错误地把 lap 打回上一圈。 */
+function writeBackRollbackProgress(
+  player: Player,
+  pr: PlayerRace,
+  room: RaceRoom,
+  target: ReturnType<typeof computeTargetCp>,
+  rollback?: number,
+): void {
+  if (!rollback) return;
+  pr.lap = Math.floor(target.cumIdx / room.cps.length);
+  pr.cpIndex = target.cumIdx % room.cps.length;
+  // 同步 CP 进度 TD（圈内进度 = 目标累计序号 % 一圈CP数 + 1）
+  const cpDone = pr.cpIndex + 1;
+  const raceTds = room.raceTextTds.get(player.id);
+  if (raceTds) {
+    raceTds.cp.setString(`C  P / ~p~${cpDone}~w~/~y~${room.cps.length}`);
+  }
 }
 
 /** 多回退一格重生（面板「回退到更早检查点」）：上一 CP 可能是空中/无落点（无 spawnpos、

@@ -277,6 +277,19 @@ function ensureChallengeCar(player: Player, ch: ChallengeSession): void {
   }
 }
 
+/** 重设玩家检查点：红圈在起点 CP（cps[0]）、箭头指向第二个（对齐比赛 joinRoom 的
+ * 起点 CP 箭头）。首进/restart 待命时摆一次；GO 时**必须再摆一次**——open.mp 检查点是
+ * "进入即消耗"：待命期间玩家站在起点圈内时 enter 已触发（被 STANDBY 态吞掉）且检查点
+ * 已消耗消失，若不重设，GO 后玩家驶离起点就永远触发不了第一个 CP（整场无法推进）。
+ * 重设后玩家仍在起点圈内 → RACING 态重新进入 → 起点 CP 立即计数（对齐比赛 beginRace
+ * 开赛时重调 showNextCheckpoint 让起点 CP 在 RACING 态计数的行为）。 */
+function resetChallengeCheckpoint(player: Player, ch: ChallengeSession): void {
+  const first = ch.cps[0];
+  const nxt2 = ch.cps[1];
+  if (!first || !nxt2) return;
+  RaceCheckpoint.set(player, 0, first.x, first.y, first.z, nxt2.x, nxt2.y, nxt2.z, first.size);
+}
+
 /** 玩家位置挪到起点 CP（车就位 + 放回车里；restart 与首进共用）。
  * async：无车时刷车是异步的，调用方 await 后需自行做断线检查。 */
 async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<void> {
@@ -304,10 +317,7 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
   player.setVirtualWorld(ch.worldId);
   player.setPos(first.x, first.y, first.z);
   // 第一个 CP 箭头（指向第二个）
-  const nxt2 = ch.cps[1];
-  if (nxt2) {
-    RaceCheckpoint.set(player, 0, first.x, first.y, first.z, nxt2.x, nxt2.y, nxt2.z, first.size);
-  }
+  resetChallengeCheckpoint(player, ch);
 }
 
 /** 起点待命：影子归位起始帧 + 渲染一次（起点车可见）+ 提示 go 命令。
@@ -378,6 +388,10 @@ function beginChallengeCountdown(player: Player, ch: ChallengeSession): void {
       ch.state = "RACING";
       ch.goAt = Date.now(); // 真实起跑时刻（结算/超时计时基准）
       ch.lastTickAt = Date.now(); // 重置影子推进基准（待命可能等很久，防首帧跳变）
+      // 重设检查点：待命期间站在起点圈内时 enter 已被 STANDBY 态吞掉且检查点消耗，
+      // 重设让起点 CP 在 RACING 态重新进入计数（对齐比赛 beginRace 开赛重设），
+      // 否则 GO 后驶离起点永远触发不了第一个 CP
+      resetChallengeCheckpoint(player, ch);
       const go = new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
       go.forPlayer(player);
       player.playSound(1057);
@@ -416,10 +430,14 @@ export function goChallenge(player: Player): void {
     cleanupChallenge(player.id);
     return;
   }
-  // 归位起点 + 刷车兜底；await 期间玩家可能又 restart/死亡/离开 → .then 里再校验
+  // 归位起点 + 刷车兜底；await 期间玩家可能又 restart/死亡/离开 → .then 里再校验。
+  // epoch 快照：restart 会自增 countdownEpoch，代数失配则不再触发倒计时（防在途
+  // go 在 restart 后误起一个玩家没请求的倒计时）
+  const epoch = ch.countdownEpoch;
   void seatPlayerAtStart(player, ch).then(() => {
     if (
       challenges.has(player.id) &&
+      epoch === ch.countdownEpoch &&
       ch.state === "STANDBY" &&
       player.isConnected() &&
       !player.isWasted() &&
@@ -438,7 +456,10 @@ export function restartChallenge(player: Player): void {
     player.sendClientMessage(COLOR_ERROR, "你不在影子挑战中");
     return;
   }
-  // 打断进行中的计时/倒计时（tick 与倒计时链都以 state 门控，清理定时器防泄漏）
+  // 打断进行中的计时/倒计时（tick 与倒计时链都以 state 门控，清理定时器防泄漏）。
+  // 自增 countdownEpoch：在途的 go 刷车 continuation 靠代数失配自停（防 restart 后
+  // 误起倒计时），旧倒计时链 pending 步骤同被代数守卫终止
+  ch.countdownEpoch++;
   if (ch.timer) clearIntervalSafe(ch.timer);
   ch.timer = undefined;
   if (ch.endTimer) clearTimeoutSafe(ch.endTimer);
@@ -907,6 +928,8 @@ async function startChallengeCore(
 /** 初始化挑战：注册 CP 进入检测（与比赛共用 RaceCpEvent 入口） */
 export function initChallenge(): void {
   RaceCpEvent.onPlayerEnter(({ player, next }) => {
+    // 统一排除 NPC（对齐项目约定：所有事件回调排除 NPC；NPC 不会进 challenges）
+    if (player.isNpc()) return next();
     onChallengePlayerEnter(player);
     return next();
   });
