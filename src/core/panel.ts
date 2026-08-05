@@ -13,6 +13,7 @@ import { openMyVehicleMenu } from "@/vehicles/menu";
 import { openTeleportMenu } from "@/teleport";
 import { openAttireMenu } from "@/attire";
 import { openAttireAdmin } from "@/attire/admin";
+import { openHouseAdminMenu } from "@/house/admin";
 import { openRaceMenu } from "@/race/manage";
 import { openActionMenu } from "@/personalize/action";
 import {
@@ -246,6 +247,7 @@ const panelGroups: PanelGroup[] = [
     items: [
       { label: "管理员面板", raceSafe: true, run: openOpPanel },
       { label: "装扮管理", run: openAttireAdmin },
+      { label: "房屋管理", run: openHouseAdminMenu },
     ],
   },
 ];
