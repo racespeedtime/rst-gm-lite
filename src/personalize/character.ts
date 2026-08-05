@@ -1,13 +1,7 @@
 import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
-import {
-  getSetting,
-  updateSetting,
-  pickOption,
-  notifySaved,
-  toggleText,
-} from "./settings";
+import { getSetting, updateSetting, pickOption, notifySaved, toggleText } from "./settings";
 import { COLOR_ERROR } from "@/utils/colors";
 import { applyInvincibleState } from "@/core/invincible";
 import { applyPlayerStyle } from "@/core/playerStyle";
@@ -16,6 +10,7 @@ import { showSkinPicker, applySkin } from "./skinPicker";
 import { parseIntInRange } from "@/utils/parse";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
+import { containsSensitiveWord } from "@/utils/sensitive";
 
 /**
  * 人物个性化菜单
@@ -42,10 +37,15 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     { name: "默认人物预设", value: "" },
     { name: "无敌状态", value: toggleText(setting.invincible) },
   ];
-  const index = await pickOption(player, "人物个性化", rows.map((r) => r.name), {
-    headers: ["设置", "当前"],
-    format: (_o, i) => [rows[i].name, rows[i].value],
-  });
+  const index = await pickOption(
+    player,
+    "人物个性化",
+    rows.map((r) => r.name),
+    {
+      headers: ["设置", "当前"],
+      format: (_o, i) => [rows[i].name, rows[i].value],
+    },
+  );
   if (index < 0) return back?.(); // 取消 → 退出面板
 
   const again = () => openCharacterMenu(player, back); // 操作完成后回到本菜单
@@ -71,10 +71,7 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
   }
   if (index === 2) {
     // 皮肤模型：3D 选肤（推荐）或手动输入 ID（74 假 CJ 禁用）
-    const pick = await pickOption(player, "皮肤模型", [
-      "3D 选肤（浏览模型）",
-      "输入皮肤ID",
-    ]);
+    const pick = await pickOption(player, "皮肤模型", ["3D 选肤（浏览模型）", "输入皮肤ID"]);
     if (pick < 0) return again();
     if (pick === 0) {
       await showSkinPicker(player);
@@ -117,6 +114,11 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
       player.sendClientMessage(COLOR_ERROR, "名字前缀最多 255 个字符");
       return again();
     }
+    // 前缀拼进聊天名（所有人可见），含敏感词拒绝
+    if (containsSensitiveWord(prefix)) {
+      player.sendClientMessage(COLOR_ERROR, "名字前缀包含敏感内容");
+      return again();
+    }
     await updateSetting(player, { prefix: prefix || null });
     notifySaved(player, prefix ? `名字前缀已设为：${prefix}` : "名字前缀已清除");
     await applyPlayerStyle(player);
@@ -138,6 +140,11 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     const suffix = res.inputText.trim();
     if (suffix.length > 255) {
       player.sendClientMessage(COLOR_ERROR, "名字后缀最多 255 个字符");
+      return again();
+    }
+    // 后缀拼进聊天名（所有人可见），含敏感词拒绝
+    if (containsSensitiveWord(suffix)) {
+      player.sendClientMessage(COLOR_ERROR, "名字后缀包含敏感内容");
       return again();
     }
     await updateSetting(player, { suffix: suffix || null });

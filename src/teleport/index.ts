@@ -12,6 +12,7 @@ import type { MenuBack } from "@/core/panel";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 
 import { sysMsg, PREFIX } from "@/utils/msg";
+import { containsSensitiveWord } from "@/utils/sensitive";
 const TP_TIMEOUT_MS = 18_000;
 /** 传送后冻结时长（对齐原版 DynUpdateStart：等待 obj 流式加载，避免下坠穿模） */
 const TELEPORT_FREEZE_MS = 2000;
@@ -568,6 +569,11 @@ async function createTeleport(
   }
   if (description && description.length > 48) {
     sysMsg(player, "tp", "描述过长，最多 48 个字符", "error");
+    return false;
+  }
+  // 传送点名称/描述展示在聊天/列表（所有人可见），含敏感词拒绝创建
+  if (containsSensitiveWord(clean) || (description && containsSensitiveWord(description))) {
+    sysMsg(player, "tp", "传送点名称或描述包含敏感内容", "error");
     return false;
   }
   const exist = await prisma.teleport.findFirst({ where: { name: clean } });
