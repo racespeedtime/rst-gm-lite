@@ -14,8 +14,8 @@ import { COLOR_RACE, COLOR_ERROR } from "@/utils/colors";
 type Op = "|" | "+" | "-" | "*" | "/";
 const OPS: Record<string, Op> = { "|": "|", "+": "+", "-": "-", "*": "*", "/": "/" };
 
-/** 距离换算：getSpeed() 返回 km/h（magic=180） */
-const KMH_UNIT = 180;
+/** 距离换算：getSpeed() 返回 km/h（magic=180）；velocity 分量 = kmh / 180 */
+export const KMH_UNIT = 180;
 
 /** CP 脚本执行上下文：由比赛房间在创建时构建一次，避免每条脚本重复查库 */
 export interface CpScriptContext {

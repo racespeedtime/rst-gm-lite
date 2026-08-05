@@ -23,6 +23,7 @@ import {
   cleanupScriptVehicle,
   getSuperStartKmh,
   setVehicleSpeed,
+  KMH_UNIT,
   type CpScriptContext,
 } from "./scripts";
 import {
@@ -962,11 +963,25 @@ function beginRace(room: RaceRoom): void {
           raceRoomId: room.id,
         });
       }
-      // 超级起步：GO 瞬间沿车头给一个向前初速（无需触碰 CP，全局仅开局这一次）。
+      // 超级起步：GO 瞬间把起步速度**补偿**到至少 superStartKmh（全局仅开局这一次）。
+      // 本服允许偷跑——倒计时前玩家可移动/蓄力调整位置，因此：
+      // - 当前车速 < 目标 → 补到目标。沿**当前速度方向**补偿（保留偷跑/蓄力已有
+      //   的动量方向，不因车头朝向改向）；静止（车速≈0）→ 沿车头方向给初速。
+      // - 当前车速 ≥ 目标 → 不动（不叠加、也不把快车拖慢回目标值）。
       // 无车（开局兜底刷车异步完成前）跳过——车就位后已不在起步加速时点。
       const ssVeh = m.getVehicle();
       if (superStartKmh > 0 && ssVeh) {
-        setVehicleSpeed(ssVeh, superStartKmh, ssVeh.getZAngle().angle + 90);
+        const vv = ssVeh.getVelocity();
+        const curSpeed = Math.hypot(vv.x, vv.y);
+        const target = superStartKmh / KMH_UNIT;
+        if (curSpeed < target) {
+          if (curSpeed > 0.001) {
+            const k = target / curSpeed;
+            ssVeh.setVelocity(vv.x * k, vv.y * k, vv.z);
+          } else {
+            setVehicleSpeed(ssVeh, superStartKmh, ssVeh.getZAngle().angle + 90);
+          }
+        }
       }
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);
