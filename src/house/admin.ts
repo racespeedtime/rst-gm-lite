@@ -139,17 +139,23 @@ async function houseActions(
     where: { houseId: house.id },
     select: { name: true },
   });
+  const tele = await prisma.teleport.findFirst({
+    where: { houseId: house.id },
+    select: { name: true },
+  });
   const res = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.LIST,
-      caption: `房屋「${house.name}」（${modelCount} 模型${race ? ` · 赛道 ${race.name}` : ""}）`,
+      caption: `房屋「${house.name}」（${modelCount} 模型${race ? ` · 赛道 ${race.name}` : ""}${tele ? ` · 传送点 ${tele.name}` : ""}）`,
       info: [
         `1. 导入模型源文件（整体替换）`,
         `2. 导出全部模型（写文件）`,
         `3. 添加单个模型`,
         `4. 删除模型`,
         `5. ${house.isEnabled ? "停用" : "启用"}房屋`,
+        `6. 关联赛道${race ? `（当前：${race.name}）` : ""}`,
+        `7. 关联传送点${tele ? `（当前：${tele.name}）` : ""}`,
       ].join("\n"),
       button1: "确定",
       button2: "返回",
@@ -385,6 +391,96 @@ async function houseActions(
         );
       } catch (e) {
         logger.error(`[house] OP 切换房屋启用失败 house=${house.name}`, e);
+        sysMsg(player, "house", "操作失败", "error");
+      }
+      return again();
+    }
+    case 5: {
+      // 关联赛道（手输名称——一个房屋最多关联一个赛道，race.houseId @unique；列表选几百条不现实）
+      const raceRes = await showDialog(
+        player,
+        new Dialog({
+          style: DialogStylesEnum.INPUT,
+          caption: "关联赛道",
+          info: `输入要关联的赛道名称（留空 = 解除当前关联${race ? `「${race.name}」` : ""}）：\n当前关联：${race?.name ?? "无"}`,
+          button1: "确定",
+          button2: "取消",
+        }),
+      );
+      if (!raceRes || raceRes.response !== 1) return again();
+      const raceName = raceRes.inputText.trim();
+      try {
+        if (raceName) {
+          const target = await prisma.race.findFirst({
+            where: { name: raceName, isEnabled: true, deletedAt: null },
+            select: { id: true },
+          });
+          if (!target) {
+            sysMsg(
+              player,
+              "house",
+              `未找到启用赛道「${raceName}」（确认名称或数据库创建）`,
+              "error",
+            );
+            return again();
+          }
+          // 换绑事务：先清旧关联（race.house_id @unique，两行指向同屋会冲突）再设新
+          await prisma.$transaction([
+            prisma.race.updateMany({ where: { houseId: house.id }, data: { houseId: null } }),
+            prisma.race.update({ where: { id: target.id }, data: { houseId: house.id } }),
+          ]);
+          await reloadHouseObjects(); // 关联赛道 → obj 在比赛世界可见，需重载
+          sysMsg(player, "house", `已关联赛道「${raceName}」`, "success");
+        } else {
+          await prisma.race.updateMany({ where: { houseId: house.id }, data: { houseId: null } });
+          await reloadHouseObjects();
+          sysMsg(player, "house", "已解除赛道关联", "success");
+        }
+      } catch (e) {
+        logger.error(`[house] OP 关联赛道失败 house=${house.name}`, e);
+        sysMsg(player, "house", "操作失败", "error");
+      }
+      return again();
+    }
+    case 6: {
+      // 关联传送点（手输名称；teleport.houseId @unique 一对一）
+      const teleRes = await showDialog(
+        player,
+        new Dialog({
+          style: DialogStylesEnum.INPUT,
+          caption: "关联传送点",
+          info: `输入要关联的传送点名称（留空 = 解除当前关联${tele ? `「${tele.name}」` : ""}）：\n当前关联：${tele?.name ?? "无"}`,
+          button1: "确定",
+          button2: "取消",
+        }),
+      );
+      if (!teleRes || teleRes.response !== 1) return again();
+      const teleName = teleRes.inputText.trim();
+      try {
+        if (teleName) {
+          const target = await prisma.teleport.findFirst({
+            where: { name: teleName, isEnabled: true, deletedAt: null },
+            select: { id: true },
+          });
+          if (!target) {
+            sysMsg(player, "house", `未找到传送点「${teleName}」`, "error");
+            return again();
+          }
+          // 换绑事务（teleport.house_id @unique）
+          await prisma.$transaction([
+            prisma.teleport.updateMany({ where: { houseId: house.id }, data: { houseId: null } }),
+            prisma.teleport.update({ where: { id: target.id }, data: { houseId: house.id } }),
+          ]);
+          sysMsg(player, "house", `已关联传送点「${teleName}」`, "success");
+        } else {
+          await prisma.teleport.updateMany({
+            where: { houseId: house.id },
+            data: { houseId: null },
+          });
+          sysMsg(player, "house", "已解除传送点关联", "success");
+        }
+      } catch (e) {
+        logger.error(`[house] OP 关联传送点失败 house=${house.name}`, e);
         sysMsg(player, "house", "操作失败", "error");
       }
       return again();
