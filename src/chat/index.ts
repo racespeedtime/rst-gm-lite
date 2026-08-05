@@ -6,6 +6,7 @@ import { COLOR_ERROR } from "@/utils/colors";
 import { getChatDisplayName } from "@/core/playerStyle";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
+import { containsSensitiveWord } from "@/utils/sensitive";
 
 export type ChatRange = "session" | "public";
 
@@ -105,6 +106,12 @@ export function initChat(): void {
     // 名字本体剥离颜色码（supportAllNickname 允许昵称含 {RRGGBB}，防聊天注入），prefix/suffix 彩色装饰保留
     const name = getChatDisplayName(player.id, sanitizeChatText(player.getName().name));
     const range = getChatRange(player.id);
+    // 敏感词拦截：含敏感词的消息拒绝发送（对齐 backend 聊天审/安全约定；
+    // 在 sanitize 之后检测——剥离颜色码/控制字符后的净文本，防用 {RRGGBB} 拆词绕过）
+    if (containsSensitiveWord(text)) {
+      player.sendClientMessage(COLOR_ERROR, "消息包含敏感内容，已拒绝发送");
+      return false;
+    }
     const safeText = sanitizeChatText(text);
     if (range === "public") {
       // 全局：发给所有在线玩家（含自己），NPC 除外
@@ -147,6 +154,11 @@ export function initChat(): void {
     }
     if (!getAuthState(target.id)) {
       player.sendClientMessage(COLOR_ERROR, "对方尚未登录");
+      return next();
+    }
+    // 私聊同样拦截敏感词（对齐公共聊天口径）
+    if (containsSensitiveWord(msg)) {
+      player.sendClientMessage(COLOR_ERROR, "消息包含敏感内容，已拒绝发送");
       return next();
     }
     const safeMsg = sanitizeChatText(msg);

@@ -24,6 +24,9 @@ log.txt
 # 赛车回放录像文件（数据本体，不入库不提交）
 scriptfiles/recordings
 
+# 敏感词库（运维数据，需随部署手动放置服务器根目录——避免提交；见 src/utils/sensitive.ts）
+sensitive-words.txt
+
 .agents
 .claude
 .zcode

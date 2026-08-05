@@ -15,6 +15,7 @@ import { isInRace } from "@/race/room";
 import { isInChallenge } from "@/replay/challenge";
 import { REPLAY_WORLD_BASE } from "@/replay/playback";
 import { sysMsg } from "@/utils/msg";
+import { filterSensitiveWords } from "@/utils/sensitive";
 import { isPlayerLocked } from "@/core/interaction";
 import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
 import { syncVehicleAutoState } from "@/core/vehicleAuto";
@@ -148,9 +149,11 @@ export async function spawnVehicle(
     // 爱车 description 绑定 3D 文本（有描述才挂，跟随车辆移动）
     // 注意：附着车辆时 x/y/z 是相对车辆的偏移（对齐原版 CreateDynamic3DTextLabel
     // 附车时传 0,0,0），传绝对坐标会导致标签出现在世界原点/错位
+    // 敏感词兜底：description 数据由 backend 写入（gm-lite 无改描述入口），展示层
+    // 掩码敏感词防裸奔（词库未部署时检测放行，展示原文）
     if (uv.description) {
       const label = new Dynamic3DTextLabel({
-        text: uv.description,
+        text: filterSensitiveWords(uv.description),
         color: "#ffd700",
         x: 0,
         y: 0,

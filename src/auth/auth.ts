@@ -5,6 +5,7 @@ import { checkLoginAllowed } from "@/core/ban";
 import type { MenuBack } from "@/core/panel";
 import { hashPassword, verifyPassword, isLegacyPassword } from "./password";
 import { showDialog } from "@/utils/dialog";
+import { containsSensitiveWord } from "@/utils/sensitive";
 
 const MAX_NAME_LEN = 24;
 const MAX_PASSWORD_LEN = 32;
@@ -179,7 +180,13 @@ export async function runAuthFlow(player: Player): Promise<AuthState | null> {
     authStates.set(player.id, auth);
     return auth;
   }
-  // 新用户 → 注册（密码二次验证）
+  // 新用户 → 注册（密码二次验证）。注册前敏感词检测（对齐 backend 注册拦截）：
+  // 昵称含敏感词拒绝注册。老用户登录不查——账号名是历史既有数据，注册时已过滤
+  if (containsSensitiveWord(name)) {
+    player.sendClientMessage(COLOR_ERROR, "昵称包含敏感内容，无法注册账号");
+    player.kick();
+    return null;
+  }
   const result = await doRegister(player, name);
   if (!result) return null;
   const auth: AuthState = {
