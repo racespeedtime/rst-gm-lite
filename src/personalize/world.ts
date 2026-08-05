@@ -17,21 +17,31 @@ import { parseIntInRange } from "@/utils/parse";
 import { showDialog } from "@/utils/dialog";
 import type { MenuBack } from "@/core/panel";
 
-/** 玩家游戏内颜色色板：60 色（Hue 渐变）+ 自定义入口 */
-function hslToHex(h: number, s: number, l: number): string {
-  const f = (n: number): string => {
-    const k = (n + h / 30) % 12;
-    const a = s * Math.min(l, 1 - l);
-    const rgb = Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, Math.min(9 - k, 1)))));
-    return rgb.toString(16).padStart(2, "0");
-  };
-  return `#${f(0)}${f(8)}${f(4)}`;
-}
+/**
+ * 玩家游戏内颜色色板：经典 SA-MP PlayerColors[200]（0xAARRGGBB，前 100 唯一、
+ * 100-199 重复）。忠实保留原版配色——老玩家对这套默认玩家颜色有肌肉记忆
+ * （小地图点/NameTag 都是这套色）。运行时转 #RRGGBB（alpha 恒 FF）+ 去重。
+ */
+const SA_PLAYER_COLORS = [
+  0xff8c13ff, 0xc715ffff, 0x20b2aaff, 0xdc143cff, 0x6495edff, 0xf0e68cff, 0x778899ff, 0xff1493ff,
+  0xf4a460ff, 0xee82eeff, 0xffd720ff, 0x8b4513ff, 0x4949a0ff, 0x148b8bff, 0x14ff7fff, 0x556b2fff,
+  0x0fd9faff, 0x10dc29ff, 0x534081ff, 0x0495cdff, 0xef6ce8ff, 0xbd34daff, 0x247c1bff, 0x0c8e5dff,
+  0x635b03ff, 0xcb7ed3ff, 0x65adebff, 0x5c1accff, 0xf2f853ff, 0x11f891ff, 0x7b39aaff, 0x53eb10ff,
+  0x54137dff, 0x275222ff, 0xf09f5bff, 0x3d0a4fff, 0x22f767ff, 0xd63034ff, 0x9a6980ff, 0xdfb935ff,
+  0x3793faff, 0x90239dff, 0xe9ab2fff, 0xaf2ff3ff, 0x057f94ff, 0xb98519ff, 0x388eeaff, 0x028151ff,
+  0xa55043ff, 0x0de018ff, 0x93ab1cff, 0x95baf0ff, 0x369976ff, 0x18f71fff, 0x4b8987ff, 0x491b9eff,
+  0x829dc7ff, 0xbce635ff, 0xcea6dfff, 0x20d4adff, 0x2d74fdff, 0x3c1c0dff, 0x12d6d4ff, 0x48c000ff,
+  0x2a51e2ff, 0xe3ac12ff, 0xfc42a8ff, 0x2fc827ff, 0x1a30bfff, 0xb740c2ff, 0x42acf5ff, 0x2fd9deff,
+  0xfafb71ff, 0x05d1cdff, 0xc471bdff, 0x94436eff, 0xc1f7ecff, 0xce79eeff, 0xbd1ef2ff, 0x93b7e4ff,
+  0x3214aaff, 0x184d3bff, 0xae4b99ff, 0x7e49d7ff, 0x4c436eff, 0xfa24ccff, 0xce76beff, 0xa04e0aff,
+  0x9f945cff, 0xdcde3dff, 0x10c9c5ff, 0x70524dff, 0x0be472ff, 0x8a2cd7ff, 0x6152c2ff, 0xcf72a9ff,
+  0xe59338ff, 0xeedc2dff, 0xd8c762ff,
+];
 
-/** 60 色：色相 0-354（步进 6°），饱和 100%、亮度 45%（鲜艳且文字可读） */
-const GENERATED_COLORS: string[] = Array.from({ length: 60 }, (_, i) =>
-  hslToHex((i * 6) % 360, 1, 0.45),
-);
+/** 经典配色去重 + 转 #RRGGBB（0xAARRGGBB 的 alpha 恒 FF，颜色取后 6 位） */
+const PLAYER_PALETTE: string[] = [
+  ...new Set(SA_PLAYER_COLORS.map((c) => `#${(c & 0xffffff).toString(16).padStart(6, "0")}`)),
+];
 
 /** 颜色选择条目：value = hex，label = 显示文本（渲染时用实际颜色） */
 interface ColorEntry {
@@ -39,9 +49,9 @@ interface ColorEntry {
   label: string;
 }
 
-/** 色板条目：60 生成色 + 自定义入口（分页选择，实际颜色渲染） */
+/** 色板条目：经典配色（去重后 100 色）+ 自定义入口（分页选择，实际颜色渲染） */
 const COLOR_ENTRIES: ColorEntry[] = [
-  ...GENERATED_COLORS.map((v) => ({ value: v, label: v })),
+  ...PLAYER_PALETTE.map((v) => ({ value: v, label: v })),
   { value: "", label: "自定义…" },
 ];
 
@@ -150,11 +160,11 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
   }
   if (index === 5) {
     const current = (setting.playerColor || "#ffffff").toLowerCase();
-    // 分页选择（每页 12 色 × 5 页 + 自定义），条目用实际颜色渲染（{RRGGBB} 前缀）
+    // 分页选择（每页 20 色 × 5 页铺满经典配色 + 自定义），条目用实际颜色渲染（{RRGGBB} 前缀）
     const r = await showPagedDialog(player, {
       caption: "游戏内颜色",
       data: COLOR_ENTRIES,
-      pageSize: 12,
+      pageSize: 20,
       format: (entry) => {
         const isCurrent = entry.value && entry.value.toLowerCase() === current;
         const mark = isCurrent ? "（当前）" : "";
