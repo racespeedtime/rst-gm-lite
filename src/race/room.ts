@@ -857,24 +857,38 @@ function beginRace(room: RaceRoom): void {
       }
       // 发车（对齐原版 Race_Game_Start_s）：不把玩家传送到第一个 CP——加入房间时
       // 已在起点定位（joinRoom），倒计时/等待期间可在起点自由活动，发车瞬间不应被拉回起点。
+      // 无车兜底：有车玩家立即开录；无车玩家（等待期爆车等极端情况）不立即开录——
+      // 避免 startRecording 失败弹"需要先刷车"红字，先异步刷默认比赛车（有该模型
+      // 爱车则复用其外观，没有则自动创建成爱车），完成后补开录，保证开赛无车也有
+      // 本场录像。录制起点晚几百 ms（刷车完成时刻），无车期间本来也无车辆帧可采。
       if (!m.isInAnyVehicle() && !getOwnedVehicle(m.id)) {
-        // 无车兜底（等待期间车辆被销毁等极端情况）：用默认比赛车型刷爱车
-        //（有该模型爱车则复用其外观，没有则自动创建成爱车——玩家始终用自己的
-        // 爱车），在玩家当前位置创建并放入，不移动玩家。有爱车停在旁边时不动
-        //（spawnVehicle 内部会 destroyPlayerVehicle 销毁旧车再重建，会把停在
-        // 停车位/起飞点前的爱车无谓销毁）
-        void spawnVehicle(m, getDefaultRaceModel(room.cps), true);
+        void spawnVehicle(m, getDefaultRaceModel(room.cps), true).then((ok) => {
+          if (
+            ok &&
+            m.isConnected() &&
+            isInRace(m.id) &&
+            room.state === "RACING" &&
+            !isRecording(m.id)
+          ) {
+            raceRecordingStart(m.id, {
+              raceId: room.raceId,
+              raceName: room.raceName,
+              raceRoomId: room.id,
+            });
+          }
+        });
+      } else {
+        // 比赛自动录制：开赛即记录整个房间（回放/后续观战/影子挑战用）。
+        // 必须在 setVirtualWorld 之后调用——startRecording 以调用时的世界为
+        // startWorld，若在切世界前开录，开赛后会被"已离开录制世界"边界检查
+        // 立即自动停止（首次 join 的玩家 startWorld 是原世界，上一场录制全丢，
+        // 影子挑战也因此永远没有该赛道的比赛回放）。
+        raceRecordingStart(m.id, {
+          raceId: room.raceId,
+          raceName: room.raceName,
+          raceRoomId: room.id,
+        });
       }
-      // 比赛自动录制：开赛即记录整个房间（回放/后续观战/影子挑战用）。
-      // 必须在 setVirtualWorld 之后调用——startRecording 以调用时的世界为
-      // startWorld，若在切世界前开录，开赛后会被"已离开录制世界"边界检查
-      // 立即自动停止（首次 join 的玩家 startWorld 是原世界，上一场录制全丢，
-      // 影子挑战也因此永远没有该赛道的比赛回放）。
-      raceRecordingStart(m.id, {
-        raceId: room.raceId,
-        raceName: room.raceName,
-        raceRoomId: room.id,
-      });
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);
       // 比赛信息 UI（C P/TIME/BEST/RANK）已在加入房间时创建（joinRoom），
