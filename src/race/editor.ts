@@ -17,12 +17,24 @@ const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 interface EditState {
   raceId: string;
   cpIndex: number; // 当前聚焦的 CP 下标
+  cpSize: number; // 新放置 CP 的默认尺寸（/r edit cpsize 设置，对齐原版 EditRace rcpsize）
 }
 
 const editStates = new Map<number, EditState>();
 
 export function isEditing(playerId: number): boolean {
   return editStates.has(playerId);
+}
+
+/** 当前编辑中的 CP 放置尺寸（/r edit cpsize 读写） */
+export function getEditCpSize(playerId: number): number {
+  return editStates.get(playerId)?.cpSize ?? 8;
+}
+
+/** 设置新放置 CP 的默认尺寸（/r edit cpsize [值]） */
+export function setEditCpSize(playerId: number, size: number): void {
+  const st = editStates.get(playerId);
+  if (st) st.cpSize = size;
 }
 
 export function exitEdit(playerId: number): void {
@@ -78,8 +90,9 @@ export async function enterRaceEdit(player: Player, raceId: string): Promise<voi
       orderBy: { index: "asc" },
       include: { raceCpScripts: { orderBy: { index: "asc" } } },
     });
-    // 先查库成功再登记状态，避免 DB 异常后残留编辑态
-    editStates.set(player.id, { raceId, cpIndex: cps.length > 0 ? 0 : -1 });
+    // 先查库成功再登记状态，避免 DB 异常后残留编辑态；cpSize 默认 8（对齐原版
+    // EditRace rcpsize 初始 8，放置的 CP 用此尺寸）
+    editStates.set(player.id, { raceId, cpIndex: cps.length > 0 ? 0 : -1, cpSize: 8 });
     // 编辑/测试用车：刷出默认比赛车（首个 CP 有 cveh 换车用其车型，否则 411）并放入车内
     const model = getDefaultRaceModel(
       cps.map((c) => ({ scripts: c.raceCpScripts.map((s) => s.script) })),
@@ -214,7 +227,15 @@ export async function addCp(player: Player): Promise<void> {
     });
     const index = last ? last.index + 1 : 0;
     await prisma.raceCp.create({
-      data: { raceId: state.raceId, index, x: pos.x, y: pos.y, z: pos.z, angle, size: 8 },
+      data: {
+        raceId: state.raceId,
+        index,
+        x: pos.x,
+        y: pos.y,
+        z: pos.z,
+        angle,
+        size: state.cpSize,
+      },
     });
     await recalcRaceLength(state.raceId);
     player.sendClientMessage(COLOR_SUCCESS, `CP${index + 1} 已放置`);

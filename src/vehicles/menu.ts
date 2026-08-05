@@ -23,6 +23,7 @@ import {
   kickMyVehiclePassengers,
 } from "./index";
 import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
+import { openVehiclePresetMenu } from "@/attire";
 import { parseIntInRange } from "@/utils/parse";
 
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
@@ -357,9 +358,32 @@ export function initMyVehicleCommands(): void {
           ? "[爱车] gm-lite 无需购买爱车，/c 车辆ID 刷车即自动登记为爱车"
           : "[爱车] gm-lite 无需管理员造车，刷车即自动登记爱车",
       );
+    } else if (arg === "buyobj") {
+      // 原版 /cars buyobj 是"购买爱车装扮"（商店）——gm-lite 装扮由模型+预设驱动，
+      // 无需购买：直接打开车辆装扮预设（挂件自由添加，警灯/尾翼等同源）
+      void openVehiclePresetMenu(player);
     } else {
       void openMyVehicleMenu(player);
     }
+    return next();
+  });
+
+  // /aczb 爱车装扮（对齐原版 /aczb 进入爱车装扮）——直接打开车辆装扮预设
+  PlayerEvent.onCommandText("aczb", ({ player, next }) => {
+    if (!cmdGuard(player, next)) return;
+    void openVehiclePresetMenu(player);
+    return next();
+  });
+
+  // /infobj 警灯尾翼（对齐原版 /infobj 给车辆加警灯+尾翼）：gm-lite 无一次性警灯
+  // 挂件命令——装扮由模型+预设驱动，警灯/尾翼就是车辆装扮预设里的挂件，引导玩家去加
+  PlayerEvent.onCommandText("infobj", ({ player, next }) => {
+    if (!cmdGuard(player, next)) return;
+    player.sendClientMessage(
+      COLOR_WHITE,
+      "[装扮] 警灯/尾翼请在「车辆装扮预设」中添加（装扮由模型+预设驱动，可自由组合）",
+    );
+    void openVehiclePresetMenu(player);
     return next();
   });
 

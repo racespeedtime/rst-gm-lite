@@ -8,10 +8,11 @@ import {
   WeaponEnum,
 } from "@infernus/core";
 import { pickOption, notifySaved } from "./settings";
-import { COLOR_ERROR } from "@/utils/colors";
+import { COLOR_ERROR, COLOR_RACE } from "@/utils/colors";
 import { setTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve, isObserving } from "@/core/observe";
 import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";
+import { isEditing } from "@/race/editor";
 import { flipVehicle } from "@/core/vehicleAuto";
 import { isPlayerLocked } from "@/core/interaction";
 import { getAuthState } from "@/auth/auth";
@@ -22,6 +23,52 @@ import { showDialog } from "@/utils/dialog";
 
 /** 海平面参考高度（SA 海水水面 z≈0；陆地判定取明显高于海平面） */
 const SEA_LEVEL = 0;
+
+/** /djs 范围倒计时：20 单位半径 + 同世界（对齐原版 IsPlayerInRangeOfPoint 20 单位） */
+const DJS_RADIUS = 20;
+/** 倒计时从 N 开始倒数到 GO */
+const DJS_COUNT = 5;
+/** 发起冷却（防连发刷屏；每轮 5 秒 + 发起瞬间） */
+const DJS_COOLDOWN_MS = 5000;
+/** playerId -> 下一轮可发起时刻 */
+const djsCooldownUntil = new Map<number, number>();
+/** playerId -> 本轮倒计时开始时刻（每轮引用基点，冷却内不可并发，天然无重叠） */
+const djsCooldownAt = new Map<number, number>();
+
+/** 执行一轮 20 单位范围倒计时（对齐原版 CountDown：数字 + 音效 1056，GO + 音效 1057）。
+ * 计时器登记制（setTimeoutSafe 链）；发起人掉线即停（不残留刷屏）。 */
+function runDjsCountdown(host: Player): void {
+  let count = DJS_COUNT;
+  const tick = (): void => {
+    if (!host.isConnected()) return; // 发起人掉线 → 停（对齐原版 KillTimer 语义）
+    const pos = host.getPos();
+    const world = host.getVirtualWorld();
+    const targets = Player.getInstances().filter(
+      (p) =>
+        !p.isNpc() &&
+        p.isConnected() &&
+        p.getVirtualWorld() === world &&
+        p.getDistanceFromPoint(pos.x, pos.y, pos.z) <= DJS_RADIUS,
+    );
+    if (count <= 0) {
+      const go = new GameText("~g~GO~r~!~n~~g~GO~r~!~n~~g~GO~r~!", 3000, 3);
+      for (const p of targets) {
+        go.forPlayer(p);
+        p.playSound(1057);
+      }
+      djsCooldownAt.delete(host.id); // 本轮结束，允许下一轮（冷却仍在）
+      return;
+    }
+    const gt = new GameText(`~w~${count}`, 3000, 3);
+    for (const p of targets) {
+      gt.forPlayer(p);
+      p.playSound(1056);
+    }
+    count--;
+    setTimeoutSafe(tick, 1000);
+  };
+  tick();
+}
 
 /**
  * 找最近的陆地：从 (x,y) 向四周方向逐步外扩扫描（24 方向 × 每 30 单位一圈，
@@ -299,8 +346,9 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * 初始化快捷命令：
- * /fxq 获取喷气背包 · /jls 获取降落伞（对齐原版命令：喷气背包/降落伞装备）。
- * 比赛/编辑中禁用（与快捷操作菜单一致，避免装备作弊）。
+ * /fxq 获取喷气背包 · /jls 获取降落伞 · /jetpack（= /fxq 别名）· /stuck 脱卡 · /djs 范围倒计时
+ * （对齐原版命令：喷气背包/降落伞装备、卡住修复、附近倒计时）。
+ * 比赛/编辑中禁用（与快捷操作菜单一致，避免装备作弊；/f 翻正除外——车内自救保留）。
  */
 export function initQuickCommands(): void {
   PlayerEvent.onCommandText("fxq", ({ player, next }) => {
@@ -315,6 +363,65 @@ export function initQuickCommands(): void {
     }
     player.setSpecialAction(2); // USEJETPACK
     notifySaved(player, "已获取喷气背包");
+    return next();
+  });
+
+  // /jetpack 原版别名（= /fxq，原版 CMD:jetpack 同样调 SetPlayerSpecialAction(2)）
+  PlayerEvent.onCommandText("jetpack", ({ player, next }) => {
+    if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      return next();
+    }
+    if (isInRace(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能获取喷气背包");
+      return next();
+    }
+    player.setSpecialAction(2); // USEJETPACK
+    notifySaved(player, "已获取喷气背包");
+    return next();
+  });
+
+  // /stuck 脱离卡死（对齐原版 /xiufu：位置原地抬升 2.8 让物理脱卡）。
+  // 卡在地形里时抬升脱离；比赛/编辑中禁用（比赛中脱卡请用 /kill 回上一 CP，
+  // 编辑中会干扰摆位）
+  PlayerEvent.onCommandText(["stuck", "xiufu"], ({ player, next }) => {
+    if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      return next();
+    }
+    if (isInRace(player.id)) {
+      player.sendClientMessage(COLOR_RACE, "[比赛] 比赛中请用 /kill 重生回检查点脱卡");
+      return next();
+    }
+    if (isEditing(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "[赛车] 编辑模式中不可脱卡，请移动位置");
+      return next();
+    }
+    const pos = player.getPos();
+    player.setPos(pos.x, pos.y, pos.z + 2.8);
+    notifySaved(player, "已脱离卡住状态");
+    return next();
+  });
+
+  // /djs 范围倒计时（对齐原版 CountDown：20 单位内同世界玩家 5→4→3→2→1→GO +
+  // 音效 1056/1057，用于拍视频/飙车配合）。发起人每 5 秒冷却，防连发刷屏
+  PlayerEvent.onCommandText(["djs", "count", "daojishi"], ({ player, next }) => {
+    if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      return next();
+    }
+    if (isInRace(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能发起倒计时");
+      return next();
+    }
+    const now = Date.now();
+    if ((djsCooldownUntil.get(player.id) ?? 0) > now) {
+      player.sendClientMessage(COLOR_ERROR, "[倒计时] 请稍后再发起（每 5 秒一次）");
+      return next();
+    }
+    djsCooldownUntil.set(player.id, now + DJS_COOLDOWN_MS);
+    djsCooldownAt.set(player.id, now); // 每轮引用基点（restart 无并发：冷却内不可再发起）
+    void runDjsCountdown(player);
     return next();
   });
 

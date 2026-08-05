@@ -14,6 +14,7 @@ import { cleanupAttire, applyVehiclePreset } from "@/attire";
 import { isInRace } from "@/race/room";
 import { isPlayerLocked } from "@/core/interaction";
 import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
+import { syncVehicleAutoState } from "@/core/vehicleAuto";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { DEFAULT_CHARSET } from "@/utils/constants";
@@ -449,6 +450,42 @@ export function initVehicleCommands(): void {
       showSpeed: nextOn ? true : setting.showSpeed,
     });
     notifySaved(player, `3D速度表已${nextOn ? "开启" : "关闭"}`);
+    return next();
+  });
+
+  // /dcar /autofix：toggle 载具无敌（自动修复，对齐原版 AutoFix——载具被攻击/碰撞
+  // 自动修复，设置与面板「车辆→自动修复」同一数据源；比赛中该设置被比赛系统
+  // 强制覆盖为"无碰撞"，命令仅改个人设置，不碰比赛态）
+  PlayerEvent.onCommandText(["dcar", "autofix"], async ({ player, next }) => {
+    if (!getAuthState(player.id) || isPlayerLocked(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "请先完成登录后再操作");
+      return next();
+    }
+    const setting = await getSetting(player);
+    if (!setting) return next();
+    const nextOn = !setting.vehicleAutoFix;
+    await updateSetting(player, { vehicleAutoFix: nextOn });
+    syncVehicleAutoState(player, { vehicleAutoFix: nextOn }); // 同步拦截名单（onWeaponShot 热路径）
+    notifySaved(player, `载具无敌已${nextOn ? "开启" : "关闭"}（载具自动修复）`);
+    return next();
+  });
+
+  // /hys：toggle 车辆变色龙（自动换色，对齐原版 hys——每秒随机换色，vehicleTick 驱动）
+  PlayerEvent.onCommandText("hys", async ({ player, next }) => {
+    if (!getAuthState(player.id) || isPlayerLocked(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "请先完成登录后再操作");
+      return next();
+    }
+    const setting = await getSetting(player);
+    if (!setting) return next();
+    const nextOn = !setting.vehicleColorCycle;
+    await updateSetting(player, { vehicleColorCycle: nextOn });
+    // 开启瞬间立即换一次色（对齐原版开启即有视觉效果，不等下一秒 tick）
+    if (nextOn) {
+      const veh = player.getVehicle();
+      if (veh) veh.changeColors(Math.floor(Math.random() * 256), Math.floor(Math.random() * 256));
+    }
+    notifySaved(player, `变色龙已${nextOn ? "开启" : "关闭"}（每秒随机换色）`);
     return next();
   });
 }

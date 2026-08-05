@@ -14,7 +14,16 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle, spawnVehicle, destroyPlayerVehicle } from "@/vehicles";
 import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scripts";
-import { isEditing, enterRaceEdit, canEditRace, addCp, showEditMenu, exitEdit } from "./editor";
+import {
+  isEditing,
+  enterRaceEdit,
+  canEditRace,
+  addCp,
+  showEditMenu,
+  exitEdit,
+  getEditCpSize,
+  setEditCpSize,
+} from "./editor";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import {
@@ -210,7 +219,18 @@ export function getRaceRoom(roomId: number): RaceRoom | undefined {
  * p/panel 必须在白名单内：观战（spect）模式下客户端不发按键收不到 Y 键，
  * 只能靠 /p 开面板——比赛结束自动观战的玩家若不放行 /p 将彻底打不开面板。
  */
-const RACE_SAFE_COMMANDS = new Set(["r", "race", "pm", "kill", "tv", "ob", "spec", "p", "panel"]);
+const RACE_SAFE_COMMANDS = new Set([
+  "r",
+  "race",
+  "pm",
+  "kill",
+  "tv",
+  "ob",
+  "spec",
+  "p",
+  "panel",
+  "f",
+]);
 
 export function isRaceCommandAllowed(command: string): boolean {
   return RACE_SAFE_COMMANDS.has(command);
@@ -2142,7 +2162,7 @@ async function handleRaceEditCommand(player: Player, rest: string[]): Promise<vo
   if (!sub) {
     player.sendClientMessage(
       COLOR_RACE,
-      "用法: /r edit 赛道名 进入编辑 · /r edit cp 放置CP · /r edit q 退出 · /r edit d 打开编辑菜单",
+      "用法: /r edit 赛道名 进入编辑 · /r edit cp 放置CP · /r edit cpsize [值] 设置CP尺寸 · /r edit trg 脚本说明 · /r edit d 菜单 · /r edit q 退出",
     );
     return;
   }
@@ -2165,6 +2185,62 @@ async function handleRaceEditCommand(player: Player, rest: string[]): Promise<vo
       return;
     }
     await showEditMenu(player);
+    return;
+  }
+  if (sub === "cpsize") {
+    // /r edit cpsize [值]：设置/查看新放置 CP 的默认尺寸（对齐原版 /r edit cpsize——
+    // 设置编辑尺寸后放置的 CP 用该尺寸；无参查看当前值）
+    if (!isEditing(player.id)) {
+      player.sendClientMessage(COLOR_ERROR, "你不在赛道编辑中，先 /r edit 赛道名 进入编辑");
+      return;
+    }
+    const cur = getEditCpSize(player.id);
+    const raw = rest[1];
+    if (raw == null) {
+      player.sendClientMessage(COLOR_RACE, `[赛车] 当前 CP 尺寸为: ${cur}`);
+      return;
+    }
+    const size = Number(raw);
+    if (!Number.isFinite(size) || size <= 0 || size > 100) {
+      player.sendClientMessage(COLOR_ERROR, "[赛车] 尺寸需为 0-100 的数值");
+      return;
+    }
+    setEditCpSize(player.id, size);
+    player.sendClientMessage(COLOR_RACE, `[赛车] 已设置新 CP 尺寸为: ${size}`);
+    return;
+  }
+  if (sub === "trg") {
+    // /r edit trg：查看 CP 触发脚本说明（对齐原版 Race_ShowTrgDialog；MSGBOX 支持中文，
+    // 列出 execCpScript 支持的函数——7 个触发函数 + 变量/运算说明）
+    const info = [
+      "{FFD700}CP 触发脚本语法",
+      "",
+      "每行一条，放置在 CP 上，玩家触达该 CP 时执行：",
+      "  msg 消息    在聊天框显示自定义文本",
+      "  time 时 分   更改游戏时间",
+      "  weather ID  更改天气（0-255）",
+      "  cveh 车型   中途换车（车型 400-611）",
+      "  spawnpos x y z a  设置该 CP 的重生点（不触发）",
+      "  speed/speedex/zspeed  改变车速（角度/速度/Z轴）",
+      "  angle 角度  设置车辆朝向",
+      "  fix 修复    修复车辆",
+      "  damage 位   破坏车辆（0-15 轮胎位）",
+      "  vgoto s|v x y z  传送到坐标",
+      "",
+      "变量：{FFD700}#ncpx #ncpy #ncpz{FFFFFF} 下一 CP 坐标、{FFD700}#playerid{FFFFFF} 玩家ID",
+      "运算：{FFD700}| + - * /{FFFFFF} 前置运算符（如 | 直接设值）",
+      "多条脚本从上到下执行；spawnpos 出现后其后的脚本不再执行",
+    ].join("\n");
+    await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.MSGBOX,
+        caption: "/r edit trg 触发脚本说明",
+        info,
+        button1: "确定",
+        button2: "关闭",
+      }),
+    );
     return;
   }
   // /r edit 赛道名 → 进入编辑（对齐原版，无密码机制；按名字查）

@@ -800,6 +800,12 @@ async function addPlayerPresetItem(
   }
 }
 
+/** 车辆装扮预设直达入口（/aczb /cars buyobj /infobj 命令引导用）：
+ * 装扮由模型+预设驱动，挂件（警灯/尾翼等同源）在车辆装扮预设里自由添加，无需购买 */
+export async function openVehiclePresetMenu(player: Player, back?: MenuBack): Promise<void> {
+  await vehiclePresetMenu(player, back);
+}
+
 /** 车辆预设管理：输入模型 → 预设列表 */
 async function vehiclePresetMenu(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
