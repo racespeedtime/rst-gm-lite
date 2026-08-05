@@ -294,10 +294,12 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
   } else {
     if (owned) destroyPlayerVehicle(player.id); // 车已毁（爆炸残留失效实体）
     // pendingRespawn 与 ensureChallengeCar 共用：刷车期间（可能跨 tick/go 的
-    // 异步窗口）不重复刷，防 restart↔go 交错双车
+    // 异步窗口）不重复刷，防 restart↔go 交错双车；finally 兜底——刷车失败
+    //（如中途断线/实体创建异常）也放行，防守卫永久卡死阻断后续救援
     pendingRespawn.add(player.id);
-    await spawnVehicle(player, ch.data.header.vehicleModelId, true);
-    pendingRespawn.delete(player.id);
+    await spawnVehicle(player, ch.data.header.vehicleModelId, true).finally(() => {
+      pendingRespawn.delete(player.id);
+    });
   }
   player.setVirtualWorld(ch.worldId);
   player.setPos(first.x, first.y, first.z);

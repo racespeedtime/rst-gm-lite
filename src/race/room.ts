@@ -568,6 +568,7 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
     mp.cpIndex = -1;
     mp.lap = 0;
     mp.startTime = 0;
+    mp.cpSnapshots = []; // 换赛道：清空旧赛道的回退快照（防按旧赛道车型/time/weather 回撤）
     await positionPlayerAtStart(m, room);
   }
   broadcastToRoom(room, `[赛车] 房主将赛道更换为「${race.name}」，成员已移至起点`);
@@ -621,6 +622,7 @@ export async function restartRace(player: Player): Promise<void> {
     mp.lap = 0;
     mp.startTime = 0;
     mp.finished = false;
+    mp.cpSnapshots = []; // 重开比赛：清空上一场的回退快照（防按旧场车型/time/weather 回撤）
     // 比赛中止重开：停止上一段的比赛自动录制并作废（整场无人完成，无成绩
     // 保留价值；discard 原子落盘即删文件不建 DB 记录），下一场开赛（beginRace）
     // 重新开始录制，两场成绩互不混入
@@ -1760,16 +1762,18 @@ function getRespawnPoint(cp: RaceRoom["cps"][number]): {
 }
 
 /** 重生目标 CP 计算：回退 rollback 格（0 = 回上一 CP = 当前进度；1 = 再往前一个 CP）。
- * 同时算累计序号（回退到该 CP 后玩家"已触达到它"的圈内进度）+ 上一格 CP（画箭头用）。
- * 累计序号 = lap × 一圈CP数 + prevIdx——回退后 lap 不变（回退不会跨圈到上一圈，见
- * 调用方限制），prevIdx 是圈内下标，两者组合定位快照。 */
+ * 已触达 CP 的累计序号与快照写入（onPlayerReachCp）公式一致：lap × 一圈CP数 + cpIndex。
+ * 跨圈瞬间 cpIndex=-1、lap++，该式仍指向刚触达的上一圈末 CP（如 2×len+(-1) = 上一圈第 len-1 个），
+ * 而非"当前圈第一个 CP"——否则跨圈后重生会落在下一目标上、跳过上一圈末到本圈首的路段。
+ * 回退 rollback 格 → 累计序号减 rollback（clamp 到 0 = 第一 CP）；位置/箭头用 cumIdx % len 取圈内下标。 */
 function computeTargetCp(
   pr: PlayerRace,
   room: RaceRoom,
   rollback = 0,
 ): { prevIdx: number; cumIdx: number; prev: RaceRoom["cps"][number] | undefined } {
-  const prevIdx = Math.max(0, pr.cpIndex - rollback);
-  return { prevIdx, cumIdx: pr.lap * room.cps.length + prevIdx, prev: room.cps[prevIdx] };
+  const cumIdx = Math.max(0, pr.lap * room.cps.length + pr.cpIndex - rollback);
+  const prevIdx = cumIdx % room.cps.length;
+  return { prevIdx, cumIdx, prev: room.cps[prevIdx] };
 }
 
 /** 回撤重生目标的状态（回放式状态回撤）：
@@ -1780,7 +1784,6 @@ function computeTargetCp(
 function applyRollbackState(
   player: Player,
   pr: PlayerRace,
-  room: RaceRoom,
   target: ReturnType<typeof computeTargetCp>,
 ): void {
   const snap = pr.cpSnapshots[target.cumIdx];
@@ -1835,7 +1838,7 @@ function respawnPlayerToCp(
   player.setSpawnInfo(0, player.getSkin(), pt.x, pt.y, pt.z, pt.angle, 0, 0, 0, 0, 0, 0);
   player.spawn();
   respawnToCpCore(player, room, target);
-  applyRollbackState(player, pr, room, target);
+  applyRollbackState(player, pr, target);
   player.sendClientMessage(
     COLOR_RACE,
     `[赛车] 已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`,
@@ -1852,7 +1855,7 @@ export function respawnToLastCp(
   const target = computeTargetCp(pr, room, rollback);
   if (!target.prev) return;
   respawnToCpCore(player, room, target);
-  applyRollbackState(player, pr, room, target);
+  applyRollbackState(player, pr, target);
   player.sendClientMessage(
     COLOR_RACE,
     `[赛车] 已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`,
@@ -1863,9 +1866,10 @@ export function respawnToLastCp(
  * colandreas 抬不动），重生会落空/卡空——回退到更早一个 CP，并恢复该 CP 触达后的状态
  * （cveh 车型 / time / weather，回放式状态回撤）。 */
 export function rollbackToPrevCp(player: Player, pr: PlayerRace, room: RaceRoom): void {
-  // 当前已触达 CP ≤ 1（起点 / 刚过第一个 / 刚跨圈重计 cpIndex=-1）：没有更早的
-  // 不同 CP 可回退（此时回退一格与回上一 CP 目标相同，无意义）
-  if (pr.cpIndex < 1) {
+  // 已触达累计序号 < 1（起点 / 刚过第一个 CP / 第一圈未过任何 CP）→ 没有更早的
+  // 不同 CP 可回退（回退会 clamp 到同一目标）。跨圈后 cpIndex=-1 但累计序号
+  // lap×len-1 ≥ len-1，回退目标 = 上一圈末 CP 的前一个，有效。
+  if (pr.lap * room.cps.length + pr.cpIndex < 1) {
     player.sendClientMessage(COLOR_ERROR, "[赛车] 当前进度没有更早的检查点可回退");
     return;
   }

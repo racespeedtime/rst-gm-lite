@@ -139,7 +139,10 @@ const panelGroups: PanelGroup[] = [
         visible: (player) => {
           const pr = getRacePlayerState(player.id);
           const room = pr ? getRaceRoom(pr.roomId) : undefined;
-          return !!room && room.state === "RACING" && !!pr && pr.cpIndex >= 1;
+          // 已触达累计序号 ≥ 1（跨圈后 cpIndex=-1 但累计序号仍指向上一圈末 CP）
+          return (
+            !!room && room.state === "RACING" && !!pr && pr.lap * room.cps.length + pr.cpIndex >= 1
+          );
         },
         run: (player) => {
           const pr = getRacePlayerState(player.id);
