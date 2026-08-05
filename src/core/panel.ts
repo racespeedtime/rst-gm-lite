@@ -22,6 +22,7 @@ import {
   startRace,
   leaveRace,
   respawnToLastCp,
+  rollbackToPrevCp,
   openChangeTrackMenu,
   restartRace,
 } from "@/race/room";
@@ -127,6 +128,26 @@ const panelGroups: PanelGroup[] = [
             respawnToLastCp(player, pr, room);
           } else {
             player.spawn();
+          }
+        },
+      },
+      {
+        label: "回退到更早检查点",
+        raceSafe: true,
+        // 再往前回退一个 CP（上一 CP 在空中/无落点重生落空时的兜底）；
+        // 同步回撤该 CP 触达后的状态（cveh 车型/time/weather）。仅开跑后显示
+        visible: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          return !!room && room.state === "RACING" && !!pr && pr.cpIndex >= 1;
+        },
+        run: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          if (pr && room && room.state === "RACING") {
+            rollbackToPrevCp(player, pr, room);
+          } else {
+            player.sendClientMessage(COLOR_ERROR, "[赛车] 当前不在比赛中");
           }
         },
       },

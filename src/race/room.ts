@@ -92,6 +92,19 @@ interface PlayerRace {
   finished: boolean;
   /** 加入比赛前的世界（开赛切独立世界，离开/结束时恢复） */
   prevWorld: number;
+  /** 过 CP 后（脚本执行完）的状态快照，按"比赛累计 CP 序号"索引：
+   *  k = lap × 一圈CP数 + cpIndex（跨圈瞬间 cpIndex=-1、lap++，公式仍指向该 CP）。
+   *  记录 cveh 换车后的车型 + time/weather 脚本结果——重生多回退一格时
+   *  恢复目标 CP 触达后的状态（对齐"回放式状态回撤"，否则车模型/时间天气残留）。 */
+  cpSnapshots: CpSnapshot[];
+}
+
+/** 触达一个 CP 并执行完脚本后的状态快照（回退重生恢复用） */
+interface CpSnapshot {
+  vehModel: number; // 过该 CP 后玩家座驾车型（cveh 换车后的）
+  hour: number;
+  minute: number;
+  weather: number;
 }
 
 /** 比赛信息 UI（对齐原版 CreatePRaceTextDraw 的 4 行独立 TD） */
@@ -650,6 +663,7 @@ async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
     startTime: 0,
     finished: false,
     prevWorld: player.getVirtualWorld(),
+    cpSnapshots: [],
   });
   await positionPlayerAtStart(player, room);
   // 加入即切到房间世界（等待期/倒计时都在房间世界活动，发车不再临时切）。
@@ -831,6 +845,7 @@ function beginRace(room: RaceRoom): void {
       mp.lap = 0;
       mp.startTime = now;
       mp.finished = false;
+      mp.cpSnapshots = []; // 新一场比赛：清空上场的回退快照
       // 比赛中强制无碰撞（防他人车辆穿模阻挡），结束/离开时按个人设置恢复
       applyRaceNoCollision(m, true);
       // 切到比赛独立世界（车辆同步）
@@ -1074,6 +1089,20 @@ async function onPlayerReachCp(player: Player): Promise<void> {
     logger.error(`[race] CP 脚本执行异常 race=${room.raceId} cp=${nextCp.index}`, e);
     return;
   }
+  // 触达该 CP 并执行完脚本后的状态快照（回退重生恢复用）：cveh 换车后的车型
+  // + time/weather 脚本结果。放在脚本链完整执行之后（execCpScript 里的 spawnpos
+  // 提前 return 或脚本异常都不记账——脚本没跑完，状态未定型）。
+  // 累计序号 = 当前圈 × 一圈CP数 + cpIndex：不跨圈时 cpIndex 即圈内下标（指向刚触达
+  // 的 CP）；跨圈瞬间 cpIndex 已回 -1、lap++，`newLap×len + (-1)` 仍等于刚触达的
+  // 上一圈末 CP 的累计序号。与重生回退的目标序号（computeTargetCp 同式）一致。
+  const t = player.getTime();
+  const cumIdx = pr.lap * room.cps.length + pr.cpIndex;
+  pr.cpSnapshots[cumIdx] = {
+    vehModel: player.isInAnyVehicle() ? player.getVehicle()!.getModel() : 0,
+    hour: t.ret ? t.hour : 12,
+    minute: t.ret ? t.minute : 0,
+    weather: player.getWeather(),
+  };
 }
 
 /** 完成比赛 */
@@ -1730,17 +1759,54 @@ function getRespawnPoint(cp: RaceRoom["cps"][number]): {
   return { x: cp.x, y: cp.y, z: getSafeRespawnZ(cp), angle: cp.angle };
 }
 
-/** 重生回上一 CP（死亡场景：setSpawnInfo + spawn 复活） */
-function respawnPlayerToCp(player: Player, pr: PlayerRace, room: RaceRoom): void {
-  const prevIdx = Math.max(0, pr.cpIndex);
-  const prev = room.cps[prevIdx];
+/** 重生目标 CP 计算：回退 rollback 格（0 = 回上一 CP = 当前进度；1 = 再往前一个 CP）。
+ * 同时算累计序号（回退到该 CP 后玩家"已触达到它"的圈内进度）+ 上一格 CP（画箭头用）。
+ * 累计序号 = lap × 一圈CP数 + prevIdx——回退后 lap 不变（回退不会跨圈到上一圈，见
+ * 调用方限制），prevIdx 是圈内下标，两者组合定位快照。 */
+function computeTargetCp(
+  pr: PlayerRace,
+  room: RaceRoom,
+  rollback = 0,
+): { prevIdx: number; cumIdx: number; prev: RaceRoom["cps"][number] | undefined } {
+  const prevIdx = Math.max(0, pr.cpIndex - rollback);
+  return { prevIdx, cumIdx: pr.lap * room.cps.length + prevIdx, prev: room.cps[prevIdx] };
+}
+
+/** 回撤重生目标的状态（回放式状态回撤）：
+ * - 车模型：目标快照的车型 ≠ 当前车型 → 回退到该车型（cveh 换车场景，否则车模型残留）。
+ *   目标快照缺（比赛开始即回退/无记录）→ 模型不变（只能回退位置）；跳过"过点车"不可逆。
+ * - time/weather：目标快照存在则恢复（time/weather 脚本可逆、覆盖当前即可）。
+ * 快照有 vehModel=0（过点时步行）时保持当前车模型（不把车变没）。 */
+function applyRollbackState(
+  player: Player,
+  pr: PlayerRace,
+  room: RaceRoom,
+  target: ReturnType<typeof computeTargetCp>,
+): void {
+  const snap = pr.cpSnapshots[target.cumIdx];
+  if (snap) {
+    const model = player.isInAnyVehicle() ? player.getVehicle()!.getModel() : 0;
+    if (snap.vehModel && model && model !== snap.vehModel) {
+      void spawnVehicle(player, snap.vehModel, true); // 懒创建爱车，与 cveh 语义一致
+    }
+    player.setTime(snap.hour, snap.minute);
+    player.setWeather(snap.weather);
+  }
+}
+
+/** 重生到指定 CP（位置 + 车就位 + 放回车里）：respawnPlayerToCp / respawnToLastCp 共用。
+ * spawnpos 优先（对齐原版 ReSpawnRaceVehicle），否则 CP 坐标 + colandreas 抬升。
+ * 车完好 → 挪到重生点 + 修复 + 加氮气 + 放回车里；车已毁（爆炸，getOwnedVehicle
+ * 失效）→ 刷默认比赛车兜底（懒创建爱车）——玩家重生后始终有车（对齐原版
+ * ReSpawnRaceVehicle / 本分支"玩家应始终在车上"的语义）。 */
+function respawnToCpCore(
+  player: Player,
+  room: RaceRoom,
+  target: ReturnType<typeof computeTargetCp>,
+): void {
+  const { prevIdx, prev } = target;
   if (!prev) return;
   const pt = getRespawnPoint(prev);
-  player.setSpawnInfo(0, player.getSkin(), pt.x, pt.y, pt.z, pt.angle, 0, 0, 0, 0, 0, 0);
-  player.spawn();
-  // 对齐原版 ReSpawnRaceVehicle（死亡重生 → 把车挪到重生点 + 修复 + 加氮气 + 放回车里）：
-  // 车完好 → 挪到重生点（spawnpos 坐标或 CP 坐标）并放回；车已毁（爆炸，getOwnedVehicle
-  // 失效）→ 刷默认比赛车兜底（懒创建爱车，与 beginRace/reconnect 的无车兜底一致）。
   const owned = getOwnedVehicle(player.id);
   if (owned && owned.isValid()) {
     owned.setPos(pt.x, pt.y, pt.z);
@@ -1753,31 +1819,57 @@ function respawnPlayerToCp(player: Player, pr: PlayerRace, room: RaceRoom): void
     if (owned) destroyPlayerVehicle(player.id); // 清理爆炸后残留的失效实体引用
     void spawnVehicle(player, getDefaultRaceModel(room.cps), true);
   }
-  // 重新显示当前 CP
-  showNextCheckpoint(player, room.cps, pr.cpIndex);
-  player.sendClientMessage(COLOR_RACE, "[赛车] 已重生回上一个检查点");
+  // 重新显示当前 CP（红箭头指向下一个）
+  showNextCheckpoint(player, room.cps, prevIdx);
 }
 
-/** 比赛中重生回上一 CP（/kill 与快捷操作共用） */
-export function respawnToLastCp(player: Player, pr: PlayerRace, room: RaceRoom): void {
-  const prevIdx = Math.max(0, pr.cpIndex);
-  const prev = room.cps[prevIdx];
-  if (!prev) return;
-  const pt = getRespawnPoint(prev);
-  if (player.isInAnyVehicle()) {
-    const veh = player.getVehicle()!;
-    veh.setPos(pt.x, pt.y, pt.z);
-    veh.setZAngle(pt.angle);
-    veh.setHealth(1000);
-    veh.repair();
-  } else {
-    player.setPos(pt.x, pt.y, pt.z);
-    player.setFacingAngle(pt.angle);
-    player.setHealth(100);
+/** 重生回上一 CP（死亡场景：setSpawnInfo + spawn 复活） */
+function respawnPlayerToCp(
+  player: Player,
+  pr: PlayerRace,
+  room: RaceRoom,
+  rollback?: number,
+): void {
+  const target = computeTargetCp(pr, room, rollback);
+  const pt = getRespawnPoint(target.prev!);
+  player.setSpawnInfo(0, player.getSkin(), pt.x, pt.y, pt.z, pt.angle, 0, 0, 0, 0, 0, 0);
+  player.spawn();
+  respawnToCpCore(player, room, target);
+  applyRollbackState(player, pr, room, target);
+  player.sendClientMessage(
+    COLOR_RACE,
+    `[赛车] 已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`,
+  );
+}
+
+/** 比赛中重生回上一 CP（/kill 与快捷操作共用；车就位 + 放回车里） */
+export function respawnToLastCp(
+  player: Player,
+  pr: PlayerRace,
+  room: RaceRoom,
+  rollback?: number,
+): void {
+  const target = computeTargetCp(pr, room, rollback);
+  if (!target.prev) return;
+  respawnToCpCore(player, room, target);
+  applyRollbackState(player, pr, room, target);
+  player.sendClientMessage(
+    COLOR_RACE,
+    `[赛车] 已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`,
+  );
+}
+
+/** 多回退一格重生（面板「回退到更早检查点」）：上一 CP 可能是空中/无落点（无 spawnpos、
+ * colandreas 抬不动），重生会落空/卡空——回退到更早一个 CP，并恢复该 CP 触达后的状态
+ * （cveh 车型 / time / weather，回放式状态回撤）。 */
+export function rollbackToPrevCp(player: Player, pr: PlayerRace, room: RaceRoom): void {
+  // 当前已触达 CP ≤ 1（起点 / 刚过第一个 / 刚跨圈重计 cpIndex=-1）：没有更早的
+  // 不同 CP 可回退（此时回退一格与回上一 CP 目标相同，无意义）
+  if (pr.cpIndex < 1) {
+    player.sendClientMessage(COLOR_ERROR, "[赛车] 当前进度没有更早的检查点可回退");
+    return;
   }
-  // 重新显示当前 CP（红箭头指向下一个）
-  showNextCheckpoint(player, room.cps, pr.cpIndex);
-  player.sendClientMessage(COLOR_RACE, "[赛车] 已重生回上一个检查点");
+  respawnToLastCp(player, pr, room, 1);
 }
 
 /** 开始比赛流程：按赛道名/ID 创建房间；无赛道名或不存在 → 打开赛道列表（含排序） */
@@ -2130,6 +2222,7 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       finished: false,
       // 恢复断线前所在世界（重连时玩家必然在世界 0，不能用作 prevWorld）
       prevWorld: joinedSession ? prevWorld : 0,
+      cpSnapshots: [], // 重连是新连接：回退重生快照从空重建（后续过 CP 重新记录）
     });
     // 切回比赛世界 + 恢复 CP 显示
     player.setVirtualWorld(room.worldId);
