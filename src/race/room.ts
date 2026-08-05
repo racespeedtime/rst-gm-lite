@@ -188,9 +188,10 @@ interface RaceRoom {
       x: number;
       y: number;
       z: number;
-      /** 掉线瞬间原战局房主（getPlayerSession 快照）：worldId 会被解散战局回收
-       *  复用，重连时仅按 worldId 匹配可能塞进无关的新战局——房主一致才认 */
-      sessionOwnerId?: string | null;
+      /** 掉线瞬间原战局 id（callbacks 在 handlePlayerDisconnect 前快照）。sessionId
+       *  自增不复用——重连时按它精确匹配原战局（worldId 会被解散战局回收复用，
+       *  按 worldId 可能塞进无关新战局） */
+      sessionId?: number;
     }
   >;
   /** 本场比赛参与过录制的成员（playerId → userId 快照：房间销毁且无人完成时
@@ -308,10 +309,7 @@ function estimateRaceDurationMs(room: RaceRoom): number {
  * - 短比赛（<2.5 分钟）不支持重连 → 走原断线逻辑
  * - 支持重连的比赛：记录进度快照 + 重连截止时间
  */
-export function cleanupRacePlayer(
-  playerId: number,
-  opts?: { sessionOwnerId?: string | null },
-): void {
+export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number }): void {
   const pr = playerRaces.get(playerId);
   if (pr) {
     const room = rooms.get(pr.roomId);
@@ -357,12 +355,13 @@ export function cleanupRacePlayer(
           x: dpos?.x ?? 0,
           y: dpos?.y ?? 0,
           z: dpos?.z ?? 0,
-          // 掉线瞬间原战局房主快照（worldId 复用校验用；由 callbacks 在
-          // handlePlayerDisconnect 删 playerSessions 之前传入——onDisconnect 阶段
-          // 再取 getPlayerSession 只会命中公共大世界、恒为 null）
-          sessionOwnerId: opts?.sessionOwnerId,
+          // 掉线瞬间原战局 id 快照（由 callbacks 在 handlePlayerDisconnect 删
+          // playerSessions 之前传入——onDisconnect 阶段再取 getPlayerSession 只会
+          // 命中公共大世界、恒为 0）
+          sessionId: opts?.sessionId,
         });
         room.members.delete(playerId);
+        room.lastPositions.delete(playerId); // 掉线快照缓存随成员移出清理
         playerRaces.delete(playerId);
         // 录制挂起：会话保持、掉线期间 fallbackSample 生成静止帧（车停在掉线
         // 位置、时间流逝），重连成功后 resume 续录——回放完整不中断，能看到
@@ -380,6 +379,7 @@ export function cleanupRacePlayer(
       }
       // 不支持重连或非比赛状态 → 原断线逻辑
       room.members.delete(playerId);
+      room.lastPositions.delete(playerId); // 掉线快照缓存随成员移出清理
       // 房主掉线 → 转移房主
       if (room.ownerId === playerId) {
         const next = [...room.members.keys()][0];
@@ -1572,6 +1572,7 @@ export function leaveRace(player: Player): void {
   const room = rooms.get(pr.roomId);
   if (room) {
     room.members.delete(player.id);
+    room.lastPositions.delete(player.id); // 掉线快照缓存随成员离开清理
     broadcastToRoom(room, `[赛车] ${player.getName().name} 离开了比赛`);
     const tds = room.raceTextTds.get(player.id);
     if (tds) {
@@ -2157,14 +2158,12 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     }
     room.members.set(player.id, player);
     room.raceMembersLast.set(player.id, auth.userId); // 重新登记本场录制成员（userId 快照供离线作废）
-    // 恢复战局归属：prevWorld 对应战局若仍存在（且房主与掉线时一致——worldId 会被
-    // 解散战局回收复用，仅按 worldId 匹配可能塞进无关的新战局）则加回，否则回公共
-    // 大世界并修正 prevWorld=0（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
+    // 恢复战局归属：按掉线时快照的原战局 id 精确匹配（sessionId 自增不复用，战局
+    // 仍在则必然命中原战局——worldId 会被解散战局回收复用，按 worldId 可能塞进
+    // 无关新战局）。战局已解散（查无此 id）→ 回公共大世界并修正 prevWorld=0
+    //（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
     const prevWorld = slot?.prevWorld ?? player.getVirtualWorld();
-    const joinedSession =
-      slot?.sessionOwnerId != null
-        ? sessionManager.rejoinPlayerSessionByWorld(player, prevWorld, slot.sessionOwnerId)
-        : sessionManager.rejoinPlayerSessionByWorld(player, prevWorld);
+    const joinedSession = sessionManager.rejoinPlayerSession(player, slot?.sessionId ?? 0);
     playerRaces.set(player.id, {
       roomId: room.id,
       cpIndex: slot?.cpIndex ?? -1,

@@ -184,8 +184,9 @@ export function startObserveVehicle(
   observer.spectateVehicle(target, SpectateModesEnum.NORMAL);
 }
 
-/** 停止观战（回到观战前的世界/室内） */
-export function stopObserve(player: Player): void {
+/** 停止观战（回到观战前的世界/室内）。quiet=true 时跳过"已关闭观战"提示
+ *（换车重挂等瞬态场景，避免误导刷屏——重挂紧接着 startObserveVehicle） */
+export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
   const state = observeStates.get(player.id);
   if (!state) {
     player.sendClientMessage(COLOR_ERROR, "[TV] 你不在观战状态");
@@ -197,7 +198,30 @@ export function stopObserve(player: Player): void {
   // 恢复观战前所在战局（世界）与室内
   player.setVirtualWorld(state.prevWorld);
   player.setInterior(state.prevInterior);
-  player.sendClientMessage(COLOR_ORANGE, "[TV] 已关闭观战");
+  if (!opts?.quiet) {
+    player.sendClientMessage(COLOR_ORANGE, "[TV] 已关闭观战");
+  }
+}
+
+/** 摘除所有正在观战指定车辆实体的观察者（换车/实体销毁前调用，防 onStreamOut 触发
+ *  suggestStop 弹窗打断观战）。返回被摘除的 (playerId, originPlayerId) 列表，供调用方
+ *  建新车后重挂（startObserveVehicle 保留 originPlayerId 重跟踪语义）。
+ *  覆盖全表而非调用方自己的集合：任何玩家都可能经左右键/cycleObserveTarget 切到
+ *  该车（observeStates 有记录但不属于调用方的 watcher 集合）。 */
+export function detachObservingVehicle(
+  targetId: number,
+): { playerId: number; originPlayerId?: number }[] {
+  const detached: { playerId: number; originPlayerId?: number }[] = [];
+  for (const [pid, st] of observeStates) {
+    if (st.kind === "vehicle" && st.targetId === targetId) {
+      const observer = Player.getInstance(pid);
+      if (observer && observer.isConnected()) {
+        stopObserve(observer, { quiet: true }); // 瞬态重挂：不弹"已关闭观战"
+        detached.push({ playerId: pid, originPlayerId: st.originPlayerId });
+      }
+    }
+  }
+  return detached;
 }
 
 /** 清理（断线时） */

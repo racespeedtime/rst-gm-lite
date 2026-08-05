@@ -19,7 +19,7 @@ import {
   startObserveVehicle,
   stopObserve,
   isObserving,
-  getObserveTarget,
+  detachObservingVehicle,
   registerObserveCandidate,
   unregisterObserveCandidate,
 } from "@/core/observe";
@@ -425,21 +425,13 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
   try {
     const pos = ghost.vehicle.getPos();
     const oldVehId = ghost.vehicle.id; // 换车前先记录旧车 id（换后观战重挂匹配用）
-    // 换车前先摘除观战旧车的观察者：destroy 会触发旧车对观察者的 onStreamOut →
+    // 换车前先摘除观战旧车的所有观察者：destroy 会触发旧车对观察者的 onStreamOut →
     // retracePlayer → suggestStop 弹"对象已无法跟踪"对话框，用户点"是"会撤销后面的
-    // 重挂（并把观战者踢出回放世界）。先 stopObserve 清掉观战态，onStreamOut 不再
-    // 走 suggestStop；建新车后再重挂（stopObserve 恢复 prevWorld 与 startObserveVehicle
-    // 切回回放世界在同一同步函数内，无感知）
-    const reattach: { w: Player; origin?: number }[] = [];
-    for (const wid of session.watchers) {
-      const w = Player.getInstance(wid);
-      if (!w || !w.isConnected() || !isObserving(wid)) continue;
-      const st = getObserveTarget(wid);
-      if (st?.kind === "vehicle" && st.targetId === oldVehId) {
-        reattach.push({ w, origin: st.originPlayerId });
-        stopObserve(w);
-      }
-    }
+    // 重挂（并把观战者踢出回放世界）。detachObservingVehicle 覆盖全表（含左右键
+    // 切入但不在 session.watchers 的观战者），先 stopObserve(quiet) 清观战态、
+    // 不触发弹窗；建新车后在同一同步函数内重挂（stopObserve 恢复 prevWorld 与
+    // startObserveVehicle 切回回放世界无感知）
+    const reattach = detachObservingVehicle(oldVehId);
     // 换车型：销毁旧车、建新车、NPC 立即上车（位置延续）
     unregisterObserveCandidate(ghost.vehicle.id, "vehicle"); // 旧车移出观战切换候选
     ghost.vehicle.destroy();
@@ -462,8 +454,11 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
     ghost.vehicle = v;
     registerObserveCandidate(v.id, "vehicle"); // 新车登记进观战切换候选（否则该 ghost 无法被切到）
     // 重挂到新车（startObserveVehicle 保留 originPlayerId，下车后仍能重跟踪）
-    for (const { w, origin } of reattach) {
-      startObserveVehicle(w, v, origin);
+    for (const { playerId, originPlayerId } of reattach) {
+      const w = Player.getInstance(playerId);
+      if (w && w.isConnected()) {
+        startObserveVehicle(w, v, originPlayerId);
+      }
     }
   } catch (e) {
     logger.warn(`[replay] 换车型失败 ${oldModel} -> ${model}`, e);

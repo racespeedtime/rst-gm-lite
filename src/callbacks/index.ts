@@ -121,8 +121,8 @@ async function handlePlayerConnect(player: Player) {
     applyStyleToNewPlayer(player);
     // 掉线重连：若断线窗口未过期则恢复原比赛房间（跳过大厅/出生流程）
     if (await tryReconnectRace(player)) {
-      // 重连路径：战局归属已由 tryReconnectRace 内的 rejoinPlayerSessionByWorld
-      // 注册（prevWorld 战局仍存在则加回，否则回公共大世界）——不能再调
+      // 重连路径：战局归属已由 tryReconnectRace 内的 rejoinPlayerSession
+      // 注册（原战局按 sessionId 仍存在则加回，否则回公共大世界）——不能再调
       // onPlayerAuthenticated，否则会把玩家塞回 publicWorld 造成双注册/注册错乱
       initChatState(player.id);
       // 重连是全新连接：removeBuilding（房屋建筑移除）与物件显隐是 per-player
@@ -199,10 +199,10 @@ PlayerEvent.onDisconnect(({ player, reason, next }) => {
   // 注意顺序：战局处理需要认证状态（房主判断），须在清理 auth 之前执行。
   // reason：SA-MP disconnect reason（0=掉线/超时崩溃 1=正常退出 2=Kick/Ban），
   // 战局广播按下线理由展示（对齐原版 disconnectReasons 文案）
-  // 掉线玩家原战局房主快照：必须在 handlePlayerDisconnect（内部删 playerSessions）
-  // 之前取，否则 cleanupRacePlayer 里 getPlayerSession 命中公共大世界、快照恒为
-  // null——重连时 worldId 复用校验会失效（见 room.ts reconnect slot sessionOwnerId）
-  const leavingSessionOwner = sessionManager.getPlayerSession(player).ownerUserId;
+  // 掉线玩家原战局 id 快照：必须在 handlePlayerDisconnect（内部删 playerSessions）
+  // 之前取，否则 cleanupRacePlayer 里再取 getPlayerSession 命中公共大世界、快照
+  // 恒为 0——重连时按 sessionId 匹配失效（见 room.ts reconnect slot sessionId）
+  const leavingSessionId = sessionManager.getPlayerSession(player).id;
   sessionManager.handlePlayerDisconnect(player, reason);
   // 断开前最后保存一次在线位置（失败由定时保存兜底）。
   // 必须在 cleanupRacePlayer 之前：此时玩家还在比赛中（比赛世界），
@@ -219,8 +219,8 @@ PlayerEvent.onDisconnect(({ player, reason, next }) => {
   cleanupLoginSpawned(player.id);
   // 装扮：清理挂载对象
   cleanupAttire(player.id);
-  // 比赛：退出比赛房间/编辑模式（传战局房主快照：重连窗口记录原战局归属）
-  cleanupRacePlayer(player.id, { sessionOwnerId: leavingSessionOwner });
+  // 比赛：退出比赛房间/编辑模式（传原战局 id 快照：重连窗口按 sessionId 恢复归属）
+  cleanupRacePlayer(player.id, { sessionId: leavingSessionId });
   exitEdit(player.id);
   // 观察：清理观战状态
   cleanupObserve(player.id);
