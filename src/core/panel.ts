@@ -24,9 +24,9 @@ import {
   leaveRace,
   respawnToLastCp,
   rollbackToPrevCp,
-  openChangeTrackMenu,
   restartRace,
 } from "@/race/room";
+import { openChangeTrackMenu } from "@/race/roomUi";
 import { isEditing, exitEdit } from "@/race/editor";
 import { showMySessionLogs } from "@/auth/sessionLog";
 import { showMyProfile } from "@/core/profile";

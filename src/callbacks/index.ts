@@ -26,6 +26,7 @@ import {
 } from "@/house";
 import { applyPlayerPreset, cleanupAttire, cleanupOrphanPresets, initAttireEditor } from "@/attire";
 import { initRaceSystem, cleanupRacePlayer, tryReconnectRace, isInRace } from "@/race/room";
+import { initRaceUi } from "@/race/roomUi";
 import { initRaceEditor, exitEdit } from "@/race/editor";
 import { initRaceCommands } from "@/race/manage";
 import { initObserve, cleanupObserve } from "@/core/observe";
@@ -341,6 +342,7 @@ GameMode.onExit(({ next }) => {
 
 // 赛车系统（比赛房间 + 赛道编辑 + 赛道管理命令）
 initRaceSystem();
+initRaceUi(); // /r 命令入口 + 赛道列表/创建/编辑对话框（与比赛状态机分离的 UI 层）
 initRaceEditor();
 initRaceCommands();
 
