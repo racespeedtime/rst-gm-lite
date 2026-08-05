@@ -12,7 +12,12 @@ import {
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import { getOwnedVehicle, spawnVehicle, destroyPlayerVehicle } from "@/vehicles";
+import {
+  getOwnedVehicle,
+  spawnVehicle,
+  destroyPlayerVehicle,
+  addVehicleComponentIfPossible,
+} from "@/vehicles";
 import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scripts";
 import {
   isEditing,
@@ -147,6 +152,9 @@ interface RaceRoom {
     scripts: string[];
   }[];
   results: { playerId: number; time: number; name: string }[];
+  /** 挂机检测：playerId -> 上次采样位置 + 已静止累计毫秒（仅 RACING 检测；
+   *  对齐原版 AFKTimes 每秒位移 <0.001 累计 45 秒移出赛道） */
+  afk: Map<number, { x: number; y: number; z: number; idleMs: number }>;
   countdownTimer?: NodeJS.Timeout;
   endTimer?: NodeJS.Timeout;
   /** 每个成员的比赛信息 TextDraw（playerId -> 4 行 TD，开赛时创建） */
@@ -506,6 +514,7 @@ export async function createRaceRoom(
       scripts: c.raceCpScripts.map((s) => s.script),
     })),
     results: [],
+    afk: new Map(),
     raceTextTds: new Map(),
     bestTimes: new Map(),
     resultIndex: new Map(),
@@ -578,6 +587,7 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
     scripts: c.raceCpScripts.map((s) => s.script),
   }));
   room.bestTimes.clear(); // 新赛道 BEST 缓存失效（重查）
+  room.afk.clear(); // 新赛道：清挂机记录
   // 重定位所有成员：进度重置 + 起点 + TD 刷新 + CP 箭头重建
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
@@ -629,6 +639,7 @@ export async function restartRace(player: Player): Promise<void> {
   //（否则窗口玩家重连会用旧赛进度恢复——CP/排名/计时全错）
   room.reconnectUntil.clear();
   room.reconnectSlots.clear();
+  room.afk.clear(); // 重开是新比赛：清挂机记录
   // 成员重置：退出观战（防 putPlayerIn 无效）+ 进度清零 + 回起点 + TD/CP 重建
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
@@ -864,6 +875,7 @@ function beginRace(room: RaceRoom): void {
       mp.startTime = now;
       mp.finished = false;
       mp.cpSnapshots = []; // 新一场比赛：清空上场的回退快照
+      room.afk.delete(m.id);
       // 比赛中强制无碰撞（防他人车辆穿模阻挡），结束/离开时按个人设置恢复
       applyRaceNoCollision(m, true);
       // 切到比赛独立世界（车辆同步）
@@ -1520,7 +1532,41 @@ function tickRooms(): void {
       cleanupExpiredReconnects(room);
     }
     if (room.state !== "RACING") continue;
-    // 收集成员快照与进度
+    // 挂机检测（对齐原版 AFKTimes：静止累计超时移出比赛，防占坑不跑）。
+    // 200ms tick 采样位置：位移 < 阈值判静止累计（每 tick 固定 +200ms，与 tickRooms
+    // 周期一致），有位移清零；累计超 30 秒提示一次、45 秒移出（leaveRace 广播 +
+    // 清成员 + 录制落盘）。断线玩家已在重连窗口不在 members。
+    const AFK_IDLE_MS = 45_000;
+    const AFK_WARN_MS = 30_000;
+    const AFK_MOVE_EPS = 0.05; // 200ms 内位移 < 0.05（≈0.25m/s）判静止
+    const AFK_TICK_MS = 200;
+    for (const m of room.members.values()) {
+      const pos = m.getPos();
+      const st = room.afk.get(m.id);
+      if (!st) {
+        room.afk.set(m.id, { x: pos.x, y: pos.y, z: pos.z, idleMs: 0 });
+        continue;
+      }
+      const dx = pos.x - st.x;
+      const dy = pos.y - st.y;
+      const dz = pos.z - st.z;
+      if (Math.hypot(dx, dy, dz) < AFK_MOVE_EPS) {
+        const idleMs = st.idleMs + AFK_TICK_MS;
+        if (idleMs >= AFK_IDLE_MS) {
+          room.afk.delete(m.id);
+          m.sendClientMessage(COLOR_RACE, "[赛车] 挂机时间过长，已移出比赛");
+          leaveRace(m);
+          continue;
+        }
+        if (idleMs >= AFK_WARN_MS && st.idleMs < AFK_WARN_MS) {
+          m.sendClientMessage(COLOR_RACE, "[赛车] 检测到长时间静止，即将移出比赛（挂机检测）");
+        }
+        room.afk.set(m.id, { x: pos.x, y: pos.y, z: pos.z, idleMs });
+      } else {
+        room.afk.set(m.id, { x: pos.x, y: pos.y, z: pos.z, idleMs: 0 });
+      }
+    }
+    // 采集成员快照与进度
     const rows: {
       playerId: number;
       totalCp: number; // 完成 CP 总数（圈数 x CP数 + 当前圈内 CP）
@@ -1849,7 +1895,7 @@ function respawnToCpCore(
     owned.setZAngle(pt.angle);
     owned.setHealth(1000);
     owned.repair();
-    owned.addComponent(1010);
+    addVehicleComponentIfPossible(owned, 1010);
     owned.putPlayerIn(player, 0);
   } else {
     if (owned) destroyPlayerVehicle(player.id); // 清理爆炸后残留的失效实体引用

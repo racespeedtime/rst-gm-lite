@@ -13,7 +13,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isInRace } from "@/race/room";
 import { isInChallenge } from "./challenge";
-import { getOwnedVehicle } from "@/vehicles";
+import { getOwnedVehicle, addVehicleComponentIfPossible } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import {
   startObserveVehicle,
@@ -438,7 +438,7 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
     v.create();
     v.setVirtualWorld(session.worldId);
     v.linkToInterior(0);
-    v.addComponent(1010); // 氮气（换车型后新车同样带，对齐录制时玩家爱车）
+    addVehicleComponentIfPossible(v, 1010); // 氮气（换车型后新车同样带，对齐录制时玩家爱车）
     v.setHealth(1000);
     ghost.npc.setVirtualWorld(session.worldId);
     ghost.npc.putInVehicle(v, 0);
@@ -559,7 +559,7 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     // （否则氮气耗尽后 keys 仍按住却不喷，表现断断续续像点按；播完不再补）。
     if (s.keys & KeysEnum.SPRINT && !atEnd && now - ghost.lastNitroAt >= 500) {
       ghost.lastNitroAt = now;
-      ghost.vehicle.addComponent(1010);
+      addVehicleComponentIfPossible(ghost.vehicle, 1010);
     }
     // 血量由 emulate 的 vehicleHealth 处理，无需显式 setHealth（重复操作）
     emulateDriverSync(ghost.npcPlayerId, ghost.vehicle, s, atEnd);
@@ -822,7 +822,7 @@ export async function spawnReplay(
         vehicle.create();
         vehicle.setVirtualWorld(worldId);
         vehicle.linkToInterior(0);
-        vehicle.addComponent(1010); // 氮气（录制时玩家爱车带氮气，回放车一致）
+        addVehicleComponentIfPossible(vehicle, 1010); // 氮气（录制时玩家爱车带氮气，回放车一致）
         // 锁门防玩家开走 ghost 车（回放车只可看不可开；NPC 已在车内不受影响）
         vehicle.setParamsEx(true, false, false, true, false, false, false);
         npc.setVirtualWorld(worldId);

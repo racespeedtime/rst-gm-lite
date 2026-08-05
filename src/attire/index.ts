@@ -12,7 +12,7 @@ import {
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import { getOwnedVehicle } from "@/vehicles";
+import { getOwnedVehicle, addVehicleComponentIfPossible } from "@/vehicles";
 import { invalidateSettingCache, getSetting } from "@/personalize/settings";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
@@ -177,7 +177,7 @@ export async function applyVehiclePreset(
   if (preset.modComponents) {
     for (const c of preset.modComponents.split(" ")) {
       const id = Number(c);
-      if (Number.isInteger(id) && id > 0) vehicle.addComponent(id);
+      if (Number.isInteger(id) && id > 0) addVehicleComponentIfPossible(vehicle, id);
     }
   }
   if (!showAttire) return [];

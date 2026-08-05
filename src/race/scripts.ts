@@ -1,7 +1,12 @@
 import { Player, Vehicle } from "@infernus/core";
 import { logger } from "@/logger";
 import { isValidVehicleModel } from "@/vehicles/catalog";
-import { destroyPlayerVehicle, getOwnedVehicle, registerOwnedVehicle } from "@/vehicles";
+import {
+  destroyPlayerVehicle,
+  getOwnedVehicle,
+  registerOwnedVehicle,
+  addVehicleComponentIfPossible,
+} from "@/vehicles";
 
 import { COLOR_RACE, COLOR_ERROR } from "@/utils/colors";
 
@@ -228,7 +233,7 @@ export function execCpScript(
       v.create();
       v.setVirtualWorld(player.getVirtualWorld());
       v.linkToInterior(player.getInterior());
-      v.addComponent(1010); // 氮气（对齐比赛默认车/编辑器车，cveh 换出的新车同样带）
+      addVehicleComponentIfPossible(v, 1010); // 氮气（对齐比赛默认车/编辑器车，cveh 换出的新车同样带）
       v.putPlayerIn(player, 0);
       // 恢复原速（司机/乘客一律恢复，对齐原版 SetVehicleVelocity 无条件执行）
       if (oldVelo) {

@@ -56,6 +56,20 @@ export function destroyPlayerVehicle(playerId: number): void {
   cleanupAttire(playerId);
 }
 
+/** 安全加车辆组件：先校验车型能否装该组件（VehicleCanHaveComponent），能装才装。
+ * 氮气(1010)/预设改装件统一走这里——避免对不能装的车型（飞机/船等）发无效
+ * AddVehicleComponent（SA native 对无效组件返回 false 静默忽略，但先查更明确且
+ * 避免无效 native 调用）。 */
+export function addVehicleComponentIfPossible(vehicle: Vehicle, componentId: number): void {
+  try {
+    if (vehicle.isValid() && vehicle.canHaveComponent(componentId)) {
+      vehicle.addComponent(componentId);
+    }
+  } catch {
+    // 实体已失效等，忽略
+  }
+}
+
 /**
  * 懒创建 user_vehicle 行：
  * 刷车时按 (user, modelId) 查库，有则复用（含默认预设/外观），无则新建默认行。
@@ -124,7 +138,7 @@ export async function spawnVehicle(
     playerVehs.set(player.id, veh);
     veh.setVirtualWorld(player.getVirtualWorld());
     veh.linkToInterior(player.getInterior());
-    veh.addComponent(1010); // 氮气
+    addVehicleComponentIfPossible(veh, 1010); // 氮气
     // 应用完整预设外观（颜色/paintjob/改装件 + 挂件），默认预设挂件也自动生效
     // （改装店装的 mod 已存进默认预设 mod_components，重刷车随预设一起应用）
     await applyVehiclePreset(veh, uv.defaultPresetId, player.id);
@@ -224,7 +238,7 @@ export function summonMyVehicle(player: Player): void {
   veh.setZAngle(angle);
   veh.setVirtualWorld(player.getVirtualWorld());
   veh.linkToInterior(player.getInterior());
-  veh.addComponent(1010);
+  addVehicleComponentIfPossible(veh, 1010);
   veh.putPlayerIn(player, 0);
   player.sendClientMessage(COLOR_SUCCESS, "爱车已召唤到身边");
 }
@@ -356,6 +370,56 @@ export function initVehicleCommands(): void {
         });
       } catch (e) {
         logger.error(`[veh] ${player.getName().name} 存储改装件失败 model=${modelId}`, e);
+      }
+    })();
+    return next();
+  });
+
+  // 改装店喷漆存储：OnVehiclePaintjob 喷漆（paintjob 0-3）触发 → 存到该爱车的
+  // 当前默认预设 vehiclePreset.paintjob（对齐 onMod 的存档模式；仅自己的车）。
+  // 刷车/重刷车 applyVehiclePreset 会应用 paintjob（attire/index.ts:176）
+  VehicleEvent.onPaintjob(({ player, vehicle, paintjobId, next }) => {
+    if (player.isNpc()) return next();
+    // 仅自己的爱车：改装店能开进别人的车，但喷漆归属按车主存储
+    if (getOwnedVehicle(player.id) !== vehicle) return next();
+    const auth = getAuthState(player.id);
+    if (!auth) return next();
+    const modelId = vehicle.getModel();
+    void (async () => {
+      try {
+        // 事务内"取默认预设（无则懒创建并设为默认）→ 写 paintjob"原子完成
+        await prisma.$transaction(async (tx) => {
+          const uv = await tx.userVehicle.findUnique({
+            where: { userId_modelId: { userId: auth.userId, modelId } },
+          });
+          let presetId = uv?.defaultPresetId ?? null;
+          if (!presetId) {
+            const maxIdx = await tx.vehiclePreset.findFirst({
+              where: { userId: auth.userId, modelId, deletedAt: null },
+              orderBy: { index: "desc" },
+              select: { index: true },
+            });
+            const created = await tx.vehiclePreset.create({
+              data: {
+                userId: auth.userId,
+                modelId,
+                index: (maxIdx?.index ?? -1) + 1,
+                name: null,
+              },
+            });
+            presetId = created.id;
+            await tx.userVehicle.update({
+              where: { userId_modelId: { userId: auth.userId, modelId } },
+              data: { defaultPresetId: created.id },
+            });
+          }
+          await tx.vehiclePreset.update({
+            where: { id: presetId },
+            data: { paintjob: paintjobId },
+          });
+        });
+      } catch (e) {
+        logger.error(`[veh] ${player.getName().name} 存储喷漆失败 model=${modelId}`, e);
       }
     })();
     return next();
