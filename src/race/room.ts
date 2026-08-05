@@ -7,11 +7,12 @@ import {
   RaceCheckpoint,
   RaceCpEvent,
   TextDraw,
+  VehicleEvent,
 } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
+import { getOwnedVehicle, spawnVehicle, destroyPlayerVehicle } from "@/vehicles";
 import { execCpScript, cleanupScriptVehicle, type CpScriptContext } from "./scripts";
 import { isEditing, enterRaceEdit, canEditRace, addCp, showEditMenu, exitEdit } from "./editor";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
@@ -1647,6 +1648,30 @@ export function initRaceSystem(): void {
     }
     return next();
   });
+
+  // 比赛中座驾被毁（爆炸/损毁，respawnDelay=0 不会自动重生）：司机存活 → 当场刷
+  // 默认比赛车继续；司机死亡 → 由上面的死亡重生路径兜底补车（respawnPlayerToCp 的
+  // "车已毁则刷默认比赛车"），这里不重复刷。否则爆车后玩家只能步行跑完（原版
+  // respawnDelay 车死后也是重建 + PutPlayerInVehicle 语义）。
+  VehicleEvent.onDeath(({ vehicle, next }) => {
+    const driver = vehicle.getLastDriver();
+    if (
+      driver &&
+      driver.isConnected() &&
+      !driver.isNpc() &&
+      !driver.isWasted() &&
+      isInRace(driver.id)
+    ) {
+      const pr = playerRaces.get(driver.id);
+      const room = pr ? rooms.get(pr.roomId) : undefined;
+      if (room && room.state === "RACING" && getOwnedVehicle(driver.id) === vehicle) {
+        destroyPlayerVehicle(driver.id); // 清理爆炸后残留的失效实体引用
+        void spawnVehicle(driver, getDefaultRaceModel(room.cps), true);
+        driver.sendClientMessage(COLOR_RACE, "[赛车] 车辆已损毁，自动刷出比赛用车");
+      }
+    }
+    return next();
+  });
 }
 
 /**
@@ -1670,6 +1695,22 @@ function respawnPlayerToCp(player: Player, pr: PlayerRace, room: RaceRoom): void
   const z = getSafeRespawnZ(prev);
   player.setSpawnInfo(0, player.getSkin(), prev.x, prev.y, z, prev.angle, 0, 0, 0, 0, 0, 0);
   player.spawn();
+  // 对齐原版 ReSpawnRaceVehicle（死亡重生 → 把车挪到 CP + 修复 + 加氮气 + 放回车里）：
+  // 车完好 → 挪到 CP 并放回；车已毁（爆炸，getOwnedVehicle 失效）→ 刷默认比赛车兜底
+  //（懒创建爱车，与 beginRace/reconnect 的无车兜底一致）。否则玩家死亡重生后只能
+  // 步行跑完（原版重生的核心就是"人车一起回 CP"）。
+  const owned = getOwnedVehicle(player.id);
+  if (owned && owned.isValid()) {
+    owned.setPos(prev.x, prev.y, z);
+    owned.setZAngle(prev.angle);
+    owned.setHealth(1000);
+    owned.repair();
+    owned.addComponent(1010);
+    owned.putPlayerIn(player, 0);
+  } else {
+    if (owned) destroyPlayerVehicle(player.id); // 清理爆炸后残留的失效实体引用
+    void spawnVehicle(player, getDefaultRaceModel(room.cps), true);
+  }
   // 重新显示当前 CP
   showNextCheckpoint(player, room.cps, pr.cpIndex);
   player.sendClientMessage(COLOR_RACE, "[赛车] 已重生回上一个检查点");
