@@ -391,9 +391,14 @@ function cleanupExpiredReconnects(room: RaceRoom): void {
       room.reconnectSlots.delete(uid);
       // 重连超时：挂起中的录制落盘保留（未完成段，含掉线静止帧——玩家没回来，
       // 录像停在原地；无人完成则由房间销毁路径作废）。用 slot.playerId（掉线时
-      // 的 id）找挂起会话——挂起会话键控在 playerId 上
+      // 的 id）找挂起会话——挂起会话键控在 playerId 上。归属校验：断线期间该
+      // playerId 可能被新连接复用并开了别的房间的录制，不能误停别人的活跃会话
+      //（与 endRoom/checkRoomState 的 raceRoomId 校验一致）
       if (slot && isRecording(slot.playerId)) {
-        void stopRecording(slot.playerId, { quiet: true });
+        const rec = getRecording(slot.playerId);
+        if (!rec || !rec.raceRoomId || rec.raceRoomId === room.id) {
+          void stopRecording(slot.playerId, { quiet: true });
+        }
       }
       // 房主重连窗口过期 → 转移房主
       if (slot && room.ownerUserId === uid) {
@@ -671,10 +676,14 @@ export async function restartRace(player: Player): Promise<void> {
     void stopRecording(m.id, { quiet: true, discard: true });
     await positionPlayerAtStart(m, room);
   }
-  // 挂起中的掉线会话（掉线未重连）跨场丢弃：上一场已中止，静止段无续录意义
+  // 挂起中的掉线会话（掉线未重连）跨场丢弃：上一场已中止，静止段无续录意义。
+  // 归属校验：断线玩家 playerId 可能被复用开了别的房间录制，不能误丢
   for (const pid of room.raceMembersLast.keys()) {
     if (!playerRaces.has(pid) && isRecording(pid)) {
-      dropRecording(pid);
+      const rec = getRecording(pid);
+      if (!rec || !rec.raceRoomId || rec.raceRoomId === room.id) {
+        dropRecording(pid);
+      }
     }
   }
   if (wasRunning) {
@@ -1601,6 +1610,12 @@ function tickRooms(): void {
     const AFK_MOVE_EPS = 0.1;
     const AFK_TICK_MS = 200;
     for (const m of room.members.values()) {
+      // 已完赛者跳过：停在终点等待结算/观战，位移恒 <0.1，不挂机检测
+      //（多圈赛道早完赛者 idle 超 45s 会被误踢出房间、错过结算）
+      if (playerRaces.get(m.id)?.finished) {
+        room.afk.delete(m.id);
+        continue;
+      }
       const pos = m.getPos();
       const st = room.afk.get(m.id);
       if (!st) {
@@ -2470,6 +2485,9 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     if (slot && slot.x !== 0) {
       player.setPos(slot.x, slot.y, slot.z);
     }
+    // 清挂机采样：playerId 键可能继承掉线前的静止累计（重连后停在原地没立刻开
+    // 车会误判"即将移出比赛"），且重连玩家是新上下文，从零开始累计
+    room.afk.delete(player.id);
     if (room.state === "RACING") {
       // 回放：恢复挂起的录制（同一会话续录，掉线静止帧衔接无缝；若挂起会话
       // 已被其他路径处理——超时落盘/房间销毁/重开丢弃——resume 无会话可恢复，

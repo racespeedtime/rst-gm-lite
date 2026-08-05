@@ -12,6 +12,8 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { cleanupAttire, applyVehiclePreset } from "@/attire";
 import { isInRace } from "@/race/room";
+import { isInChallenge } from "@/replay/challenge";
+import { sysMsg } from "@/utils/msg";
 import { isPlayerLocked } from "@/core/interaction";
 import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
 import { syncVehicleAutoState } from "@/core/vehicleAuto";
@@ -21,7 +23,7 @@ import { DEFAULT_CHARSET } from "@/utils/constants";
 import { VEHICLE_CATEGORIES, vehicleName, isValidVehicleModel } from "./catalog";
 import type { UserVehicleModel } from "@/prisma/generated/prisma/models/UserVehicle";
 
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, COLOR_WARN } from "@/utils/colors";
+import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 /** 车辆位置保存间隔（毫秒） */
 const SAVE_INTERVAL_MS = 30_000;
 
@@ -226,8 +228,8 @@ export function onPlayerDisconnectVehicle(player: Player): void {
 /** 召唤当前爱车到身边并上车（/c wode · /cars wode 共用） */
 export function summonMyVehicle(player: Player): void {
   const veh = playerVehs.get(player.id);
-  if (!veh) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先 /c 车辆ID 刷车");
+  if (!veh || !veh.isValid()) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有爱车（或已损毁），先 /c 车辆ID 刷车");
     return;
   }
   const pos = player.getPos();
@@ -246,8 +248,8 @@ export function summonMyVehicle(player: Player): void {
 /** 锁/解锁当前爱车（/c lock · /cars lock 共用；状态落库） */
 export async function toggleMyVehicleLock(player: Player): Promise<void> {
   const veh = playerVehs.get(player.id);
-  if (!veh) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有车");
+  if (!veh || !veh.isValid()) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有车（或已损毁）");
     return;
   }
   const { doors } = veh.getParamsEx();
@@ -266,8 +268,8 @@ export async function toggleMyVehicleLock(player: Player): Promise<void> {
 /** 更换当前爱车颜色（/cc · /c color · /cars color 共用） */
 export function changeMyVehicleColor(player: Player, c1: number, c2: number): void {
   const veh = playerVehs.get(player.id);
-  if (!veh) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有刷过车，先 /c 车辆ID 刷车");
+  if (!veh || !veh.isValid()) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有车（或已损毁），先 /c 车辆ID 刷车");
     return;
   }
   veh.changeColors(c1, c2);
@@ -277,8 +279,8 @@ export function changeMyVehicleColor(player: Player, c1: number, c2: number): vo
 /** 更换当前爱车车牌（/c chepai · /cars chepai 共用；落库） */
 export async function setMyVehiclePlate(player: Player, plate: string): Promise<void> {
   const veh = playerVehs.get(player.id);
-  if (!veh) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有车");
+  if (!veh || !veh.isValid()) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有车（或已损毁）");
     return;
   }
   veh.setNumberPlate(plate);
@@ -327,7 +329,12 @@ export function initVehicleCommands(): void {
     const player = Player.getInstance(owner);
     destroyPlayerVehicle(owner); // 清失效实体 + 3D 标签（isValid 内部防护）
     if (player && player.isConnected() && !player.isNpc()) {
-      player.sendClientMessage(COLOR_WARN, "[爱车] 你的爱车已损毁，/c wode 或 /c 车型 重新刷出");
+      // 影子挑战中：ensureChallengeCar 会自动刷车（无感续跑），不提示手动补车
+      if (isInChallenge(player.id)) {
+        sysMsg(player, "challenge", "车辆已损毁，挑战已自动补车", "info");
+      } else {
+        sysMsg(player, "vehicle", "你的爱车已损毁，/c wode 或 /c 车型 重新刷出", "warn");
+      }
     }
     return next();
   });

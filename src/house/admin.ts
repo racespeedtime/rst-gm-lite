@@ -13,7 +13,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
-import { loadAllHouseObjects, unloadAllHouseObjects } from "./index";
+import { loadAllHouseObjects, unloadAllHouseObjects, applyHouseRemovedBuildings } from "./index";
 import { sysMsg } from "@/utils/msg";
 import type { MenuBack } from "@/core/panel";
 
@@ -91,9 +91,14 @@ function parseImportContent(content: string): { type: string; args: string }[] {
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i].trim();
     if (!raw || raw.startsWith("//") || raw.startsWith("#")) continue;
-    const spaceIdx = raw.indexOf(" ");
-    const type = spaceIdx > 0 ? raw.slice(0, spaceIdx).trim() : raw;
-    const args = spaceIdx > 0 ? raw.slice(spaceIdx + 1).trim() : "";
+    // 行尾注释剥离（常见 map 格式："obj 410 0 0 0 // 注释"）：只剥到第一个
+    // 独立注释标记前，避免剥掉 URL 编码文本里的 %2F 等
+    const commentIdx = raw.search(/\s+\/\/|\s+#/);
+    const line = commentIdx >= 0 ? raw.slice(0, commentIdx).trim() : raw;
+    if (!line) continue;
+    const spaceIdx = line.indexOf(" ");
+    const type = spaceIdx > 0 ? line.slice(0, spaceIdx).trim() : line;
+    const args = spaceIdx > 0 ? line.slice(spaceIdx + 1).trim() : "";
     validateModel(type, args, `Line ${i + 1}`);
     entries.push({ type, args });
   }
@@ -121,10 +126,20 @@ function ensureDirs(): void {
   }
 }
 
-/** 重载全部房屋实体（OP 改动后生效；全量重载最可靠——material 材质绑定跨行依赖 obj 表） */
+/** 重载全部房屋实体（OP 改动后生效；全量重载最可靠——material 材质绑定跨行依赖 obj 表）。
+ * 重载后对在线玩家重新应用 removeobj（removeBuilding 无撤销 API，旧集合的移除无法
+ * 回滚，但新集合立即生效——否则新增的 removeobj 要等玩家重登才移除）*/
 async function reloadHouseObjects(): Promise<void> {
   unloadAllHouseObjects();
   await loadAllHouseObjects();
+  for (const p of Player.getInstances()) {
+    if (p.isNpc() || !p.isConnected()) continue;
+    try {
+      applyHouseRemovedBuildings(p);
+    } catch {
+      /* 玩家失效等，忽略 */
+    }
+  }
 }
 
 /** 房屋操作菜单（导入/导出/添加/删除/启用） */
