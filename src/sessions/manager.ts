@@ -7,6 +7,11 @@ import { isInRace } from "@/race/room";
 import { isEditing } from "@/race/editor";
 import { isPlayerLocked } from "@/core/interaction";
 import { Session, SESSION_COLOR, PUBLIC_SESSION_ID, PUBLIC_WORLD_ID } from "./session";
+import { PREFIX } from "@/utils/msg";
+
+/** 断线理由文案（SA-MP disconnect reason 下标：0=掉线/超时崩溃 1=正常退出 2=Kick/Ban，
+ *  对齐原版 disconnectReasons 格式；未知 reason 不加后缀） */
+const DISCONNECT_REASONS = ["(掉线)", "(正常退出)", "(Kick/Ban)"] as const;
 
 /** 公共大世界人数上限（不限制） */
 const PUBLIC_CAPACITY = Number.MAX_SAFE_INTEGER;
@@ -296,8 +301,10 @@ export class SessionManager {
     return false;
   }
 
-  /** 处理玩家掉线：移出所在战局，房主掉线则转移或解散 */
-  handlePlayerDisconnect(player: Player): void {
+  /** 处理玩家掉线：移出所在战局，房主掉线则转移或解散。
+   *  reason：SA-MP disconnect reason（0=掉线/超时崩溃 1=正常退出 2=Kick/Ban），
+   *  广播带理由后缀（对齐原版 disconnectReasons 文案）。 */
+  handlePlayerDisconnect(player: Player, reason: number): void {
     const current = this.getPlayerSession(player);
     // 统一从 publicWorld.members 移除（防幽灵成员）
     this.publicWorld.members.delete(player.id);
@@ -306,6 +313,7 @@ export class SessionManager {
       return;
     }
     const name = player.getName().name;
+    const suffix = DISCONNECT_REASONS[reason] ?? "";
     current.members.delete(player.id);
     if (current.members.size === 0) {
       // 没其他人 → 解散战局
@@ -319,12 +327,14 @@ export class SessionManager {
       const members = [...current.members.values()];
       const next = members[Math.floor(Math.random() * members.length)];
       current.ownerUserId = this.getOwnerUserId(next);
-      current.broadcast(`[战局] 房主 ${name} 已掉线，${next.getName().name} 成为新房主`);
+      current.broadcast(
+        `${PREFIX.session} 房主 ${name} 已离开${suffix}，${next.getName().name} 成为新房主`,
+      );
       logger.info(
-        `[session] 战局「${current.name}」房主 ${name} 掉线，转移给 ${next.getName().name}`,
+        `[session] 战局「${current.name}」房主 ${name} 离开，转移给 ${next.getName().name}`,
       );
     } else {
-      current.broadcast(`[战局] ${name} 离开了战局`);
+      current.broadcast(`${PREFIX.session} ${name} 离开了战局${suffix}`);
     }
   }
 }

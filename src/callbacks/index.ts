@@ -191,12 +191,14 @@ PlayerEvent.onConnect(({ player, next }) => {
   return next();
 });
 
-PlayerEvent.onDisconnect(({ player, next }) => {
+PlayerEvent.onDisconnect(({ player, reason, next }) => {
   if (isNpc(player)) {
     return next();
   }
-  // 注意顺序：战局处理需要认证状态（房主判断），须在清理 auth 之前执行
-  sessionManager.handlePlayerDisconnect(player);
+  // 注意顺序：战局处理需要认证状态（房主判断），须在清理 auth 之前执行。
+  // reason：SA-MP disconnect reason（0=掉线/超时崩溃 1=正常退出 2=Kick/Ban），
+  // 战局广播按下线理由展示（对齐原版 disconnectReasons 文案）
+  sessionManager.handlePlayerDisconnect(player, reason);
   // 断开前最后保存一次在线位置（失败由定时保存兜底）。
   // 必须在 cleanupRacePlayer 之前：此时玩家还在比赛中（比赛世界），
   // savePlayerPosition 内部按 isInRace 跳过比赛污染；若先清比赛状态，
