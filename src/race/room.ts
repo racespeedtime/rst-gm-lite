@@ -138,8 +138,6 @@ interface RaceRoom {
     scripts: string[];
   }[];
   results: { playerId: number; time: number; name: string }[];
-  /** CP 触发冷却：playerId -> 上次判定时间（防刷圈） */
-  lastCpAt: Map<number, number>;
   countdownTimer?: NodeJS.Timeout;
   endTimer?: NodeJS.Timeout;
   /** 每个成员的比赛信息 TextDraw（playerId -> 4 行 TD，开赛时创建） */
@@ -488,7 +486,6 @@ export async function createRaceRoom(
       scripts: c.raceCpScripts.map((s) => s.script),
     })),
     results: [],
-    lastCpAt: new Map(),
     raceTextTds: new Map(),
     bestTimes: new Map(),
     resultIndex: new Map(),
@@ -607,7 +604,6 @@ export async function restartRace(player: Player): Promise<void> {
   room.createdAt = Date.now();
   // 清空排名/CP 进度数据（重开后从零开始）
   room.results = [];
-  room.lastCpAt.clear();
   room.resultIndex.clear();
   // 清空掉线重连窗口：重开是新一场比赛，旧赛的窗口/进度快照不能带进新赛
   //（否则窗口玩家重连会用旧赛进度恢复——CP/排名/计时全错）
@@ -1037,11 +1033,12 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   const nextCp = room.cps[pr.cpIndex + 1];
   if (!nextCp) return;
 
-  // 防刷圈：同一点 1 秒内重复触发忽略
-  const now = Date.now();
-  const last = room.lastCpAt.get(player.id) ?? 0;
-  if (now - last < 1000) return;
-  room.lastCpAt.set(player.id, now);
+  // 注意：这里不做任何时间冷却（对齐原版 OnPlayerEnterRaceCheckpoint 直接推进）。
+  // open.mp 检查点是"进入即消耗"：触发后 showNextCheckpoint 立即把红圈挪到下一个
+  // CP，同一 CP 想再次触发的前提（红圈留在原地）在推进成功的路径上不存在——
+  // 冷却反而会制造它想防的滞留。更糟的是全局时间冷却会把"1 秒内连过的相邻近 CP"
+  // 的第二次触达也吞掉（100km/h 下 ~30m 间距的 CP 间隔不足 1 秒），导致近 CP 被
+  // 跳过、玩家直接错过（原版无此冷却，近 CP 从未错过）。
 
   pr.cpIndex++;
 
