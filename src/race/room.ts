@@ -183,6 +183,11 @@ interface RaceRoom {
       prevWorld: number;
       dist: number;
       name: string;
+      /** 掉线瞬间位置：重连是全新连接（跳过 spawnPlayer/出生定位），须恢复到此
+       *  位置（配合 prevWorld 战局归属），否则玩家重连后出现在默认出生点 */
+      x: number;
+      y: number;
+      z: number;
     }
   >;
   /** 本场比赛参与过录制的成员（playerId → userId 快照：房间销毁且无人完成时
@@ -317,10 +322,10 @@ export function cleanupRacePlayer(playerId: number): void {
         room.reconnectUntil.set(uid, Date.now() + window);
         // 快照含"距下一 CP 距离"：掉线玩家按掉线瞬间位置/CP 继续参与排名
         const nextCp = room.cps[pr.cpIndex + 1];
+        const dpos = Player.getInstance(playerId)?.getPos();
         let dist = 0;
-        if (nextCp) {
-          const pos = Player.getInstance(playerId)?.getPos();
-          if (pos) dist = Math.hypot(pos.x - nextCp.x, pos.y - nextCp.y, pos.z - nextCp.z);
+        if (nextCp && dpos) {
+          dist = Math.hypot(dpos.x - nextCp.x, dpos.y - nextCp.y, dpos.z - nextCp.z);
         }
         room.reconnectSlots.set(uid, {
           playerId,
@@ -330,6 +335,10 @@ export function cleanupRacePlayer(playerId: number): void {
           prevWorld: pr.prevWorld,
           dist,
           name: Player.getInstance(playerId)?.getName().name ?? `玩家${playerId}`,
+          // 掉线瞬间位置：重连是全新连接，恢复时 setPos 回此处（防出现在默认出生点）
+          x: dpos?.x ?? 0,
+          y: dpos?.y ?? 0,
+          z: dpos?.z ?? 0,
         });
         room.members.delete(playerId);
         playerRaces.delete(playerId);
@@ -560,6 +569,12 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
     : await pickRandomRace();
   if (!race || !race.isEnabled || race.deletedAt) {
     player.sendClientMessage(COLOR_ERROR, "赛道不存在或未启用");
+    return false;
+  }
+  // await 期间房间可能已被 /r s 开赛（倒计时/开跑）→ 二次校验，防在 COUNTDOWN/
+  // RACING 中静默替换赛道（换赛道对话框期间房主可同时 /r s）
+  if (room.state !== "WAITING" || rooms.get(room.id) !== room) {
+    player.sendClientMessage(COLOR_ERROR, "比赛已开始，不能更换赛道");
     return false;
   }
   const cps = await prisma.raceCp.findMany({
@@ -889,7 +904,12 @@ function beginRace(room: RaceRoom): void {
       // 避免 startRecording 失败弹"需要先刷车"红字，先异步刷默认比赛车（有该模型
       // 爱车则复用其外观，没有则自动创建成爱车），完成后补开录，保证开赛无车也有
       // 本场录像。录制起点晚几百 ms（刷车完成时刻），无车期间本来也无车辆帧可采。
-      if (!m.isInAnyVehicle() && !getOwnedVehicle(m.id)) {
+      // 无车兜底判定要判 isValid：等待期爆车时 getOwnedVehicle 仍返回 Map 条目
+      //（残骸实体），不判 isValid 会误走"有车"分支 → 开赛既无车也不录（startRecording
+      // 的 veh.isValid() 失败弹"需要先刷车"）。爆车实体由 vehicles onDeath 清理（比赛外）
+      // 或这里兜底（isValid 检查），统一口径。
+      const ownedVeh = getOwnedVehicle(m.id);
+      if (!m.isInAnyVehicle() && (!ownedVeh || !ownedVeh.isValid())) {
         void spawnVehicle(m, getDefaultRaceModel(room.cps), true).then((ok) => {
           if (
             ok &&
@@ -1253,9 +1273,15 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   }
 
   // 全部完成 → 立即结束（单人房间/全员冲线：没有人在跑，不需要 20s 宽限，
-  // 否则会先广播"20 秒后结束"再立刻结束，误导）。判定须含掉线重连窗口玩家
-  //（members 不含窗口玩家，漏算会提前 endRoom，把"C 秒内可重连"的承诺作废）
-  if (room.results.length >= room.members.size + room.reconnectSlots.size) {
+  // 否则会先广播"20 秒后结束"再立刻结束，误导）。
+  // 判定"未完成的在线成员"而非 results.length：results 含已离开/掉线的完成者
+  //（leaveRace/断线不移除条目），members.size 只算当前在线——若用
+  // results.length >= members.size，A 完成离开后 B 再冲线会把还在跑的 C 提前
+  // endRoom（"20 秒宽限"承诺作废）。重连窗口玩家（不在 members）仍在跑，也须算
+  const unfinished = [...room.members.values()].filter(
+    (m) => !playerRaces.get(m.id)?.finished,
+  ).length;
+  if (unfinished === 0 && room.reconnectSlots.size === 0) {
     endRoom(room);
     return;
   }
@@ -1405,6 +1431,9 @@ function endRoom(room: RaceRoom): void {
 
 function checkRoomState(room: RaceRoom): void {
   if (room.members.size === 0) {
+    // 置 FINISHED：COUNTDOWN 中全员离开时，倒计时链每步都查 state，置位后
+    // beginRace 不再被调用（防闭包链空转几秒无效执行）
+    room.state = "FINISHED";
     if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
     if (room.endTimer) clearTimeoutSafe(room.endTimer);
     destroyRaceTds(room);
@@ -1538,7 +1567,9 @@ function tickRooms(): void {
     // 清成员 + 录制落盘）。断线玩家已在重连窗口不在 members。
     const AFK_IDLE_MS = 45_000;
     const AFK_WARN_MS = 30_000;
-    const AFK_MOVE_EPS = 0.05; // 200ms 内位移 < 0.05（≈0.25m/s）判静止
+    // 200ms 内位移 < 0.1（≈0.5m/s）判静止——比原版 0.001/s 宽松：防撞墙顶油门/
+    // 被车流堵塞缓慢蠕动的活跃玩家被误判挂机（原版阈值过严曾被投诉误封）
+    const AFK_MOVE_EPS = 0.1;
     const AFK_TICK_MS = 200;
     for (const m of room.members.values()) {
       const pos = m.getPos();
@@ -2404,8 +2435,12 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       prevWorld: joinedSession ? prevWorld : 0,
       cpSnapshots: [], // 重连是新连接：回退重生快照从空重建（后续过 CP 重新记录）
     });
-    // 切回比赛世界 + 恢复 CP 显示
+    // 切回比赛世界 + 恢复掉线瞬间位置（重连是全新连接，跳过出生定位，不恢复
+    // 会出现在地图默认出生点，与"继续第 N 圈"提示严重不符）
     player.setVirtualWorld(room.worldId);
+    if (slot && slot.x !== 0) {
+      player.setPos(slot.x, slot.y, slot.z);
+    }
     if (room.state === "RACING") {
       // 回放：恢复挂起的录制（同一会话续录，掉线静止帧衔接无缝；若挂起会话
       // 已被其他路径处理——超时落盘/房间销毁/重开丢弃——resume 无会话可恢复，
@@ -2432,8 +2467,10 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       player.setTime(room.roomTime.hour, room.roomTime.minute);
       player.setWeather(room.roomWeather);
       // 无车兜底（断线前坐默认比赛车，重连时已被清理）：用默认比赛车型刷爱车
-      // （有该模型爱车则复用外观，没有则自动创建成爱车——与 joinRoom/beginRace 一致）
-      if (!player.isInAnyVehicle() && !getOwnedVehicle(player.id)) {
+      // （有该模型爱车则复用外观，没有则自动创建成爱车——与 joinRoom/beginRace 一致）。
+      // 判 isValid：断线期间爱车可能被炸（实体失效但仍占 Map 条目）
+      const ownedVeh = getOwnedVehicle(player.id);
+      if (!player.isInAnyVehicle() && (!ownedVeh || !ownedVeh.isValid())) {
         void spawnVehicle(player, getDefaultRaceModel(room.cps), true);
       }
     }

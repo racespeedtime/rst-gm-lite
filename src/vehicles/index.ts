@@ -21,7 +21,7 @@ import { DEFAULT_CHARSET } from "@/utils/constants";
 import { VEHICLE_CATEGORIES, vehicleName, isValidVehicleModel } from "./catalog";
 import type { UserVehicleModel } from "@/prisma/generated/prisma/models/UserVehicle";
 
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
+import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE, COLOR_WARN } from "@/utils/colors";
 /** 车辆位置保存间隔（毫秒） */
 const SAVE_INTERVAL_MS = 30_000;
 
@@ -315,6 +315,23 @@ export function kickMyVehiclePassengers(player: Player): void {
 }
 
 export function initVehicleCommands(): void {
+  // 大世界爱车被毁清理：非比赛场景下玩家爱车被炸（respawnDelay=0 不会自动重生，
+  // 且不在比赛重生的兜底范围）→ 销毁 playerVehs 条目 + 3D 标签，防残留失效实体。
+  // 否则 /c wode 会把报废残骸拖过来、开赛/挑战的"无车判定"（getOwnedVehicle 不判
+  // isValid）全部错位。比赛中由 race 的 VehicleEvent.onDeath 处理重生补车（司机存活
+  // 刷车/死亡重生兜底），这里跳过避免双重处理。
+  VehicleEvent.onDeath(({ vehicle, next }) => {
+    // getLastDriver 而非 getDriver：司机刚下车瞬间仍算该车
+    const owner = [...playerVehs].find(([, v]) => v === vehicle)?.[0];
+    if (owner == null || isInRace(owner)) return next();
+    const player = Player.getInstance(owner);
+    destroyPlayerVehicle(owner); // 清失效实体 + 3D 标签（isValid 内部防护）
+    if (player && player.isConnected() && !player.isNpc()) {
+      player.sendClientMessage(COLOR_WARN, "[爱车] 你的爱车已损毁，/c wode 或 /c 车型 重新刷出");
+    }
+    return next();
+  });
+
   // 改装店装件存储：OnVehicleMod 在改装店装上 mod 时触发 → 存到该爱车的
   // 当前默认预设（vehicle_preset.mod_components，仅自己的车）。
   // 无默认预设时懒创建一个并设为默认（重刷车 applyVehiclePreset 应用预设

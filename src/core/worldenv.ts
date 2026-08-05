@@ -4,6 +4,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getSetting } from "@/personalize/settings";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
+import { isInRace } from "@/race/room";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 /** 世界环境持有的实体（onExit 时统一销毁） */
@@ -68,6 +69,9 @@ export async function syncWorldClock(): Promise<void> {
   // 同步 syncGameTime=true 的在线玩家（现实 1 分钟 = 游戏 1 分钟）
   for (const player of Player.getInstances()) {
     if (player.isNpc() || !player.isConnected()) continue;
+    // 比赛中跳过：比赛房间由 beginRace 按房主设置统一时间天气（CP 脚本也会改），
+    // 轮换会把房间统一时间拉回服务器时间（重连恢复/快照回退也受影响）
+    if (isInRace(player.id)) continue;
     const auth = getAuthState(player.id);
     if (!auth) continue;
     const setting = await getSetting(player);
@@ -100,6 +104,8 @@ async function rotateWeather(): Promise<void> {
   const msg = `[天气] 大世界天气已变化：${WEATHER_NAMES[currentWeather] ?? `ID ${currentWeather}`}`;
   for (const player of Player.getInstances()) {
     if (player.isNpc() || !player.isConnected()) continue;
+    // 比赛中跳过：房间统一天气由 beginRace 定（见 syncWorldClock 注释）
+    if (isInRace(player.id)) continue;
     const auth = getAuthState(player.id);
     if (!auth) continue;
     const setting = await getSetting(player);
@@ -188,7 +194,9 @@ export async function initWorldEnvironment(): Promise<void> {
         logger.warn(`[worldenv] 地图图标创建失败 icon=${mi.iconId}`, e);
       }
     }
-    logger.info(`[worldenv] 已创建 ${icons.length} 个地图图标（流式，城市范围 ${MAP_ICON_STREAM_DISTANCE}）`);
+    logger.info(
+      `[worldenv] 已创建 ${icons.length} 个地图图标（流式，城市范围 ${MAP_ICON_STREAM_DISTANCE}）`,
+    );
   } catch (e) {
     logger.error("[worldenv] 加载地图图标失败", e);
   }
