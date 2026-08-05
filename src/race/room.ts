@@ -308,7 +308,10 @@ function estimateRaceDurationMs(room: RaceRoom): number {
  * - 短比赛（<2.5 分钟）不支持重连 → 走原断线逻辑
  * - 支持重连的比赛：记录进度快照 + 重连截止时间
  */
-export function cleanupRacePlayer(playerId: number): void {
+export function cleanupRacePlayer(
+  playerId: number,
+  opts?: { sessionOwnerId?: string | null },
+): void {
   const pr = playerRaces.get(playerId);
   if (pr) {
     const room = rooms.get(pr.roomId);
@@ -354,10 +357,10 @@ export function cleanupRacePlayer(playerId: number): void {
           x: dpos?.x ?? 0,
           y: dpos?.y ?? 0,
           z: dpos?.z ?? 0,
-          // 掉线瞬间原战局房主快照（worldId 复用校验用；auth 断线后仍可用）
-          sessionOwnerId: discPlayer
-            ? sessionManager.getPlayerSession(discPlayer).ownerUserId
-            : undefined,
+          // 掉线瞬间原战局房主快照（worldId 复用校验用；由 callbacks 在
+          // handlePlayerDisconnect 删 playerSessions 之前传入——onDisconnect 阶段
+          // 再取 getPlayerSession 只会命中公共大世界、恒为 null）
+          sessionOwnerId: opts?.sessionOwnerId,
         });
         room.members.delete(playerId);
         playerRaces.delete(playerId);
@@ -628,6 +631,7 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
   }));
   room.bestTimes.clear(); // 新赛道 BEST 缓存失效（重查）
   room.afk.clear(); // 新赛道：清挂机记录
+  room.lastPositions.clear(); // 掉线快照缓存随新赛道失效
   // 重定位所有成员：进度重置 + 起点 + TD 刷新 + CP 箭头重建
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
@@ -680,6 +684,7 @@ export async function restartRace(player: Player): Promise<void> {
   room.reconnectUntil.clear();
   room.reconnectSlots.clear();
   room.afk.clear(); // 重开是新比赛：清挂机记录
+  room.lastPositions.clear(); // 掉线快照缓存随新比赛失效
   // 成员重置：退出观战（防 putPlayerIn 无效）+ 进度清零 + 回起点 + TD/CP 重建
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);

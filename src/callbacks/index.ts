@@ -199,6 +199,10 @@ PlayerEvent.onDisconnect(({ player, reason, next }) => {
   // 注意顺序：战局处理需要认证状态（房主判断），须在清理 auth 之前执行。
   // reason：SA-MP disconnect reason（0=掉线/超时崩溃 1=正常退出 2=Kick/Ban），
   // 战局广播按下线理由展示（对齐原版 disconnectReasons 文案）
+  // 掉线玩家原战局房主快照：必须在 handlePlayerDisconnect（内部删 playerSessions）
+  // 之前取，否则 cleanupRacePlayer 里 getPlayerSession 命中公共大世界、快照恒为
+  // null——重连时 worldId 复用校验会失效（见 room.ts reconnect slot sessionOwnerId）
+  const leavingSessionOwner = sessionManager.getPlayerSession(player).ownerUserId;
   sessionManager.handlePlayerDisconnect(player, reason);
   // 断开前最后保存一次在线位置（失败由定时保存兜底）。
   // 必须在 cleanupRacePlayer 之前：此时玩家还在比赛中（比赛世界），
@@ -215,8 +219,8 @@ PlayerEvent.onDisconnect(({ player, reason, next }) => {
   cleanupLoginSpawned(player.id);
   // 装扮：清理挂载对象
   cleanupAttire(player.id);
-  // 比赛：退出比赛房间/编辑模式
-  cleanupRacePlayer(player.id);
+  // 比赛：退出比赛房间/编辑模式（传战局房主快照：重连窗口记录原战局归属）
+  cleanupRacePlayer(player.id, { sessionOwnerId: leavingSessionOwner });
   exitEdit(player.id);
   // 观察：清理观战状态
   cleanupObserve(player.id);
