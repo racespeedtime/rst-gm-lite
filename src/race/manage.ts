@@ -13,6 +13,7 @@ import type { MenuBack } from "@/core/panel";
 import { createRaceRoom } from "./room";
 import { enterRaceEdit, canEditRace } from "./editor";
 import { startChallengeFromRace } from "@/replay/challenge";
+import { openReplayActions } from "@/replay/menu";
 
 /** 面板入口：赛道管理（管理赛道为 OP 专属，非 OP 不显示该行） */
 export async function openRaceMenu(player: Player, back?: MenuBack): Promise<void> {
@@ -96,6 +97,18 @@ async function createRaceFlow(player: Player, back?: MenuBack): Promise<void> {
 function fmtShortDate(d: Date): string {
   const pad2 = (n: number): string => String(n).padStart(2, "0");
   return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** 时长格式化（mm:ss 或 ss，回放列表用，与 replay/menu 同口径） */
+function fmtDur(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** 时间格式化（MM-DD HH:MM，回放列表用，与 replay/menu 同口径） */
+function fmtTime(d: Date): string {
+  return fmtShortDate(d);
 }
 
 /** 赛道列表（全部/我的）：排序选择 + 多列展示，选择进入详情 */
@@ -190,6 +203,7 @@ export async function openRaceDetailPanel(
   const recs = await prisma.raceRecord.count({ where: { raceId, deletedAt: null } });
   const actions = [
     "开始比赛",
+    "查看回放",
     "影子挑战",
     "查看排行榜",
     ...(mine ? ["编辑赛道", "删除赛道（二次验证）"] : []),
@@ -229,17 +243,47 @@ export async function openRaceDetailPanel(
     );
     return;
   } else if (idx === 1) {
-    // 影子挑战：选本人的该赛道比赛回放当影子，同步起跑对比
+    // 查看该赛道所有人的完赛比赛回放（分页）→ 可观看/分身/影子挑战
+    await listRaceReplays(player, raceId, () => openRaceDetailPanel(player, raceId, back));
+  } else if (idx === 2) {
+    // 影子挑战：选该赛道的完赛比赛回放当影子，同步起跑对比
     const ok = await startChallengeFromRace(player, raceId);
     if (ok) return; // 进入挑战世界，不再回菜单
     await openRaceDetailPanel(player, raceId, back);
-  } else if (idx === 2) {
+  } else if (idx === 3) {
     await leaderboardFlow(player, raceId, () => openRaceDetailPanel(player, raceId, back));
-  } else if (mine && idx === 3) {
-    await enterRaceEdit(player, raceId);
   } else if (mine && idx === 4) {
+    await enterRaceEdit(player, raceId);
+  } else if (mine && idx === 5) {
     await deleteRaceFlow(player, raceId, () => openRaceDetailPanel(player, raceId, back));
   }
+}
+
+/** 赛道详情 → 查看回放：该赛道所有玩家已完成的比赛回放（分页）→ 观看/分身/影子挑战 */
+async function listRaceReplays(player: Player, raceId: string, back?: MenuBack): Promise<void> {
+  const list = await prisma.replay.findMany({
+    where: { raceId, type: "race", deletedAt: null, finished: true },
+    orderBy: { createdAt: "desc" },
+  });
+  if (list.length === 0) {
+    sysMsg(player, "race", "该赛道还没有完成的比赛回放", "plain");
+    return back?.();
+  }
+  const r = await showPagedDialog(player, {
+    caption: `该赛道回放（${list.length}）`,
+    data: list,
+    headers: ["录者", "名次", "时长", "时间"],
+    format: (v) => [
+      v.recorderName,
+      v.rank != null ? `No.${v.rank}` : "—",
+      fmtDur(v.durationMs),
+      fmtTime(v.createdAt),
+    ],
+    button1: "操作",
+    button2: "返回",
+  });
+  if (!r) return back?.();
+  await openReplayActions(player, r.item, { back, allowDelete: false });
 }
 
 /** 排行榜：多列分页展示前 100 条纪录（名次/玩家/用时/日期）。

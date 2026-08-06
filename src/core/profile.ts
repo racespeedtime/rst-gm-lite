@@ -8,6 +8,8 @@ import { startObservePlayer } from "@/core/observe";
 import { requestTpa, acceptsTeleport } from "@/teleport";
 import { sessionManager } from "@/sessions/manager";
 import { isInRace } from "@/race/room";
+import { openReplayActions } from "@/replay/menu";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
@@ -208,6 +210,15 @@ async function openClickPlayerMenu(player: Player, target: Player): Promise<void
     ];
     const isSelf = player.id === target.id;
     if (!isSelf) {
+      // 查看 TA 的回放（比赛回放列表 → 观看/分身/影子挑战）：目标已认证才有 userId
+      if (targetUserId) {
+        rows.push({
+          label: "查看TA的回放",
+          run: () => {
+            void listPlayerReplays(player, targetUserId, name);
+          },
+        });
+      }
       // 观战：目标可观看（非观战/未连接等状态）才显示
       const watchable =
         target.isConnected() &&
@@ -241,6 +252,49 @@ async function openClickPlayerMenu(player: Player, target: Player): Promise<void
   } finally {
     unlockPlayer(player.id);
   }
+}
+
+/** 时长格式化（mm:ss 或 ss，回放列表用，与 replay/menu 同口径） */
+function fmtDur(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** 时间格式化（MM-DD HH:MM，回放列表用，与 replay/menu 同口径） */
+function fmtTime(d: Date): string {
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** 查看某玩家的比赛回放列表（分页）→ 观看/分身/影子挑战（非本人，公开可看不可删） */
+async function listPlayerReplays(
+  player: Player,
+  targetUserId: string,
+  targetName: string,
+): Promise<void> {
+  const list = await prisma.replay.findMany({
+    where: { userId: targetUserId, type: "race", deletedAt: null },
+    orderBy: { createdAt: "desc" },
+  });
+  if (list.length === 0) {
+    player.sendClientMessage(COLOR_ERROR, `${targetName} 还没有比赛回放`);
+    return;
+  }
+  const r = await showPagedDialog(player, {
+    caption: `${targetName} 的比赛回放（${list.length}）`,
+    data: list,
+    headers: ["赛道", "名次", "时长", "时间"],
+    format: (v) => [
+      v.raceName || "—",
+      v.rank != null ? `No.${v.rank}` : "{FF0000}未完成",
+      fmtDur(v.durationMs),
+      fmtTime(v.createdAt),
+    ],
+    button1: "操作",
+    button2: "关闭",
+  });
+  if (!r) return;
+  await openReplayActions(player, r.item, { allowDelete: false });
 }
 
 /** 初始化：点击玩家（Tab 记分板双击）→ 操作菜单 */

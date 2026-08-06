@@ -749,16 +749,16 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     sysMsg(player, "challenge", "比赛中不能进入影子挑战", "warn");
     return false;
   }
-  // 全服该赛道的比赛回放：影子挑战可以挑战**任何玩家**跑这条赛道的影子
-  //（不限于自己的回放——"该赛道有回放"即可挑战，完成比赛的优先，未完成也
-  // 允许——影子只跑已录部分）。热门赛道回放多，take 上限防一次性拉取过多
+  // 全服该赛道的完赛比赛回放：影子挑战可以挑战**任何玩家**跑这条赛道的影子
+  //（不限于自己的回放——"该赛道有完赛回放"即可挑战）。仅完赛（finished=true）
+  // 可选：影子必须跑完整场录像才有可比性。热门赛道回放多，take 上限防一次拉取过多
   const races = await prisma.replay.findMany({
-    where: { raceId, type: "race", deletedAt: null },
+    where: { raceId, type: "race", deletedAt: null, finished: true },
     orderBy: [{ finished: "desc" }, { createdAt: "desc" }],
     take: 200,
   });
   if (races.length === 0) {
-    sysMsg(player, "challenge", "该赛道还没有比赛回放（跑一场比赛后自动生成）", "warn");
+    sysMsg(player, "challenge", "该赛道还没有完成的比赛回放（跑完一场比赛后自动生成）", "warn");
     return false;
   }
   // 多条回放可选：跟"哪一场/谁的影子"比由玩家决定。分页多列选择——
@@ -835,6 +835,11 @@ export async function startChallengeWithReplay(player: Player, replayId: string)
   });
   if (!replay) {
     sysMsg(player, "challenge", "回放不存在或已删除", "error");
+    return false;
+  }
+  // 影子挑战仅对已完成的比赛回放开放（未完成回放影子只跑已录部分，不完整）
+  if (replay.finished !== true) {
+    sysMsg(player, "challenge", "只能挑战已完成的比赛回放", "warn");
     return false;
   }
   if (!replay.raceId) {

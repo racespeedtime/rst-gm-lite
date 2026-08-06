@@ -69,20 +69,33 @@ async function confirmDeleteReplay(
   return back?.();
 }
 
-/** 打开"我的录制"（分页列表 → 观看/分身挑战/删除） */
-export async function openReplayMenu(player: Player, back?: MenuBack): Promise<void> {
+/** 打开"我的录制"（分页列表 → 观看/分身挑战/删除）。type 过滤比赛/自定义页签 */
+export async function openReplayMenu(
+  player: Player,
+  back?: MenuBack,
+  type?: "race" | "ghost",
+): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return back?.();
   const list = await prisma.replay.findMany({
-    where: { userId: auth.userId, deletedAt: null },
+    where: { userId: auth.userId, deletedAt: null, ...(type ? { type } : {}) },
     orderBy: { createdAt: "desc" },
   });
+  const caption =
+    type === "race" ? "我的比赛回放" : type === "ghost" ? "我的自定义录制" : "我的录制";
   if (list.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有回放记录（/rec start 开始录制）");
+    player.sendClientMessage(
+      COLOR_ERROR,
+      type === "race"
+        ? "你还没有比赛回放（跑一场比赛后自动生成）"
+        : type === "ghost"
+          ? "你还没有自定义录制（/rec start 开始录制）"
+          : "你还没有回放记录（/rec start 开始录制）",
+    );
     return back?.();
   }
   const r = await showPagedDialog(player, {
-    caption: `我的录制（${list.length}）`,
+    caption: `${caption}（${list.length}）`,
     data: list,
     headers: ["类型", "赛道", "名次", "时长", "时间"],
     format: (v) => [
@@ -99,7 +112,7 @@ export async function openReplayMenu(player: Player, back?: MenuBack): Promise<v
   // 我的录制：ghost（自定义）可删；race（比赛）为系统自动录制，用户不可删
   await openReplayActions(player, r.item, {
     back,
-    deleteBack: () => openReplayMenu(player, back), // 删除后回到刷新后的列表
+    deleteBack: () => openReplayMenu(player, back, type), // 删除后回到刷新后的列表
     allowDelete: r.item.type !== "race",
   });
 }
@@ -135,10 +148,11 @@ async function runGhostReplay(player: Player, replayId: string, back?: MenuBack)
   return back?.();
 }
 
-/** 回放操作菜单：观看 / 分身挑战 /（allowDelete 时）删除。我的录制与公开回放库共用 */
-async function openReplayActions(
+/** 回放操作菜单：观看 / 分身挑战 /（allowDelete 时）删除。我的录制、公开回放库、
+ *  赛道详情回放列表、点击玩家"查看TA的回放"共用 */
+export async function openReplayActions(
   player: Player,
-  replay: { id: string; type: string; fileName: string },
+  replay: { id: string; type: string; fileName: string; finished?: boolean | null },
   opts: { back?: MenuBack; deleteBack?: MenuBack; allowDelete: boolean },
 ): Promise<void> {
   const actions: { label: string; run: () => Promise<void> | void }[] = [
@@ -148,8 +162,8 @@ async function openReplayActions(
       run: () => runGhostReplay(player, replay.id, opts.back),
     },
   ];
-  // 比赛回放可当影子（公开库选任意玩家的比赛回放挑战；我的录制限本人）
-  if (replay.type === "race") {
+  // 影子挑战仅对已完成的比赛回放开放（未完成回放影子只跑已录部分，不完整）
+  if (replay.type === "race" && replay.finished === true) {
     actions.push({
       label: "影子挑战（与录像者比一场）",
       run: () => void startChallengeWithReplay(player, replay.id),
@@ -248,10 +262,11 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
       style: DialogStylesEnum.LIST,
       caption: "回放",
       info: [
-        "1. 我的录制（观看 / 分身挑战 / 删除）",
-        "2. 全部比赛回放（观看所有玩家的比赛录制）",
-        `3. ${isRecording(player.id) ? "停止录制（落盘）" : "开始录制（当前行驶）"}`,
-        "4. 回放控制（播放 / 暂停 / 倍速 / 跳转 / 停止）",
+        "1. 我的比赛回放",
+        "2. 我的自定义录制",
+        "3. 全部比赛回放（观看所有玩家的比赛录制）",
+        `4. ${isRecording(player.id) ? "停止录制（落盘）" : "开始录制（当前行驶）"}`,
+        "5. 回放控制（播放 / 暂停 / 倍速 / 跳转 / 停止）",
       ].join("\n"),
       button1: "执行",
       button2: "关闭",
@@ -259,12 +274,15 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
   );
   if (!res) return;
   if (res.response !== 1) return back?.();
+  const panelBack = () => openReplayMenuPanel(player, back);
   if (res.listItem === 0) {
-    await openReplayMenu(player, () => openReplayMenuPanel(player, back));
+    await openReplayMenu(player, panelBack, "race");
   } else if (res.listItem === 1) {
-    // 全部比赛回放：公开回看库（所有玩家的 race 录制），只可看不可删
-    await openPublicReplayMenu(player, () => openReplayMenuPanel(player, back));
+    await openReplayMenu(player, panelBack, "ghost");
   } else if (res.listItem === 2) {
+    // 全部比赛回放：公开回看库（所有玩家的 race 录制），只可看不可删
+    await openPublicReplayMenu(player, panelBack);
+  } else if (res.listItem === 3) {
     if (isRecording(player.id)) {
       // 比赛中禁止手动停止：比赛自动录制由系统管理，提前停止会丢名次元数据
       //（endRoom 的 raceRecordingStop 找不到会话，完赛录像永远缺 rank/finished）
@@ -301,8 +319,8 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
     // 录制已正式开始：不再回到面板（结束整个面板流程），提示录制中
     player.sendClientMessage(COLOR_SUCCESS, "录制中… 用 /rec stop 或 /p → 回放 停止并保存");
     return;
-  } else if (res.listItem === 3) {
-    await openReplayControlMenu(player, () => openReplayMenuPanel(player, back));
+  } else if (res.listItem === 4) {
+    await openReplayControlMenu(player, panelBack);
   }
 }
 
