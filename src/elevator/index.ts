@@ -573,6 +573,21 @@ export function initElevators(): void {
     return next();
   });
 
+  // 玩家断线：释放其占用的电梯楼层（requestedBy 持有 Player 引用不清理的话，
+  // 楼层永久显示"已被呼叫"且同 id 重连的新 Player 无法再次呼叫该层，直到电梯
+  // 到层才清）。队列项保留——电梯仍会到该层，到层后自然清空。
+  PlayerEvent.onDisconnect(({ player, next }) => {
+    if (player.isNpc()) return next();
+    for (const el of instances.values()) {
+      for (let i = 0; i < el.requestedBy.length; i++) {
+        if (el.requestedBy[i] === player) {
+          el.requestedBy[i] = InvalidEnum.PLAYER_ID;
+        }
+      }
+    }
+    return next();
+  });
+
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     // NPC/未认证玩家不响应；未按 Y 直接放行（面板等后续 handler 继续）
     if (player.isNpc() || !getAuthState(player.id)) return next();

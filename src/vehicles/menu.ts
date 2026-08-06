@@ -124,13 +124,46 @@ export async function listVehiclesFlow(player: Player, back?: MenuBack): Promise
   return back?.();
 }
 
+/**
+ * 解析 /wdac 管理的目标车辆（优先级）：
+ * 1. 当前乘坐的**自己的爱车**（开着车 /wdac 直接管理当前这辆；别人的车/乘客位
+ *    不管理——锁车/车牌/改色会作用于他人的车，且 DB 写入按调用者 userId 会错行）
+ * 2. 刷出的爱车实体（getOwnedVehicle）
+ * 3. 都没有 → 从爱车列表（DB user_vehicle）选一辆——支持还没刷出的爱车，
+ *    选中即刷出（spawnVehicle 懒创建/复用外观）再返回供管理
+ */
+async function resolveManagedVehicle(player: Player): Promise<Vehicle | null> {
+  let veh = player.isInAnyVehicle() ? (player.getVehicle() ?? null) : null;
+  if (veh && veh.isValid() && getOwnedVehicle(player.id) === veh) return veh;
+  veh = getOwnedVehicle(player.id) ?? null;
+  if (veh && veh.isValid()) return veh;
+  const auth = getAuthState(player.id);
+  if (!auth) return null;
+  const vehicles = await prisma.userVehicle.findMany({
+    where: { userId: auth.userId, deletedAt: null },
+    orderBy: { modelId: "asc" },
+  });
+  if (vehicles.length === 0) {
+    player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先刷一辆吧（/c 车辆ID）");
+    return null;
+  }
+  const r = await showPagedDialog(player, {
+    caption: "选择爱车管理",
+    data: vehicles,
+    headers: ["模型", "车牌", "状态"],
+    format: (v) => [String(v.modelId), v.plateNumber || "-", v.isLocked ? "已锁" : "未锁"],
+    button1: "管理",
+    button2: "取消",
+  });
+  if (!r) return null;
+  await spawnVehicle(player, r.item.modelId); // 刷出目标爱车（有该模型则复用外观预设）
+  return getOwnedVehicle(player.id) ?? null;
+}
+
 /** 当前爱车管理：锁车/车牌/改色/踢乘客/车灯/引擎盖/行李箱（操作后停留本菜单，取消返回上一层；/wdac 入口） */
 export async function manageCurrentVehicle(player: Player, back?: MenuBack): Promise<void> {
-  const veh = getOwnedVehicle(player.id);
-  if (!veh) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有刷出车辆");
-    return back?.();
-  }
+  const veh = await resolveManagedVehicle(player);
+  if (!veh) return back?.();
   const res = await showDialog(
     player,
     new Dialog({
@@ -307,7 +340,7 @@ export function initMyVehicleCommands(): void {
     if (arg === "list") {
       void listVehiclesFlow(player);
     } else if (arg === "wode") {
-      summonMyVehicle(player);
+      void summonMyVehicle(player);
     } else if (arg === "lock") {
       await toggleMyVehicleLock(player);
     } else if (arg === "chepai") {
@@ -350,6 +383,18 @@ export function initMyVehicleCommands(): void {
           showSpeed: n3d ? true : setting.showSpeed,
         });
         notifySaved(player, `3D速度表已${n3d ? "开启" : "关闭"}`);
+      }
+    } else if (arg === "2d") {
+      // 2D速度表（对齐 /c 3d 的互斥语义：开 2d 关 3d，联动总开关）
+      const setting = await getSetting(player);
+      if (setting) {
+        const n2d = !setting.showSpeed2d;
+        await updateSetting(player, {
+          showSpeed2d: n2d,
+          showSpeed3d: false,
+          showSpeed: n2d ? true : setting.showSpeed,
+        });
+        notifySaved(player, `2D速度表已${n2d ? "开启" : "关闭"}`);
       }
     } else if (arg === "buy" || arg === "create") {
       player.sendClientMessage(

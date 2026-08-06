@@ -6,6 +6,7 @@ import {
   KeysEnum,
   Npc,
   Player,
+  PlayerEvent,
   RaceCheckpoint,
   RaceCpEvent,
   Vehicle,
@@ -27,6 +28,7 @@ import {
   clearTimeoutSafe,
 } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import type { ReplayData } from "./format";
 import {
   sampleAt,
@@ -237,12 +239,24 @@ function renderGhost(ch: ChallengeSession): void {
  * 从一圈末尾跳回圈首）累计 shadowLapOffset。
  * 必须每 tick 推进而非在玩家过 CP 时才采样：稀疏采样会漏圈（玩家过 CP 间隔
  * 大时，两次采样之间影子可能跨多圈，回退只 +1）。16ms 采样 ≥ 帧率，不漏。
+ * 顺带：影子圈内 cpProgress 前进（过 CP）→ 给挑战者播过 CP 音效 1056——
+ * 玩家自己开车或观战影子视角都能听到影子进度（挑战无原生 CP 事件给 NPC，
+ * 影子过点只能从帧进度检测）。起步首帧 lastShadowCp=-1 跳过，不会误播。
  */
 function advanceShadowLap(ch: ChallengeSession): void {
   const s = sampleAt(ch.data, ch.ghost.playTime);
   if (!s) return;
-  if (ch.lastShadowCp !== -1 && s.cpProgress < ch.lastShadowCp) {
+  // 跨圈判定：cpProgress 是 1-indexed 的"已完成 CP 数"（过第 N 个 CP 写 N，
+  // 一圈最后一个写 len），跨圈瞬间帧序列是 len → 1（新圈第一 CP 触达写 1）。
+  // 只有"回退到 1"才是圈边界。录制里的"回退到更早检查点"（rollback）把进度写
+  // 回非 1 的某个 CP（或回退到圈首 CP=1，罕见），不是圈边界——不能 +1 圈，
+  // 否则影子进度虚高、领先判定全错。
+  if (ch.lastShadowCp !== -1 && s.cpProgress < ch.lastShadowCp && s.cpProgress === 1) {
     ch.shadowLapOffset++;
+  }
+  if (ch.lastShadowCp !== -1 && s.cpProgress > ch.lastShadowCp) {
+    const p = Player.getInstance(ch.playerId);
+    if (p && p.isConnected()) p.playSound(1056);
   }
   ch.lastShadowCp = s.cpProgress;
 }
@@ -316,7 +330,6 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
     owned.setHealth(1000);
     owned.repair();
     addVehicleComponentIfPossible(owned, 1010);
-    owned.putPlayerIn(player, 0);
   } else {
     if (owned) destroyPlayerVehicle(player.id); // 车已毁（爆炸残留失效实体）
     // pendingRespawn 与 ensureChallengeCar 共用：刷车期间（可能跨 tick/go 的
@@ -328,8 +341,8 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
     });
     // 无爱车分支：spawnVehicle 在玩家当前世界/位置刷车（旧世界），车不随人走——
     // 显式挪到起点 + 切挑战世界（对齐有车分支的 owned.setPos/setVirtualWorld）。
-    // 玩家本人随后 setVirtualWorld + setPos 归位，车若留在旧世界，GO 后 tick 会
-    // putPlayerIn 把玩家拉回旧世界 → 世界错位判"离开挑战"直接结束。
+    // spawnVehicle 内部已把玩家放入车内（vehicles spawnVehicle 末尾 putPlayerIn），
+    // 车 setPos 会带着车内玩家一起到位。
     if (spawned) {
       const veh = getOwnedVehicle(player.id);
       if (veh && veh.isValid()) {
@@ -339,8 +352,16 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
       }
     }
   }
+  // 玩家同步世界后，**未上车才** setPos + 上车：SA/open.mp 的 SetPlayerPos 对车内
+  // 玩家会直接把人移出车辆（"上车后被弹出车外"的根因）。有车分支此时还没上车
+  // （上面只挪车），这里先传人再上车；无车分支 spawnVehicle 已上车，车 setPos 已带
+  // 人到起点，跳过后玩家仍在车内就位。
   player.setVirtualWorld(ch.worldId);
-  player.setPos(first.x, first.y, first.z);
+  if (!player.isInAnyVehicle()) {
+    player.setPos(first.x, first.y, first.z);
+    const veh = getOwnedVehicle(player.id);
+    if (veh && veh.isValid()) veh.putPlayerIn(player, 0);
+  }
   // 第一个 CP 箭头（指向第二个）
   resetChallengeCheckpoint(player, ch);
 }
@@ -475,6 +496,17 @@ export function goChallenge(player: Player): void {
   });
 }
 
+/** 退出影子挑战（/challenge stop、比赛中 /r l 共用）：清理会话 + 恢复世界。
+ * 不在挑战中明确提示（对齐 /r l 的"你不在比赛中"反馈习惯，防零反馈）。 */
+export function exitChallenge(player: Player): void {
+  if (!challenges.has(player.id)) {
+    sysMsg(player, "challenge", "你不在影子挑战中", "warn");
+    return;
+  }
+  cleanupChallenge(player.id);
+  sysMsg(player, "challenge", "影子挑战已退出", "success");
+}
+
 /** /challenge restart：任意时刻（待命/倒计时/比赛中）重置回起点待命。
  * 影子与玩家车都归位起点、进度清零，玩家就绪后 /challenge go 重跑同一影子。 */
 export function restartChallenge(player: Player): void {
@@ -570,6 +602,10 @@ function onChallengePlayerEnter(player: Player): void {
   const next = ch.cps[ch.cpIndex % ch.cps.length];
   if (!next) return;
   ch.cpIndex++;
+  // 过 CP 音效（对齐比赛普通 CP 音效 1056）。挑战不执行 CP 脚本（speed/cveh
+  // 等不生效），统一用普通音效——不区分"显著脚本"的 1133，避免误导玩家
+  // 以为撞上了加速带却没有任何效果。
+  player.playSound(1056);
   const gp = ghostProgress(ch); // 影子进度（累计 CP 数 + 距下一 CP 距离，对齐真人排名）
   if (ch.cpIndex >= ch.totalCp) {
     // 完成：结算
@@ -611,32 +647,44 @@ function onChallengePlayerEnter(player: Player): void {
   );
 }
 
-/** 完成结算（玩家用时 vs 影子用时 = 录制时长）；「再跑一次」重置回起点待命 */
+/** 完成结算（玩家用时 vs 影子用时 = 录制时长）；「再跑一次」重置回起点待命。
+ * 结算框 60s 无响应自动按「退出」处理：挂机玩家不点按钮会永久占着影子 NPC
+ * 槽位（MAX_REPLAY_NPC 全服 100 共享）与世界 id——超时兜底释放资源。 */
+const CHALLENGE_RESULT_TIMEOUT_MS = 60_000;
+
 async function finishChallenge(player: Player, ch: ChallengeSession): Promise<void> {
   // 真实时间差（从 GO 起跑，不用帧数累计防漂移）
   const playerMs = Math.max(0, Date.now() - ch.goAt);
   const ghostMs = ch.data.header.durationMs;
   const diff = playerMs - ghostMs;
   const verdict = diff <= -500 ? "你赢了！" : diff >= 500 ? "影子赢了" : "势均力敌！";
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.MSGBOX,
-      caption: "影子挑战",
-      info: [
-        `{98CDFE}赛道: {FFFFFF}${ch.replayName ?? "—"}`,
-        `{98CDFE}影子战绩: {FFFFFF}${ch.replayRank != null ? `No.${ch.replayRank}` : "未完成"}`,
-        "",
-        `{98CDFE}你的用时: {FFFFFF}${fmtMs(playerMs)}`,
-        `{98CDFE}影子用时: {FFFFFF}${fmtMs(ghostMs)}`,
-        `{98CDFE}差距: {FFFFFF}${fmtMs(Math.abs(diff))}`,
-        "",
-        `{FFD700}${verdict}`,
-      ].join("\n"),
-      button1: "再跑一次",
-      button2: "退出",
+  // 超时兜底：race 超时后 resolve null（视同玩家没点按钮 → 走退出分支清理）；
+  // 玩家之后点按钮的响应由 showDialog 内部丢弃（本次 promise 已结算），无影响。
+  // 对话框残留会随下一次 showDialog 覆盖。
+  const res = await Promise.race([
+    showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.MSGBOX,
+        caption: "影子挑战",
+        info: [
+          `{98CDFE}赛道: {FFFFFF}${ch.replayName ?? "—"}`,
+          `{98CDFE}影子战绩: {FFFFFF}${ch.replayRank != null ? `No.${ch.replayRank}` : "未完成"}`,
+          "",
+          `{98CDFE}你的用时: {FFFFFF}${fmtMs(playerMs)}`,
+          `{98CDFE}影子用时: {FFFFFF}${fmtMs(ghostMs)}`,
+          `{98CDFE}差距: {FFFFFF}${fmtMs(Math.abs(diff))}`,
+          "",
+          `{FFD700}${verdict}`,
+        ].join("\n"),
+        button1: "再跑一次",
+        button2: "退出",
+      }),
+    ),
+    new Promise<null>((resolve) => {
+      setTimeoutSafe(() => resolve(null), CHALLENGE_RESULT_TIMEOUT_MS);
     }),
-  );
+  ]);
   // 会话已被清理或对象已更换（掉线/stop→重开）→ 不再操作
   if (challenges.get(ch.playerId) !== ch) return;
   if (res && res.response === 1) {
@@ -699,40 +747,40 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     sysMsg(player, "challenge", "比赛中不能进入影子挑战", "warn");
     return false;
   }
-  // 本人该赛道的比赛回放（完成比赛的优先，未完成也允许——影子只跑已录部分）
+  // 全服该赛道的比赛回放：影子挑战可以挑战**任何玩家**跑这条赛道的影子
+  //（不限于自己的回放——"该赛道有回放"即可挑战，完成比赛的优先，未完成也
+  // 允许——影子只跑已录部分）。热门赛道回放多，take 上限防一次性拉取过多
   const races = await prisma.replay.findMany({
-    where: { userId: auth.userId, raceId, type: "race", deletedAt: null },
+    where: { raceId, type: "race", deletedAt: null },
     orderBy: [{ finished: "desc" }, { createdAt: "desc" }],
+    take: 200,
   });
   if (races.length === 0) {
-    sysMsg(player, "challenge", "你还没有该赛道的比赛回放（跑一场比赛后自动生成）", "warn");
+    sysMsg(player, "challenge", "该赛道还没有比赛回放（跑一场比赛后自动生成）", "warn");
     return false;
   }
-  // 多场回放可选：跟"哪一场比赛"比由玩家决定（默认最近完成的一场）。
-  // TABLIST_HEADERS 多列：名次 / 完成 / 时长 / 录制时间（表头不占行号）
-  const chosen =
-    races.length === 1
-      ? races[0]
-      : await showDialog(
-          player,
-          new Dialog({
-            style: DialogStylesEnum.TABLIST_HEADERS,
-            caption: "选择影子（比赛回放）",
-            info: [
-              "{FFD700}名次\t完成\t时长\t录制时间",
-              ...races.map(
-                (r) =>
-                  `${r.rank != null ? `No.${r.rank}` : "{808080}未完成"}\t` +
-                  `${r.finished ? "完成" : "未完成"}\t` +
-                  `${challengeFmtDur(r.durationMs)}\t` +
-                  `${challengeFmtTime(r.createdAt)}`,
-              ),
-            ].join("\n"),
-            button1: "确定",
-            button2: "取消",
-          }),
-        ).then((res) => (res && res.response === 1 ? races[res.listItem] : undefined));
-  if (!chosen) return false; // 取消选择
+  // 多条回放可选：跟"哪一场/谁的影子"比由玩家决定。分页多列选择——
+  // 名次 / 完成 / 时长 / 录制者 / 录制时间（录制者列区分是谁的影子）
+  let chosen = races[0];
+  if (races.length > 1) {
+    const r = await showPagedDialog(player, {
+      caption: "选择影子（全服比赛回放）",
+      data: races,
+      headers: ["#", "名次", "完成", "时长", "录制者", "录制时间"],
+      format: (rec, index) => [
+        String(index + 1),
+        rec.rank != null ? `No.${rec.rank}` : "未完成",
+        rec.finished ? "完成" : "未完成",
+        challengeFmtDur(rec.durationMs),
+        rec.recorderName ?? "?",
+        challengeFmtTime(rec.createdAt),
+      ],
+      button1: "确定",
+      button2: "取消",
+    });
+    if (!r) return false; // 取消选择
+    chosen = r.item;
+  }
   const replay = chosen;
   let data: ReplayData;
   try {
@@ -896,6 +944,21 @@ async function startChallengeCore(
       lastNitroAt: 0,
       online: true, // 起始帧在线（掉线重连回放才可能翻转为 false）
     };
+    // NPC 连接建立是异步的：刚 create 后立即 putInVehicle 可能未生效（NPC 未就绪
+    // 时静默失败，车看起来"没人开"）。延迟短时间幂等补一次——已在车内则跳过；
+    // 挑战已被清理（实体销毁）时 npc.isValid() 为 false，守卫兜底。
+    setTimeoutSafe(() => {
+      try {
+        if (npc && npc.isValid()) {
+          const np = npc.getPlayer();
+          if (np && !np.isInAnyVehicle()) {
+            npc.putInVehicle(veh, 0);
+          }
+        }
+      } catch {
+        /* 实体已销毁（挑战清理）等，忽略 */
+      }
+    }, 500);
   } catch (e) {
     logger.error(`[replay] 创建挑战影子失败`, e);
     // 清理已创建的实体（NPC/车/标签）+ 回收世界 id，防幽灵实体与 id 泄漏
@@ -966,7 +1029,29 @@ async function startChallengeCore(
   return true;
 }
 
-/** 初始化挑战：注册 CP 进入检测（与比赛共用 RaceCpEvent 入口） */
+/**
+ * 挑战中允许的主命令白名单：对齐比赛的命令隔离——挑战是独立竞速世界，
+ * 刷车/传送/房屋等玩法操作会破坏挑战车/把玩家带出挑战世界。比赛白名单
+ * （r/race/kill 等）不完全适用：挑战没有比赛房间语义，保留面板/聊天/脱卡
+ * 等通用项。挑战自身的 go/restart/stop 也放行（onCommandText 与
+ * onCommandReceived 不冲突——onCommandReceived 的白名单放行后命令才走到
+ * onCommandText 处理）。
+ */
+const CHALLENGE_SAFE_COMMANDS = new Set([
+  "challenge",
+  "pm",
+  "kill",
+  "stuck",
+  "f", // 车辆翻正（翻车自救，不传送不破坏挑战——比赛白名单也有 f）
+  "tv",
+  "ob",
+  "spec",
+  "p",
+  "panel",
+  "help",
+]);
+
+/** 初始化挑战：注册 CP 进入检测（与比赛共用 RaceCpEvent 入口）+ 命令隔离 */
 export function initChallenge(): void {
   RaceCpEvent.onPlayerEnter(({ player, next }) => {
     // 统一排除 NPC（对齐项目约定：所有事件回调排除 NPC；NPC 不会进 challenges）
@@ -974,6 +1059,20 @@ export function initChallenge(): void {
     onChallengePlayerEnter(player);
     return next();
   });
+  // 挑战中命令隔离：非白名单命令一律拒绝（对齐比赛 onCommandReceived 处理；
+  // 主命令取 strictMainCmd 或 command 首 token，防 /c 123 被当未授权拦截错）
+  PlayerEvent.onCommandReceived(({ player, command, strictMainCmd, next }) => {
+    if (!challenges.has(player.id)) return next();
+    const main = (strictMainCmd || command.split(/\s+/)[0] || "").toLowerCase();
+    if (CHALLENGE_SAFE_COMMANDS.has(main)) return next();
+    sysMsg(
+      player,
+      "challenge",
+      "影子挑战中只能使用 /challenge 相关命令（go/restart/stop）",
+      "warn",
+    );
+    return false;
+  }, true); // unshift 优先执行（在限频之前，避免双提示）
 }
 
 /** 玩家断线清理挂接（callbacks onDisconnect 调用） */

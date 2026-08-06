@@ -7,6 +7,7 @@ import {
   ObjectMpEvent,
   Player,
   PlayerEvent,
+  Streamer,
   Vehicle,
 } from "@infernus/core";
 import { prisma } from "@/prisma";
@@ -23,6 +24,34 @@ import type { MenuBack } from "@/core/panel";
 /** 装扮数量上限：人物 10 槽（平台 SetPlayerAttachedObject 上限 MAX_PLAYER_ATTACHED_OBJECTS=10）/ 车辆 15 槽 */
 export const MAX_PLAYER_ATTIRE = 10;
 export const MAX_VEHICLE_ATTIRE = 15;
+
+/** samp-node 注入的全局 native（@infernus/core 内部同源使用）。这里仅剩一处调用：
+ *  SetDynamicObjectAttachedVehicle 做"车辆挂件分离"——已确认 infernus 的
+ *  DynamicObject 无 detach/attachedVehicle 方法（只有 attachToVehicle，无分离 API），
+ *  只能直接调 streamer native。而刷新类操作（Streamer_Update）infernus 提供了
+ *  Streamer.update，已改用公开 API（见 updateStreamerForPlayer），不在此手写 */
+declare const samp: {
+  callNative: (name: string, format: string, ...args: unknown[]) => number;
+};
+/** streamer INVALID_VEHICLE_ID（分离挂件用） */
+const INVALID_VEHICLE_ID = 0xffff;
+
+/**
+ * 请求 streamer 立即为玩家刷新（Streamer.update = Streamer_Update）。
+ * streamer 默认只在玩家移动/物体进出时更新流式对象——给静止玩家身上/车上
+ * 挂装扮（DynamicObject attach 到车 / attached object）后若不更新，新对象可能
+ * 不显示或错位，直到玩家移动才触发。所有装扮应用路径（applyPlayerPreset /
+ * applyVehiclePreset）末尾调用，保证挂件即刻可见。低频调用（刷车/应用预设/
+ * 编辑保存），开销可忽略。
+ */
+function updateStreamerForPlayer(playerId: number): void {
+  try {
+    const p = Player.getInstance(playerId);
+    if (p && p.isConnected()) Streamer.update(p);
+  } catch {
+    /* streamer 更新失败不影响挂件本身（玩家移动时会自然刷新） */
+  }
+}
 
 /** 玩家已应用的人物装扮对象（applyPlayerPreset 管理，清理用） */
 const appliedPlayerObjs = new Map<number, DynamicObject[]>();
@@ -123,6 +152,9 @@ export async function applyPlayerPreset(player: Player, presetId: string | null)
   playerSlotMap.set(player.id, slotMap);
   // 记录当前应用的预设（死亡重生/重连时重新应用）
   appliedPresetByPlayer.set(player.id, presetId);
+  // streamer 对静止玩家不更新流式对象：挂完立即请求刷新，保证挂件即刻可见
+  //（否则新 attached object 可能直到玩家移动才显示）
+  updateStreamerForPlayer(player.id);
   return true;
 }
 
@@ -216,6 +248,9 @@ export async function applyVehiclePreset(
   }
   appliedVehicleObjs.set(playerId, objs);
   vehicleObjMap.set(playerId, objMap);
+  // streamer 对静止玩家不更新流式对象：挂件（DynamicObject attach 到车）挂完
+  // 立即请求刷新，保证静止状态下的车挂件即刻可见（否则直到玩家移动才显示）
+  updateStreamerForPlayer(playerId);
   return objs;
 }
 
@@ -359,7 +394,7 @@ async function showPlayerPresetList(
     options.push(
       `预设${p.index + 1}${p.name ? `（${p.name}）` : ""} ${p._count.items}/${MAX_PLAYER_ATTIRE}件${mark}`,
     );
-    options.push(`↕ 上移/下移「${p.name ? p.name : `预设${p.index + 1}`}」`);
+    options.push(`↑↓ 上移/下移「${p.name ? p.name : `预设${p.index + 1}`}」`);
   }
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
   const r = await showDialog(
@@ -582,11 +617,26 @@ async function startEditPlayerAttire(
   itemId: string,
   presetId: string,
 ): Promise<boolean> {
-  const slotMap = playerSlotMap.get(player.id);
-  const slot = slotMap ? [...slotMap.entries()].find(([, id]) => id === itemId)?.[0] : undefined;
+  // 槽位映射（playerSlotMap）可能在进程内与穿戴状态脱节（如默认预设已穿上但
+  // 映射被清理/应用路径未重建）——先直接查；找不到再重应用该预设重建映射再试，
+  // 避免"明明穿着却提示未穿戴、非得手动点一次应用"的割裂体验
+  const findSlot = (): number | undefined => {
+    const slotMap = playerSlotMap.get(player.id);
+    return slotMap ? [...slotMap.entries()].find(([, id]) => id === itemId)?.[0] : undefined;
+  };
+  let slot = findSlot();
   if (slot == null) {
-    player.sendClientMessage(COLOR_ERROR, "该装扮未穿戴在身上（先应用此预设），无法实时编辑");
-    return false;
+    // 重应用该预设（幂等：重新 setAttachedObject + 重建槽位映射，视觉无变化）
+    const applied = await applyPlayerPreset(player, presetId);
+    if (!applied) {
+      player.sendClientMessage(COLOR_ERROR, "该装扮未穿戴在身上（先应用此预设），无法实时编辑");
+      return false;
+    }
+    slot = findSlot();
+    if (slot == null) {
+      player.sendClientMessage(COLOR_ERROR, "该装扮未穿戴在身上（先应用此预设），无法实时编辑");
+      return false;
+    }
   }
   // 登记编辑态：onPlayerEditAttached 回调按 playerId 取到 presetId/itemId 落库
   playerEditing.set(player.id, { presetId, itemId });
@@ -850,7 +900,7 @@ async function showVehiclePresetList(
     options.push(
       `预设${p.index + 1}${p.name ? `（${p.name}）` : ""} ${p._count.items}/${MAX_VEHICLE_ATTIRE}槽`,
     );
-    options.push(`↕ 上移/下移「${p.name ? p.name : `预设${p.index + 1}`}」`);
+    options.push(`↑↓ 上移/下移「${p.name ? p.name : `预设${p.index + 1}`}」`);
   }
   const info = options.map((o, i) => `${i + 1}. ${o}`).join("\n");
   const r = await showDialog(
@@ -1058,8 +1108,12 @@ async function editVehiclePresetItem(
   }
 }
 
-/** 开始实时编辑车辆挂件：对该挂件的 DynamicObject 进入 obj 拖拽编辑。
- *  返回是否成功（未挂载 → false，调用方回菜单） */
+/** 开始实时编辑车辆挂件：先把挂件从车辆上分离成独立对象，再进入 obj 拖拽编辑。
+ *  返回是否成功（未挂载 → false，调用方回菜单）
+ *  detach 必要性：挂件 attach 在车上时，EditDynamicObject 拖拽无效（attach 关系
+ *  持续覆盖编辑写入的位置/旋转），表现为"拖不动"。SetDynamicObjectAttachedVehicle
+ *  分离后挂件保持当前位置成为独立全局对象，编辑的是世界坐标；保存/取消后由
+ *  applyVehiclePreset 按 DB 值重建重新 attach。 */
 async function startEditVehicleAttire(
   player: Player,
   itemId: string,
@@ -1072,6 +1126,16 @@ async function startEditVehicleAttire(
     return false;
   }
   vehicleEditing.set(player.id, { presetId, itemId });
+  try {
+    // 分离挂件（attach 状态编辑拖不动）：分离后对象留在当前位置，成为独立对象。
+    // infernus DynamicObject 无 detach API，仅此一处用 streamer native（见 samp 声明注释）
+    samp.callNative("SetDynamicObjectAttachedVehicle", "ii", obj.id, INVALID_VEHICLE_ID);
+    // 分离是对象状态突变（attach → 独立），streamer 默认不更新静止玩家的对象——
+    // 立即请求刷新，否则分离后挂件可能短暂不显示/位置错位
+    updateStreamerForPlayer(player.id);
+  } catch (e) {
+    logger.warn(`[attire] 车辆挂件分离失败 ${player.getName().name}`, e);
+  }
   player.sendClientMessage(COLOR_WHITE, "[装扮] 拖拽调整挂件位置，保存确认 / Esc 取消");
   obj.edit(player);
   return true;
@@ -1405,6 +1469,13 @@ export function initAttireEditor(): void {
         } catch (e) {
           logger.error(`[attire] 保存车辆挂件编辑失败 ${player.getName().name}`, e);
           player.sendClientMessage(COLOR_ERROR, "[装扮] 保存失败");
+        }
+        // 重建挂件：编辑期间对象是 detach 的独立状态，保存后必须按 DB 新偏移
+        // 重建并重新 attach（applyVehiclePreset 销毁旧对象 + 新建 attach），
+        // 否则挂件停在编辑位置且不再跟随车辆
+        const veh = getOwnedVehicle(player.id);
+        if (veh && veh.isValid()) {
+          void applyVehiclePreset(veh, st.presetId, player.id);
         }
       })();
       return next();

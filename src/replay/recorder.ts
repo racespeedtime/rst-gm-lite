@@ -108,10 +108,21 @@ export function getRecording(playerId: number): RecordingSession | undefined {
 
 /** 挂起的录制会话从旧 playerId 迁移到新 playerId（掉线重连且 id 被复用场景）：
  *  重连恢复时用新 playerId resume——会话仍键控在 playerId 上，id 变了不迁移
- *  则 resume 找不到会话（掉线静帧断在旧 id、回放缺段），旧 id 还残留挂起会话 */
-export function rebindRecording(oldPlayerId: number, newPlayerId: number): void {
+ *  则 resume 找不到会话（掉线静帧断在旧 id、回放缺段），旧 id 还残留挂起会话。
+ *  raceRoomId（可选）：归属校验——断线期间旧 playerId 可能被新连接复用并开了
+ *  **别的房间**的挂起会话（同一键被覆盖），重连续录会劫持别人的会话（画面写进
+ *  别人的录像）。仅当挂起会话属于本房间（无归属或匹配）才迁移，否则跳过
+ *  （resume 找不到会话 → 调用方新开录制，别人的会话留在原键由原房间收尾）。 */
+export function rebindRecording(
+  oldPlayerId: number,
+  newPlayerId: number,
+  raceRoomId?: number,
+): void {
   const session = sessions.get(oldPlayerId);
   if (!session || !session.suspended) return;
+  if (raceRoomId != null && session.raceRoomId != null && session.raceRoomId !== raceRoomId) {
+    return;
+  }
   sessions.delete(oldPlayerId);
   session.playerId = newPlayerId;
   sessions.set(newPlayerId, session);

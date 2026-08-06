@@ -7,8 +7,7 @@ import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
 import { spawnRaceVehicleAt, getDefaultRaceModel } from "./vehicle";
 import { cleanupScriptVehicle } from "./scripts";
-
-import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /** UUID 格式（按 id 查赛道前校验，避免非 uuid 输入触发 PostgreSQL 类型错误） */
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -78,7 +77,7 @@ export async function canEditRace(player: Player, raceId: string): Promise<boole
 /** 进入赛道编辑模式 */
 export async function enterRaceEdit(player: Player, raceId: string): Promise<void> {
   if (!(await canEditRace(player, raceId))) {
-    player.sendClientMessage(COLOR_ERROR, "你无权编辑该赛道");
+    sysMsg(player, "race", "你无权编辑该赛道", "error");
     return;
   }
   // 防重复进入泄漏测试车：连续 /r edit A /r edit B 时上一辆测试车不销毁会成
@@ -107,19 +106,19 @@ export async function enterRaceEdit(player: Player, raceId: string): Promise<voi
         Number(cps[0].z),
         Number(cps[0].angle),
       );
-      player.sendClientMessage(COLOR_RACE, "已刷出测试车辆并传送到赛道起点");
+      sysMsg(player, "race", "已刷出测试车辆并传送到赛道起点", "info");
     } else {
       // 新赛道还没有 CP：在当前位置发车，放置第一个 CP 后可从起点测试
       const pos = player.getPos();
       spawnRaceVehicleAt(player, model, pos.x, pos.y, pos.z, player.getFacingAngle().angle);
-      player.sendClientMessage(COLOR_RACE, "已刷出测试车辆，放置第一个 CP 后可测试赛道");
+      sysMsg(player, "race", "已刷出测试车辆，放置第一个 CP 后可测试赛道", "info");
     }
   } catch (e) {
     logger.error(`[race] 进入编辑模式失败 ${raceId}`, e);
-    player.sendClientMessage(COLOR_ERROR, "进入编辑模式失败，请稍后重试");
+    sysMsg(player, "race", "进入编辑模式失败，请稍后重试", "error");
     return;
   }
-  player.sendClientMessage(COLOR_RACE, "已进入赛道编辑模式，打开对话框操作");
+  sysMsg(player, "race", "已进入赛道编辑模式，打开对话框操作", "info");
   await showEditMenu(player);
 }
 
@@ -154,7 +153,7 @@ export async function showEditMenu(player: Player): Promise<void> {
   if (res.response !== 1) {
     // 取消：保留编辑态（对齐全局 MenuBack 惯例——取消返回上一层，
     // 不退出编辑；误触取消不丢编辑进度）。提示如何主动退出
-    player.sendClientMessage(COLOR_RACE, "编辑模式保持，选「退出编辑」或 /redit quit 退出");
+    sysMsg(player, "race", "编辑模式保持，选「退出编辑」或 /redit quit 退出", "info");
     await showEditMenu(player);
     return;
   }
@@ -178,12 +177,12 @@ export async function showEditMenu(player: Player): Promise<void> {
       await testRace(player);
       break;
     case 5:
-      player.sendClientMessage(COLOR_SUCCESS, "赛道已保存，退出编辑模式");
+      sysMsg(player, "race", "赛道已保存，退出编辑模式", "success");
       exitEdit(player.id);
       break;
     case 6:
       exitEdit(player.id);
-      player.sendClientMessage(COLOR_RACE, "已退出编辑模式");
+      sysMsg(player, "race", "已退出编辑模式", "info");
       break;
   }
 }
@@ -207,11 +206,11 @@ async function editRaceLaps(player: Player): Promise<void> {
   if (!res || res.response !== 1) return;
   const laps = Number(res.inputText.trim());
   if (!Number.isInteger(laps) || laps < 1 || laps > 99) {
-    player.sendClientMessage(COLOR_ERROR, "圈数需为 1-99 的整数");
+    sysMsg(player, "race", "圈数需为 1-99 的整数", "error");
     return;
   }
   await prisma.race.update({ where: { id: race.id }, data: { laps } });
-  player.sendClientMessage(COLOR_SUCCESS, `圈数已设为 ${laps}`);
+  sysMsg(player, "race", `圈数已设为 ${laps}`, "success");
 }
 
 /** 在玩家当前位置放置 CP（/r edit cp 命令入口也调它） */
@@ -238,10 +237,10 @@ export async function addCp(player: Player): Promise<void> {
       },
     });
     await recalcRaceLength(state.raceId);
-    player.sendClientMessage(COLOR_SUCCESS, `CP${index + 1} 已放置`);
+    sysMsg(player, "race", `CP${index + 1} 已放置`, "success");
   } catch (e) {
     logger.error(`[race] 放置CP失败`, e);
-    player.sendClientMessage(COLOR_ERROR, "放置失败");
+    sysMsg(player, "race", "放置失败", "error");
   }
 }
 
@@ -254,7 +253,7 @@ async function cpListMenu(player: Player): Promise<void> {
     orderBy: { index: "asc" },
   });
   if (cps.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, "还没有CP，先放置一个");
+    sysMsg(player, "race", "还没有CP，先放置一个", "error");
     await showEditMenu(player);
     return;
   }
@@ -394,7 +393,7 @@ async function reorderCp(player: Player): Promise<void> {
   }
   const target = res.listItem === 0 ? cps[idx - 1] : cps[idx + 1];
   if (!target) {
-    player.sendClientMessage(COLOR_ERROR, res.listItem === 0 ? "已是第一个CP" : "已是最后一个CP");
+    sysMsg(player, "race", res.listItem === 0 ? "已是第一个CP" : "已是最后一个CP", "error");
     await cpDetailMenu(player);
     return;
   }
@@ -406,9 +405,11 @@ async function reorderCp(player: Player): Promise<void> {
   });
   await recalcRaceLength(state.raceId);
   state.cpIndex = target.index; // 当前聚焦的 CP 跟随移动
-  player.sendClientMessage(
-    COLOR_SUCCESS,
+  sysMsg(
+    player,
+    "race",
     `CP${state.cpIndex + 1} 顺序已${res.listItem === 0 ? "前移" : "后移"}`,
+    "success",
   );
   await cpDetailMenu(player);
 }
@@ -421,7 +422,7 @@ async function moveCp(player: Player, cp: { id: string; raceId: string | null })
     data: { x: pos.x, y: pos.y, z: pos.z, angle: player.getFacingAngle().angle },
   });
   if (cp.raceId) await recalcRaceLength(cp.raceId);
-  player.sendClientMessage(COLOR_SUCCESS, "CP 已移动");
+  sysMsg(player, "race", "CP 已移动", "success");
 }
 
 /** 删除 CP（后续 index 前移）——事务内完成，中途失败整体回滚 */
@@ -441,7 +442,7 @@ async function deleteCp(
     });
     await recalcRaceLength(raceId, tx);
   });
-  player.sendClientMessage(COLOR_SUCCESS, "CP 已删除");
+  sysMsg(player, "race", "CP 已删除", "success");
 }
 
 /** 在指定 CP 后插入新 CP（后续 index 后移）——事务内完成，中途失败整体回滚 */
@@ -471,7 +472,7 @@ async function insertCp(
     });
     await recalcRaceLength(raceId, tx);
   });
-  player.sendClientMessage(COLOR_SUCCESS, "已插入新 CP");
+  sysMsg(player, "race", "已插入新 CP", "success");
 }
 
 /** 修改 CP 尺寸 */
@@ -490,11 +491,11 @@ async function editCpSize(player: Player, cp: { id: string }): Promise<void> {
   const size = Number(res.inputText.trim());
   // 上限 100：防止超大检测半径（RaceCheckpoint 无法渲染、且影响判断）
   if (!Number.isFinite(size) || size <= 0 || size > 100) {
-    player.sendClientMessage(COLOR_ERROR, "尺寸需在 1-100 之间");
+    sysMsg(player, "race", "尺寸需在 1-100 之间", "error");
     return;
   }
   await prisma.raceCp.update({ where: { id: cp.id }, data: { size } });
-  player.sendClientMessage(COLOR_SUCCESS, `CP 尺寸已设为 ${size}`);
+  sysMsg(player, "race", `CP 尺寸已设为 ${size}`, "success");
 }
 
 /** CP 脚本管理：查看/添加/上移下移/删除（脚本按 index 顺序执行，支持重排） */
@@ -503,7 +504,7 @@ async function cpScriptMenu(player: Player, cp: { id: string }): Promise<void> {
   const options = ["添加脚本"];
   for (let i = 0; i < scripts.length; i++) {
     options.push(`${i + 1}号: ${scripts[i].script}`);
-    options.push(`↕ 上移/下移 ${i + 1}号`);
+    options.push(`↑↓ 上移/下移 ${i + 1}号`);
   }
   options.push("返回");
   const res = await showDialog(
@@ -549,10 +550,10 @@ async function cpScriptMenu(player: Player, cp: { id: string }): Promise<void> {
           raceId: state!.raceId,
         },
       });
-      player.sendClientMessage(COLOR_SUCCESS, "脚本已添加");
+      sysMsg(player, "race", "脚本已添加", "success");
     } catch (e) {
       logger.error(`[race] 添加脚本失败`, e);
-      player.sendClientMessage(COLOR_ERROR, "添加失败");
+      sysMsg(player, "race", "添加失败", "error");
     }
     if (state) await cpScriptMenu(player, cp);
     return;
@@ -587,7 +588,7 @@ async function cpScriptMenu(player: Player, cp: { id: string }): Promise<void> {
     await compactSortIndex(rest, target.index, (id, index) =>
       prisma.raceCpScript.update({ where: { id }, data: { index } }),
     );
-    player.sendClientMessage(COLOR_SUCCESS, "脚本已删除");
+    sysMsg(player, "race", "脚本已删除", "success");
   }
   if (state) await cpScriptMenu(player, cp);
 }
@@ -617,10 +618,7 @@ async function reorderScript(
   }
   const neighbor = res.listItem === 0 ? scripts[idx - 1] : scripts[idx + 1];
   if (!neighbor) {
-    player.sendClientMessage(
-      COLOR_ERROR,
-      res.listItem === 0 ? "已是第一条脚本" : "已是最后一条脚本",
-    );
+    sysMsg(player, "race", res.listItem === 0 ? "已是第一条脚本" : "已是最后一条脚本", "error");
     await cpScriptMenu(player, cp);
     return;
   }
@@ -630,7 +628,7 @@ async function reorderScript(
       tx.raceCpScript.update({ where: { id }, data: { index } }),
     );
   });
-  player.sendClientMessage(COLOR_SUCCESS, `脚本已${res.listItem === 0 ? "上移" : "下移"}`);
+  sysMsg(player, "race", `脚本已${res.listItem === 0 ? "上移" : "下移"}`, "success");
   await cpScriptMenu(player, cp);
 }
 
@@ -653,11 +651,11 @@ async function editRaceInfo(player: Player): Promise<void> {
   if (!res || res.response !== 1) return;
   const name = res.inputText.trim();
   if (!name) {
-    player.sendClientMessage(COLOR_ERROR, "名称不能为空");
+    sysMsg(player, "race", "名称不能为空", "error");
     return;
   }
   await prisma.race.update({ where: { id: race.id }, data: { name } });
-  player.sendClientMessage(COLOR_SUCCESS, "赛道名称已更新");
+  sysMsg(player, "race", "赛道名称已更新", "success");
 }
 
 /** 测试赛道：刷出默认比赛车（首个 CP 有 cveh 换车用其车型，否则 411）放到第一个 CP 起点 */
@@ -671,7 +669,7 @@ async function testRace(player: Player): Promise<void> {
     orderBy: { index: "asc" },
   });
   if (!first) {
-    player.sendClientMessage(COLOR_ERROR, "赛道还没有CP");
+    sysMsg(player, "race", "赛道还没有CP", "error");
     return;
   }
   const cps = await prisma.raceCp.findMany({
@@ -687,7 +685,7 @@ async function testRace(player: Player): Promise<void> {
     Number(first.z),
     Number(first.angle),
   );
-  player.sendClientMessage(COLOR_RACE, "已刷出测试车辆并传送到赛道起点（测试模式）");
+  sysMsg(player, "race", "已刷出测试车辆并传送到赛道起点（测试模式）", "info");
 }
 
 /** 初始化编辑命令 */
@@ -695,20 +693,25 @@ export function initRaceEditor(): void {
   PlayerEvent.onCommandText("redit", async ({ player, subcommand, next }) => {
     const raceId = subcommand[0];
     if (!raceId) {
-      player.sendClientMessage(COLOR_RACE, "用法: /redit 赛道ID");
+      sysMsg(player, "race", "用法: /redit 赛道ID", "info");
       return next();
     }
     // id 是 uuid 列：非 uuid 输入直接查会让 PostgreSQL 抛类型错误
     if (!UUID_RE.test(raceId)) {
-      player.sendClientMessage(COLOR_ERROR, "赛道ID无效（需为 UUID 格式）");
+      sysMsg(player, "race", "赛道ID无效（需为 UUID 格式）", "error");
       return next();
     }
     await enterRaceEdit(player, raceId);
     return next();
   });
   PlayerEvent.onCommandText("redit quit", ({ player, next }) => {
+    // 不在编辑模式：明确提示而不是假装退出成功（对齐 /r edit q 的守卫）
+    if (!isEditing(player.id)) {
+      sysMsg(player, "race", "你不在赛道编辑中，先 /r edit 赛道名 进入编辑", "warn");
+      return next();
+    }
     exitEdit(player.id);
-    player.sendClientMessage(COLOR_RACE, "已退出编辑模式");
+    sysMsg(player, "race", "已退出编辑模式", "info");
     return next();
   });
 }

@@ -27,6 +27,7 @@ import {
   type CpScriptContext,
 } from "./scripts";
 import { isEditing } from "./editor";
+import { reapplyCurrentPlayerPreset } from "@/attire";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import {
@@ -51,14 +52,16 @@ import {
   isObserving,
   cleanupObserve,
   getObserverIdsOf,
+  getObserveTarget,
 } from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
 import { sessionManager } from "@/sessions/manager";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { formatTime } from "@/utils/format";
+import { sysMsg } from "@/utils/msg";
 import { MIN_Z } from "@/utils/map";
-import { COLOR_RACE, COLOR_SUCCESS, COLOR_ERROR, COLOR_WHITE } from "@/utils/colors";
+import { COLOR_RACE } from "@/utils/colors";
 
 /** 第一名完成后的结束倒计时（秒） */
 const END_GRACE_MS = 20_000;
@@ -101,6 +104,9 @@ interface PlayerRace {
   lap: number; // 当前圈（0 = 第一圈，laps-1 = 最后一圈）
   startTime: number;
   finished: boolean;
+  /** 当前名次（0-based，tickRooms 排名计算写入）。60fps TD 刷新（syncRaceTds）
+   * 只读该缓存——排名计算要做距离采样+排序，200ms 足够，高频刷新不重算 */
+  rank?: number;
   /** 加入比赛前的世界（开赛切独立世界，离开/结束时恢复） */
   prevWorld: number;
   /** 过 CP 后（脚本执行完）的状态快照，按"比赛累计 CP 序号"索引：
@@ -159,6 +165,11 @@ interface RaceRoom {
   endTimer?: NodeJS.Timeout;
   /** 每个成员的比赛信息 TextDraw（playerId -> 4 行 TD，开赛时创建） */
   raceTextTds: Map<number, RoomRaceTds>;
+  /** 比赛信息 TD 文本缓存（playerId -> 上次显示文本，成员与观战者各一条）。
+   *  60fps 高频刷新只对变化的内容 setString——静态/稳定段零 native 调用。
+   *  timeCs：上次显示的厘秒（秒表跳表去重，60fps 下大多数 tick 厘秒未变，
+   *  提前比较跳过 formatRaceTime 的格式化开销） */
+  tdTextCache: Map<number, { time: string; rank: string; timeCs: number }>;
   /** 赛道个人最佳缓存（userId -> 最佳毫秒，开赛时查一次；重连复用） */
   bestTimes: Map<string, number>;
   /** 完成结果索引（playerId -> time），避免每 tick 线性查找 */
@@ -321,6 +332,7 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
         }
         room.raceTextTds.delete(playerId);
       }
+      room.tdTextCache.delete(playerId);
       // 比赛中且比赛支持重连 → 进入重连窗口（已完成玩家不开窗口：成绩已纪录，防重连后重复完成）
       const estMs = estimateRaceDurationMs(room);
       if (room.state === "RACING" && !pr.finished && estMs >= RECONNECT_SUPPORT_MIN_MS) {
@@ -362,6 +374,7 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
         });
         room.members.delete(playerId);
         room.lastPositions.delete(playerId); // 掉线快照缓存随成员移出清理
+        room.afk.delete(playerId); // 挂机累计随断线清理（重连是新上下文，从零累计）
         playerRaces.delete(playerId);
         // 录制挂起：会话保持、掉线期间 fallbackSample 生成静止帧（车停在掉线
         // 位置、时间流逝），重连成功后 resume 续录——回放完整不中断，能看到
@@ -380,6 +393,7 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
       // 不支持重连或非比赛状态 → 原断线逻辑
       room.members.delete(playerId);
       room.lastPositions.delete(playerId); // 掉线快照缓存随成员移出清理
+      room.afk.delete(playerId); // 挂机累计随断线清理（防 Map 残留到房间销毁）
       // 房主掉线 → 转移房主
       if (room.ownerId === playerId) {
         const next = [...room.members.keys()][0];
@@ -468,13 +482,13 @@ export async function createRaceRoom(
   raceId: string | null,
 ): Promise<RaceRoom | null> {
   if (isInRace(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "你已在比赛中");
+    sysMsg(player, "race", "你已在比赛中", "error");
     return null;
   }
   // 编辑模式（/redit 赛道编辑器）中禁止进比赛：编辑器脚本车/CP 状态与比赛
   // 房间冲突，否则会卡在第一 CP 无法推进、编辑器车残留在世界
   if (isEditing(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "赛道编辑中不能创建比赛，先 /redit 退出编辑");
+    sysMsg(player, "race", "赛道编辑中不能创建比赛，先 /redit 退出编辑", "error");
     return null;
   }
   // 随机模式：抽到 <2 CP 的无效赛道最多重试 3 次（指定模式只查一次，失败即报错）
@@ -506,7 +520,7 @@ export async function createRaceRoom(
       : await pickRandomRace();
     if (!race || !race.isEnabled || race.deletedAt) {
       if (raceId) {
-        player.sendClientMessage(COLOR_ERROR, "赛道不存在或未启用");
+        sysMsg(player, "race", "赛道不存在或未启用", "error");
         return null;
       }
       race = null;
@@ -520,12 +534,12 @@ export async function createRaceRoom(
     if (cps.length >= 2) break;
     race = null; // 无效赛道（<2 CP）
     if (raceId) {
-      player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
+      sysMsg(player, "race", "该赛道至少需要 2 个检查点", "error");
       return null;
     }
   }
   if (!race) {
-    player.sendClientMessage(COLOR_ERROR, "暂无可用赛道");
+    sysMsg(player, "race", "暂无可用赛道", "error");
     return null;
   }
   const room: RaceRoom = {
@@ -553,6 +567,7 @@ export async function createRaceRoom(
     afk: new Map(),
     lastPositions: new Map(),
     raceTextTds: new Map(),
+    tdTextCache: new Map(),
     bestTimes: new Map(),
     resultIndex: new Map(),
     createdAt: Date.now(),
@@ -565,9 +580,11 @@ export async function createRaceRoom(
   };
   rooms.set(room.id, room);
   await joinRoom(player, room);
-  player.sendClientMessage(
-    COLOR_SUCCESS,
+  sysMsg(
+    player,
+    "race",
     `比赛房间已创建，赛道「${race.name}」（${room.laps} 圈），输入 /r j 可加入`,
+    "success",
   );
   return room;
 }
@@ -581,28 +598,28 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
   const pr = playerRaces.get(player.id);
   const room = pr ? rooms.get(pr.roomId) : undefined;
   if (!room) {
-    player.sendClientMessage(COLOR_ERROR, "你不在比赛房间中");
+    sysMsg(player, "race", "你不在比赛房间中", "error");
     return false;
   }
   if (room.ownerId !== player.id) {
-    player.sendClientMessage(COLOR_ERROR, "只有房主能更换赛道");
+    sysMsg(player, "race", "只有房主能更换赛道", "error");
     return false;
   }
   if (room.state !== "WAITING") {
-    player.sendClientMessage(COLOR_ERROR, "比赛已开始，不能更换赛道");
+    sysMsg(player, "race", "比赛已开始，不能更换赛道", "warn");
     return false;
   }
   const race = raceId
     ? await prisma.race.findUnique({ where: { id: raceId }, include: { sysUser: true } })
     : await pickRandomRace();
   if (!race || !race.isEnabled || race.deletedAt) {
-    player.sendClientMessage(COLOR_ERROR, "赛道不存在或未启用");
+    sysMsg(player, "race", "赛道不存在或未启用", "error");
     return false;
   }
   // await 期间房间可能已被 /r s 开赛（倒计时/开跑）→ 二次校验，防在 COUNTDOWN/
   // RACING 中静默替换赛道（换赛道对话框期间房主可同时 /r s）
   if (room.state !== "WAITING" || rooms.get(room.id) !== room) {
-    player.sendClientMessage(COLOR_ERROR, "比赛已开始，不能更换赛道");
+    sysMsg(player, "race", "比赛已开始，不能更换赛道", "warn");
     return false;
   }
   const cps = await prisma.raceCp.findMany({
@@ -611,7 +628,7 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
     include: { raceCpScripts: { orderBy: { index: "asc" } } },
   });
   if (cps.length < 2) {
-    player.sendClientMessage(COLOR_ERROR, "该赛道至少需要 2 个检查点");
+    sysMsg(player, "race", "该赛道至少需要 2 个检查点", "error");
     return false;
   }
   // 更新房间赛道数据（开赛前的等待阶段，成员进度均为 0）
@@ -657,15 +674,15 @@ export async function restartRace(player: Player): Promise<void> {
   const pr = playerRaces.get(player.id);
   const room = pr ? rooms.get(pr.roomId) : undefined;
   if (!room) {
-    player.sendClientMessage(COLOR_ERROR, "你不在比赛房间中");
+    sysMsg(player, "race", "你不在比赛房间中", "error");
     return;
   }
   if (room.ownerId !== player.id) {
-    player.sendClientMessage(COLOR_ERROR, "只有房主能重开比赛");
+    sysMsg(player, "race", "只有房主能重开比赛", "error");
     return;
   }
   if (room.state === "FINISHED") {
-    player.sendClientMessage(COLOR_ERROR, "比赛已结束（房间已解散），请重新创建比赛");
+    sysMsg(player, "race", "比赛已结束（房间已解散），请重新创建比赛", "error");
     return;
   }
   // 中断进行中的比赛（倒计时/结束宽限定时器清理）
@@ -714,9 +731,9 @@ export async function restartRace(player: Player): Promise<void> {
   if (wasRunning) {
     broadcastToRoom(room, `[赛车] 房主重开了比赛（赛道不变「${room.raceName}」），成员已回到起点`);
   } else {
-    player.sendClientMessage(COLOR_RACE, `已重置比赛（赛道 ${room.raceName}），成员已回到起点`);
+    sysMsg(player, "race", `已重置比赛（赛道 ${room.raceName}），成员已回到起点`, "info");
   }
-  player.sendClientMessage(COLOR_RACE, "输入 /r s 或面板「开始比赛」重新开局");
+  sysMsg(player, "race", "输入 /r s 或面板「开始比赛」重新开局", "info");
 }
 
 /** 找一个等待中的房间（roomUi 命令层 /r j 加入用；无则 undefined） */
@@ -765,14 +782,18 @@ export async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   // 提示：房主（创建者）不需要"等待房主开始"；无车兜底说明已刷默认比赛车
   const noCarHint = !getOwnedVehicle(player.id) ? "（无车已自动刷默认比赛车，可用 /c 换爱车）" : "";
   if (room.ownerId === player.id) {
-    player.sendClientMessage(
-      COLOR_RACE,
+    sysMsg(
+      player,
+      "race",
       `你加入了比赛房间（赛道 ${room.raceName}），输入 /r s 开始比赛${noCarHint}`,
+      "success",
     );
   } else {
-    player.sendClientMessage(
-      COLOR_RACE,
+    sysMsg(
+      player,
+      "race",
       `你加入了比赛房间（赛道 ${room.raceName}），等待房主开始${noCarHint}`,
+      "info",
     );
   }
 }
@@ -794,6 +815,7 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
       if (td.isValid()) td.destroy();
     }
     room.raceTextTds.delete(player.id);
+    room.tdTextCache.delete(player.id);
   }
   const defaultModel = getDefaultRaceModel(room.cps);
   const owned = getOwnedVehicle(player.id);
@@ -802,10 +824,7 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
     // （销毁旧车 + 懒创建，玩家始终以标准车参赛）
     if (owned.getModel() !== defaultModel) {
       await spawnVehicle(player, defaultModel, true);
-      player.sendClientMessage(
-        COLOR_RACE,
-        `[赛车] 本赛道标准车型为 ${defaultModel}，已切换为对应爱车`,
-      );
+      sysMsg(player, "race", `本赛道标准车型为 ${defaultModel}，已切换为对应爱车`, "info");
     }
     const veh = getOwnedVehicle(player.id);
     if (veh && veh.isValid()) {
@@ -823,10 +842,7 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
       player.setFacingAngle(first.angle); // 车内旋转车辆后玩家朝向同步（防视角没跟上）
     } else {
       await spawnVehicle(player, defaultModel, true);
-      player.sendClientMessage(
-        COLOR_RACE,
-        `[赛车] 本赛道标准车型为 ${defaultModel}，已刷为对应爱车`,
-      );
+      sysMsg(player, "race", `本赛道标准车型为 ${defaultModel}，已刷为对应爱车`, "info");
       const v = getOwnedVehicle(player.id);
       if (v && v.isValid()) {
         v.setPos(first.x, first.y, first.z);
@@ -861,11 +877,11 @@ export async function startRace(player: Player): Promise<void> {
   const room = rooms.get(pr.roomId);
   if (!room) return;
   if (room.ownerId !== player.id) {
-    player.sendClientMessage(COLOR_ERROR, "只有房主能开始比赛");
+    sysMsg(player, "race", "只有房主能开始比赛", "error");
     return;
   }
   if (room.state !== "WAITING") {
-    player.sendClientMessage(COLOR_ERROR, "比赛已开始");
+    sysMsg(player, "race", "比赛已开始", "warn");
     return;
   }
   room.state = "COUNTDOWN";
@@ -934,6 +950,7 @@ function beginRace(room: RaceRoom): void {
       mp.lap = 0;
       mp.startTime = now;
       mp.finished = false;
+      mp.rank = undefined; // 新一场比赛：名次缓存重置（tickRooms 重新计算）
       mp.cpSnapshots = []; // 新一场比赛：清空上场的回退快照
       room.afk.delete(m.id);
       // 比赛中强制无碰撞（防他人车辆穿模阻挡），结束/离开时按个人设置恢复
@@ -1005,7 +1022,9 @@ function beginRace(room: RaceRoom): void {
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);
       // 比赛信息 UI（C P/TIME/BEST/RANK）已在加入房间时创建（joinRoom），
-      // 开赛重置 TIME 显示为 0（tickRooms 开始计时刷新）
+      // 开赛重置 TIME 显示为 0（tickRooms 开始计时刷新）。TD 文本缓存一并清——
+      // 60fps syncRaceTds 以缓存去重，不清会让开赛首帧拿到上一场的旧文本
+      room.tdTextCache.delete(m.id);
       const tds = room.raceTextTds.get(m.id);
       if (tds) {
         tds.cp.setString(`C  P / ~p~1~w~/~y~${room.cps.length}`);
@@ -1136,6 +1155,7 @@ function destroyRaceTds(room: RaceRoom): void {
     }
   }
   room.raceTextTds.clear();
+  room.tdTextCache.clear();
 }
 
 /** 特殊音效脚本函数（过此 CP 有显著动作）：cveh 换车 / speed* 变速 / angle 转向 /
@@ -1213,7 +1233,7 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   if (pr.cpIndex >= room.cps.length - 1) {
     pr.cpIndex = -1;
     pr.lap++;
-    player.sendClientMessage(COLOR_RACE, `[赛车] 第 ${pr.lap + 1} 圈（共 ${room.laps} 圈）`);
+    sysMsg(player, "race", `第 ${pr.lap + 1} 圈（共 ${room.laps} 圈）`, "info");
   }
 
   // 触发当前 CP 脚本（脚本已随房间载入内存，不再查库）。
@@ -1479,7 +1499,7 @@ function endRoom(room: RaceRoom): void {
     cleanupScriptVehicle(m.id);
     const mp = playerRaces.get(m.id);
     if (mp && !mp.finished) {
-      m.sendClientMessage(COLOR_WHITE, "[赛车] 比赛已结束，你未完成比赛");
+      sysMsg(m, "race", "比赛已结束，你未完成比赛", "plain");
     }
     // 先退出观战（否则 stopObserve 会把世界覆盖回比赛世界），再恢复原世界
     if (isObserving(m.id)) {
@@ -1566,13 +1586,14 @@ export function leaveRace(player: Player): void {
   const pr = playerRaces.get(player.id);
   if (!pr) {
     // 不在比赛中：明确提示，避免 /r l 零反馈
-    player.sendClientMessage(COLOR_RACE, "[赛车] 你不在比赛中");
+    sysMsg(player, "race", "你不在比赛中", "info");
     return;
   }
   const room = rooms.get(pr.roomId);
   if (room) {
     room.members.delete(player.id);
     room.lastPositions.delete(player.id); // 掉线快照缓存随成员离开清理
+    room.afk.delete(player.id); // 挂机累计随离开清理（防 Map 残留）
     broadcastToRoom(room, `[赛车] ${player.getName().name} 离开了比赛`);
     const tds = room.raceTextTds.get(player.id);
     if (tds) {
@@ -1581,6 +1602,7 @@ export function leaveRace(player: Player): void {
       }
       room.raceTextTds.delete(player.id);
     }
+    room.tdTextCache.delete(player.id);
     // 房主离开 → 转移房主（否则其余成员永远无法开始比赛）
     if (room.ownerId === player.id) {
       const next = [...room.members.keys()][0];
@@ -1593,7 +1615,7 @@ export function leaveRace(player: Player): void {
     checkRoomState(room);
   }
   // 离开者自己的反馈
-  player.sendClientMessage(COLOR_RACE, "[赛车] 你已离开比赛房间");
+  sysMsg(player, "race", "你已离开比赛房间", "info");
   RaceCheckpoint.disable(player);
   clearRaceMapIcons(player); // 离开：清比赛小地图图标
   playerRaces.delete(player.id);
@@ -1685,15 +1707,20 @@ function tickRooms(): void {
         const idleMs = st.idleMs + AFK_TICK_MS;
         if (idleMs >= AFK_IDLE_MS) {
           room.afk.delete(m.id);
-          m.sendClientMessage(COLOR_RACE, "[赛车] 挂机时间过长，已移出比赛");
+          sysMsg(m, "race", "挂机时间过长，已移出比赛", "info");
           leaveRace(m);
           continue;
         }
         if (idleMs >= AFK_WARN_MS && st.idleMs < AFK_WARN_MS) {
-          m.sendClientMessage(COLOR_RACE, "[赛车] 检测到长时间静止，即将移出比赛（挂机检测）");
+          sysMsg(m, "race", "检测到长时间静止，即将移出比赛（挂机检测）", "warn");
         }
         room.afk.set(m.id, { x: pos.x, y: pos.y, z: pos.z, idleMs });
       } else {
+        // 位移恢复：取消本次挂机累计。若之前已处于警告区（提示过"即将移出"），
+        // 玩家动起来要明确告知"已取消"——否则刚收到警告又没了下文，困惑
+        if (st.idleMs >= AFK_WARN_MS) {
+          sysMsg(m, "race", "已检测到移动，取消挂机移出", "success");
+        }
         room.afk.set(m.id, { x: pos.x, y: pos.y, z: pos.z, idleMs: 0 });
       }
     }
@@ -1712,8 +1739,12 @@ function tickRooms(): void {
       let dist = 0;
       const nextCp = room.cps[mp.cpIndex + 1];
       if (nextCp && !mp.finished) {
-        const pos = m.getPos();
-        dist = Math.hypot(pos.x - nextCp.x, pos.y - nextCp.y, pos.z - nextCp.z);
+        // 复用 AFK 循环刚采样的位置（room.lastPositions，本 tick 已写入）——
+        // 每成员每 200ms 省一次 native getPos
+        const lp = room.lastPositions.get(m.id);
+        if (lp) {
+          dist = Math.hypot(lp.x - nextCp.x, lp.y - nextCp.y, lp.z - nextCp.z);
+        }
       }
       rows.push({
         playerId: m.id,
@@ -1746,21 +1777,95 @@ function tickRooms(): void {
     // 更新每人比赛信息 TD：TIME（对齐原版 RaceRunTime 计时）+ RANK（对齐原版
     // RaceRunRank 排名）。CP/BEST 由事件驱动更新（过 CP / 进比赛 / 跑完 PB），不在此刷。
     rows.forEach((r, rank) => {
-      const tds = room.raceTextTds.get(r.playerId);
       const mp = playerRaces.get(r.playerId);
-      if (!tds || !mp) return;
+      if (!mp) return;
+      // 名次写入缓存：60fps syncRaceTds 只读 mp.rank / tdTextCache 重放文本，
+      // 不重算排名（距离采样 + 排序保持 200ms 粒度，高频刷新零重计算）
+      mp.rank = rank;
       const time = mp.finished ? r.time : now - mp.startTime;
-      tds.time.setString(`TIME / ${formatRaceTime(time)}`);
-      tds.rank.setString(`RANK / ${rank + 1} ${rankSuffix(rank)}`);
+      const timeText = `TIME / ${formatRaceTime(time)}`;
+      const rankText = `RANK / ${rank + 1} ${rankSuffix(rank)}`;
+      setRaceTdText(room, r.playerId, timeText, rankText);
       // 观战者同步：观察该玩家的玩家显示同样的 TIME/RANK（对齐原版 RaceRunTime/
       // RaceRunRank 里对观战者的 TD 同步——观战者看到被观战者的比赛信息）
       for (const oid of getObserverIdsOf(r.playerId)) {
-        const ot = room.raceTextTds.get(oid);
-        if (!ot) continue;
-        ot.time.setString(`TIME / ${formatRaceTime(time)}`);
-        ot.rank.setString(`RANK / ${rank + 1} ${rankSuffix(rank)}`);
+        setRaceTdText(room, oid, timeText, rankText);
       }
     });
+  }
+}
+
+/** 写比赛信息 TD 文本 + 更新文本缓存（去重：相同文本不重复 setString）。
+ * 成员与观战者共用：cache 按 playerId 记录上次显示的文本，60fps 高频刷新
+ * 只对变化的内容调 native——静态/稳定段零开销 */
+function setRaceTdText(room: RaceRoom, playerId: number, timeText: string, rankText: string): void {
+  const tds = room.raceTextTds.get(playerId);
+  if (!tds) return;
+  let cache = room.tdTextCache.get(playerId);
+  if (!cache) {
+    cache = { time: "", rank: "", timeCs: -1 };
+    room.tdTextCache.set(playerId, cache);
+  }
+  if (timeText !== cache.time) {
+    cache.time = timeText;
+    tds.time.setString(timeText);
+  }
+  if (rankText !== cache.rank) {
+    cache.rank = rankText;
+    tds.rank.setString(rankText);
+  }
+}
+
+/** 60fps 比赛信息 TD 高频刷新（对齐回放观战的平滑效果）：TIME 实时推进跳表。
+ * 排名由 tickRooms（200ms）计算写入 mp.rank / tdTextCache，本函数只按缓存重放
+ * 文本——不做距离采样/排序，内容未变零 native 调用（cache 去重），仅 RACING
+ * 房间参与（WAITING/COUNTDOWN/FINISHED 直接跳过，空转开销忽略）。
+ * 成员刷自己的计时；观战者刷被观战者的计时（其 TD 缓存由 tickRooms 写入，
+ * 这里按被观战者 startTime 重算同值） */
+function syncRaceTds(): void {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    if (room.state !== "RACING") continue;
+    // 成员本人：TIME 实时推进（finished 定格在 tickRooms 写入的完成时间）。
+    // 观战中的成员跳过：其 TD 显示被观战者的信息（下面观战循环写），否则
+    // 60fps 会用自己的时间覆盖掉 tickRooms 写入的被观战者时间——出现"自己的
+    // 时间 + 别人的名次"错乱。
+    for (const m of room.members.values()) {
+      const mp = playerRaces.get(m.id);
+      const tds = room.raceTextTds.get(m.id);
+      const cache = room.tdTextCache.get(m.id);
+      if (!mp || !tds || !cache || mp.finished || isObserving(m.id)) continue;
+      // 秒表跳表：仅当显示值（厘秒）变化才格式化+setString——60fps 下大多数
+      // tick 的厘秒没变，跳过能省下 formatRaceTime 的除法/padStart/模板串
+      const cs = Math.floor((now - mp.startTime) / 10);
+      if (cs !== cache.timeCs) {
+        cache.timeCs = cs;
+        const timeText = `TIME / ${formatRaceTime(now - mp.startTime)}`;
+        cache.time = timeText;
+        tds.time.setString(timeText);
+      }
+    }
+    // 观战中的房内成员：同步被观战者（玩家）的 TIME（RANK 由 tickRooms 写入
+    // 被观战者名次，两者一致）。只处理房内成员（tdTextCache 只为有房间 TD 的
+    // 成员/观察者创建；房外观察者无本房 TD，本就没有 TD 可刷）。
+    for (const pid of room.tdTextCache.keys()) {
+      if (!isObserving(pid)) continue;
+      const st = getObserveTarget(pid);
+      if (!st || st.kind !== "player") continue;
+      const target = Player.getInstance(st.targetId);
+      if (!target || !target.isConnected()) continue;
+      const tmp = playerRaces.get(st.targetId);
+      const tds = room.raceTextTds.get(pid);
+      const cache = room.tdTextCache.get(pid);
+      if (!tmp || !tds || !cache || tmp.finished) continue;
+      const cs = Math.floor((now - tmp.startTime) / 10);
+      if (cs !== cache.timeCs) {
+        cache.timeCs = cs;
+        const timeText = `TIME / ${formatRaceTime(now - tmp.startTime)}`;
+        cache.time = timeText;
+        tds.time.setString(timeText);
+      }
+    }
   }
 }
 
@@ -1781,6 +1886,8 @@ export function initRaceSystem(): void {
 
   // 实时排名定时器（GameMode.onExit 统一清理）
   setIntervalSafe(() => tickRooms(), 200);
+  // 比赛信息 TD 高频刷新（60fps，对齐回放观战效果；只对变化内容调 native）
+  setIntervalSafe(() => syncRaceTds(), 16);
 
   // 比赛中的命令隔离：非白名单命令一律拒绝
   // 注意：onCommandReceived 的 command 是完整命令串（如 "r l"），strictMainCmd
@@ -1790,17 +1897,14 @@ export function initRaceSystem(): void {
     if (!isInRace(player.id)) return next();
     const main = (strictMainCmd || command.split(/\s+/)[0] || "").toLowerCase();
     if (isRaceCommandAllowed(main)) return next();
-    player.sendClientMessage(
-      COLOR_ERROR,
-      "[比赛] 比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生",
-    );
+    sysMsg(player, "match", "比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生", "error");
     return false;
   }, true); // unshift 优先执行（在限频之前，避免双提示）
 
   // /kill 重生（原版比赛中允许）
   PlayerEvent.onCommandText("kill", ({ player, next }) => {
     if (player.isWasted()) {
-      player.sendClientMessage(COLOR_WHITE, "[系统] 生命值为空，请等待重生");
+      sysMsg(player, "system", "生命值为空，请等待重生", "plain");
       return next();
     }
     if (!isInRace(player.id)) {
@@ -1816,7 +1920,7 @@ export function initRaceSystem(): void {
       return next();
     }
     // 在比赛房间但未开跑（WAITING/COUNTDOWN）：没有比赛进度，正常重生而非自杀
-    player.sendClientMessage(COLOR_RACE, "[赛车] 比赛尚未开始，已正常重生");
+    sysMsg(player, "race", "比赛尚未开始，已正常重生", "info");
     player.spawn();
     return next();
   });
@@ -1852,7 +1956,7 @@ export function initRaceSystem(): void {
       if (room && room.state === "RACING" && getOwnedVehicle(driver.id) === vehicle) {
         destroyPlayerVehicle(driver.id); // 清理爆炸后残留的失效实体引用
         void spawnVehicle(driver, getDefaultRaceModel(room.cps), true);
-        driver.sendClientMessage(COLOR_RACE, "[赛车] 车辆已损毁，自动刷出比赛用车");
+        sysMsg(driver, "race", "车辆已损毁，自动刷出比赛用车", "info");
       }
     }
     return next();
@@ -2041,10 +2145,7 @@ function respawnPlayerToCp(
   respawnToCpCore(player, room, target);
   applyRollbackState(player, pr, target);
   writeBackRollbackProgress(player, pr, room, target, rollback);
-  player.sendClientMessage(
-    COLOR_RACE,
-    `[赛车] 已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`,
-  );
+  sysMsg(player, "race", `已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`, "info");
 }
 
 /** 比赛中重生回上一 CP（/kill 与快捷操作共用；车就位 + 放回车里） */
@@ -2059,10 +2160,7 @@ export function respawnToLastCp(
   respawnToCpCore(player, room, target);
   applyRollbackState(player, pr, target);
   writeBackRollbackProgress(player, pr, room, target, rollback);
-  player.sendClientMessage(
-    COLOR_RACE,
-    `[赛车] 已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`,
-  );
+  sysMsg(player, "race", `已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`, "info");
 }
 
 /** 回退（rollback>0）时把玩家进度回写到目标 CP：否则 onPlayerReachCp 仍按旧
@@ -2119,7 +2217,7 @@ export function rollbackToPrevCp(player: Player, pr: PlayerRace, room: RaceRoom)
   // 不同 CP 可回退（回退会 clamp 到同一目标）。跨圈后 cpIndex=-1 但累计序号
   // lap×len-1 ≥ len-1，回退目标 = 上一圈末 CP 的前一个，有效。
   if (pr.lap * room.cps.length + pr.cpIndex < 1) {
-    player.sendClientMessage(COLOR_ERROR, "[赛车] 当前进度没有更早的检查点可回退");
+    sysMsg(player, "race", "当前进度没有更早的检查点可回退", "error");
     return;
   }
   respawnToLastCp(player, pr, room, 1);
@@ -2142,9 +2240,25 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     if (Date.now() >= until || room.state === "FINISHED") {
       room.reconnectUntil.delete(auth.userId);
       room.reconnectSlots.delete(auth.userId);
+      // 归属校验（对齐 cleanupExpiredReconnects）：断线期间该 playerId 可能被新
+      // 连接复用并开了别的房间的录制，不能误停别人的活跃会话
       if (slot && isRecording(slot.playerId)) {
-        void stopRecording(slot.playerId, { quiet: true });
+        const rec = getRecording(slot.playerId);
+        if (!rec || !rec.raceRoomId || rec.raceRoomId === room.id) {
+          void stopRecording(slot.playerId, { quiet: true });
+        }
       }
+      // 玩家已在线（重连流程中）：明确提示窗口状态，避免"输入完密码直接走登录
+      // 流程"的困惑（重连窗口只对进行中的比赛建立，短比赛/过期/房间结束都无
+      // 法恢复，走正常登录是预期行为，但要说清楚）
+      sysMsg(
+        player,
+        "race",
+        room.state === "FINISHED"
+          ? "原比赛房间已结束，无法重连（将正常登录）"
+          : "重连窗口已过期，无法恢复比赛（将正常登录）",
+        "warn",
+      );
       continue;
     }
     // 恢复：重新加入房间 + 恢复进度
@@ -2152,9 +2266,10 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     room.reconnectSlots.delete(auth.userId);
     // playerId 可能已被复用（新连接 id 与掉线时不同）：把挂起的录制会话从
     // 旧 id 迁移到新 id，否则 resumeRecording(player.id) 找不到会话（掉线静帧
-    // 断在旧 id 上、回放缺段），且旧 id 残留挂起会话占内存
+    // 断在旧 id 上、回放缺段），且旧 id 残留挂起会话占内存。传 raceRoomId 归属
+    // 校验：旧 id 可能已被新连接占用来开别的房间的挂起会话，不能劫持
     if (slot && slot.playerId !== player.id) {
-      rebindRecording(slot.playerId, player.id);
+      rebindRecording(slot.playerId, player.id, room.id);
     }
     room.members.set(player.id, player);
     room.raceMembersLast.set(player.id, auth.userId); // 重新登记本场录制成员（userId 快照供离线作废）
@@ -2175,9 +2290,14 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       cpSnapshots: [], // 重连是新连接：回退重生快照从空重建（后续过 CP 重新记录）
     });
     // 切回比赛世界 + 恢复掉线瞬间位置（重连是全新连接，跳过出生定位，不恢复
-    // 会出现在地图默认出生点，与"继续第 N 圈"提示严重不符）
+    // 会出现在地图默认出生点，与"继续第 N 圈"提示严重不符）。
+    // 只 setSpawnInfo 不设 pendingSpawnPos：比赛中 onSpawn 的 respawnBySetting 对
+    // isInRace 玩家提前 return（不会随机定位），setSpawnInfo 即权威；而 pendingSpawnPos
+    // 若残留会在**之后的死亡重生**被 onSpawn 误消费（把玩家 setPos 回掉线点并弹出车）。
     player.setVirtualWorld(room.worldId);
     if (slot && slot.x !== 0) {
+      const angle = room.cps[Math.max(0, slot.cpIndex)]?.angle ?? 0;
+      player.setSpawnInfo(0, player.getSkin(), slot.x, slot.y, slot.z, angle, 0, 0, 0, 0, 0, 0);
       player.setPos(slot.x, slot.y, slot.z);
     }
     // 清挂机采样：playerId 键可能继承掉线前的静止累计（重连后停在原地没立刻开
@@ -2196,6 +2316,16 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
         });
       }
       const tds = createRaceTd(player, room);
+      // 立即写入 TIME/RANK（含初始化 tdTextCache）：否则下一个 tickRooms（≤200ms）
+      // 前 syncRaceTds 无 cache 跳过、TD 停在创建时的 "00:00:00 / 1 st"，显示
+      // 从 0 跳变到掉线前累计时间。TIME 用 startTime 起算（slot 恢复的掉线前计时）
+      const rstart = playerRaces.get(player.id)?.startTime ?? Date.now();
+      setRaceTdText(
+        room,
+        player.id,
+        `TIME / ${formatRaceTime(Date.now() - rstart)}`,
+        `RANK / 1 ${rankSuffix(0)}`,
+      );
       // 恢复 BEST TD（房间缓存已有，无则查询）
       void updateBestTd(player, room, tds);
       // 恢复 CP 进度 TD（按断线时进度）
@@ -2216,10 +2346,16 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
         void spawnVehicle(player, getDefaultRaceModel(room.cps), true);
       }
     }
+    // 重连是全新连接：onDisconnect 已 cleanupAttire 清空挂件，且重连路径不触发
+    // onSpawn（玩家被直接放回车里）——手动重挂默认人物装扮，否则整个重连比赛
+    // 期间装扮缺失
+    void reapplyCurrentPlayerPreset(player);
     broadcastToRoom(room, `[赛车] ${player.getName().name} 已重连比赛！`);
-    player.sendClientMessage(
-      COLOR_SUCCESS,
+    sysMsg(
+      player,
+      "race",
       `已重连比赛「${room.raceName}」，继续第 ${(slot?.lap ?? 0) + 1} 圈`,
+      "success",
     );
     // 房主重连 → 恢复房主身份
     if (room.ownerId === player.id || room.ownerUserId === auth.userId) {

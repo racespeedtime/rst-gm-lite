@@ -3,6 +3,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { setIntervalSafe } from "@/core/timers";
 import { getObserveTarget } from "@/core/observe";
+import { getReplaySpeedScaleForVehicle } from "@/replay/playback";
 import {
   getCachedSetting,
   getCachedSettingByUserId,
@@ -28,8 +29,10 @@ import {
 } from "./debugInfo";
 import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUserSetting";
 
-/** 刷新频率（原版 updateSpeedometer 定时器为 200ms） */
-const REFRESH_INTERVAL_MS = 200;
+/** 刷新频率（原版 updateSpeedometer 定时器为 200ms；提升到 100ms 对齐回放
+ *  观战的流畅度——速度数字/刻度在 60fps 观战视角下平滑跳表，实际驾驶同样
+ *  更跟手。100ms = 10Hz，文本类 TextDraw setString 开销可忽略） */
+const REFRESH_INTERVAL_MS = 100;
 
 /** 单个玩家的 GUI 运行时状态 */
 interface PlayerGui {
@@ -37,11 +40,16 @@ interface PlayerGui {
   speedo3d: DynamicObject | null;
   /** 3d 速度表当前 attach 到的车辆 id（换车时据此重建） */
   speedo3dVehId: number | null;
+  /** 上次 2d 速度表渲染的整数 kmh（100ms 刷新去重：刻度颜色只在跨 10 分档变化
+   *  才重绘，静止玩家一个都不变——避免每 tick 无条件 21 次 native setString+setColor） */
+  speedoKmh: number;
+  /** 上次 3d 速度表贴图文本（去重：材质文字重渲染是重型 native，文本不变跳过） */
+  speedo3dText: string;
   netstat: NetstatState | null;
   debugInfo: DebugInfoState | null;
   /** 构建版本 TD（与 debug 联动：showDebugInfo 开关一并创建/销毁） */
   buildTd: TextDraw | null;
-  /** 上次更新网络面板的时间戳（网络面板每秒更新，与 200ms 速度表 tick 分离） */
+  /** 上次更新网络面板的时间戳（网络面板每秒更新，与 100ms 速度表 tick 分离） */
   netstatAt: number;
 }
 
@@ -65,6 +73,8 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     speedoTd: [],
     speedo3d: null,
     speedo3dVehId: null,
+    speedoKmh: -1,
+    speedo3dText: "",
     netstat: null,
     debugInfo: null,
     buildTd: null,
@@ -144,11 +154,26 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
 function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingModel): void {
   if (setting.hideAllGui) return;
   const kmh = getDisplaySpeed(player);
-  if (gui.speedoTd.length > 0) updateSpeed2d(gui.speedoTd, kmh);
-  if (gui.speedo3d) updateSpeed3d(player, gui.speedo3d, kmh);
+  // 2d 速度表：整数 kmh 分档去重——刻度颜色只在跨 10 的分档变化（静止玩家一次
+  // 都不变），避免每 100ms 无条件 1 setString + 20 setColor（全库最高 native 源）
+  if (gui.speedoTd.length > 0) {
+    const kmhInt = Math.floor(kmh);
+    if (kmhInt !== gui.speedoKmh) {
+      gui.speedoKmh = kmhInt;
+      updateSpeed2d(gui.speedoTd, kmh);
+    }
+  }
+  // 3d 速度表：贴图材质文字重渲染昂贵，文本不变跳过
+  if (gui.speedo3d) {
+    const text = `${String(Math.floor(kmh)).padStart(3, "0")} KMH`;
+    if (text !== gui.speedo3dText) {
+      gui.speedo3dText = text;
+      updateSpeed3d(player, gui.speedo3d, kmh);
+    }
+  }
   if (gui.debugInfo) updateDebugInfo(player, gui.debugInfo, kmh);
   // 网络面板速率是每秒增量（KB/s），须每秒更新（对齐原版 network GUI）；
-  // 不跟 200ms 速度表 tick 一起刷，否则速率数值偏小且刷新过快看不清
+  // 不跟 100ms 速度表 tick 一起刷，否则速率数值偏小且刷新过快看不清
   if (gui.netstat && Date.now() - gui.netstatAt >= 1000) {
     updateNetstat(gui.netstat, player);
     gui.netstatAt = Date.now();
@@ -159,15 +184,22 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
  * 获取速度表显示速度（对齐原版 RST）：
  * - 观战中：取被观战者速度（观战玩家 → 其自身；观战车辆 → 车辆速度）
  * - 非观战：车内取车辆速度，步行取玩家自身速度
- * - 回放 ghost 车：ghost 车 setVelocity 赋录制速度，getSpeed() 即真实速度，
- *   观战直接读车辆速度（无需旁路）
+ * - 回放 ghost 车：velocity 已被倍速缩放（emulate 物理与位置推进一致），
+ *   getSpeed() 是倍速后的速度——显示要反向除回倍速 = 录制原始 1 倍速
+ *   （4× 播时车速表显示真实车速而非 4 倍；0.5× 同理显示原速）
  */
 function getDisplaySpeed(player: Player): number {
   const st = getObserveTarget(player.id);
   if (st) {
-    const inst =
-      st.kind === "player" ? Player.getInstance(st.targetId) : Vehicle.getInstance(st.targetId);
-    return inst ? inst.getSpeed() : 0;
+    if (st.kind === "vehicle") {
+      const veh = Vehicle.getInstance(st.targetId);
+      if (!veh) return 0;
+      const sp = veh.getSpeed();
+      const scale = getReplaySpeedScaleForVehicle(veh.id);
+      return scale ? sp / scale : sp;
+    }
+    const target = Player.getInstance(st.targetId);
+    return target ? target.getSpeed() : 0;
   }
   const veh = player.isInAnyVehicle() ? player.getVehicle() : null;
   return veh ? veh.getSpeed() : player.getSpeed();

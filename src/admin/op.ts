@@ -81,6 +81,11 @@ export async function resetUserPassword(player: Player, back?: MenuBack): Promis
 
 /** 打开管理员面板（对话框菜单）。子功能取消时返回本面板，本面板"关闭"返回上一层 */
 export async function openOpPanel(player: Player, back?: MenuBack): Promise<void> {
+  // 纵深防御：面板 visible 过滤外，入口再复查一次（对齐 house-admin 先例）
+  if (!isSuperAdmin(player)) {
+    sendNoPermission(player);
+    return back?.();
+  }
   const res = await showDialog(
     player,
     new Dialog({

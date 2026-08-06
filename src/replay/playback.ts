@@ -4,6 +4,8 @@ import {
   KeysEnum,
   Npc,
   Player,
+  Streamer,
+  StreamerItemTypes,
   TextDraw,
   Vehicle,
 } from "@infernus/core";
@@ -107,6 +109,58 @@ export const REPLAY_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4];
 /** emulate 发包节流：对齐 open.mp in_vehicle_sync_rate=30（30Hz）——60fps tick
  *  每 2 tick 发一个 DriverSync 模拟包（发太多服务器会合并/浪费） */
 const EMULATE_INTERVAL_MS = 33;
+
+/** 找回放 ghost 车所属会话的倍速（非回放/挑战车返回 null）。
+ * 速度表反向除倍速用：emulate 驱动把 velocity×倍速推进（物理位置与速度一致），
+ * 车速表显示要还原录制原始 1 倍速——gui.getDisplaySpeed 对回放车 sp/scale。
+ * 挑战影子固定 1 倍速且不在本 sessions，返回 null 走原值（除 1 等效）。 */
+export function getReplaySpeedScaleForVehicle(vehicleId: number): number | null {
+  for (const s of sessions.values()) {
+    for (const g of s.ghosts) {
+      if (g.vehicle.id === vehicleId) return s.speed;
+    }
+  }
+  return null;
+}
+
+/**
+ * 回放 ghost 身份标签（车顶 3D 标签"身份 + 扮演谁 + ghost N/M"）的临时显隐偏好。
+ * 会话级临时设置**不落库**：playerId 在集合 = 该玩家隐藏标签（区分多分身可能
+ * 干扰视线，玩家可暂时屏蔽）。断线/重新登录即重置为默认显示。
+ */
+const hiddenReplayLabels = new Set<number>();
+
+/** 对某玩家应用一个回放会话的 ghost 标签显隐（创建会话 / 切换偏好时调用） */
+function applyLabelVisibilityForPlayer(session: ReplaySession, playerId: number): void {
+  const p = Player.getInstance(playerId);
+  if (!p || !p.isConnected()) return;
+  const visible = !hiddenReplayLabels.has(playerId);
+  for (const g of session.ghosts) {
+    try {
+      // per-item 流式显隐：只影响该玩家对这个 label 的可见性（不影响他人/其他标签）
+      Streamer.toggleItem(p, StreamerItemTypes.TEXT_3D_LABEL, g.label.id, visible);
+    } catch {
+      /* 标签已失效等，忽略 */
+    }
+  }
+}
+
+/** 切换该玩家回放标签显隐（/rp label；不落库，断线重置）。返回切换后的状态（true=显示） */
+export function toggleReplayLabels(player: Player): boolean {
+  if (hiddenReplayLabels.has(player.id)) {
+    hiddenReplayLabels.delete(player.id);
+  } else {
+    hiddenReplayLabels.add(player.id);
+  }
+  const visible = !hiddenReplayLabels.has(player.id);
+  // 应用到该玩家当前所有回放会话（新建会话在 spawnReplay 里按当前偏好应用）
+  for (const s of sessions.values()) {
+    if (s.ownerId === player.id) {
+      applyLabelVisibilityForPlayer(s, player.id);
+    }
+  }
+  return visible;
+}
 
 interface Ghost {
   npc: Npc;
@@ -524,6 +578,15 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
   if (ghost.stopped) return;
   const s = sampleAt(session.data, ghost.playTime);
   if (!s) return;
+  // velocity 随倍速缩放：位置按倍速跳变（playTime 走得快），速度字段同步乘
+  // 倍速——客户端物理插值/位置推进与速度一致（不缩放会出现"位置快、速度字段
+  // 慢"的抽动）。倍速 1 时跳过（恒等）；atEnd 时 emulateDriverSync 会把速度清零，
+  // 缩放无影响。车速表侧由 gui.getDisplaySpeed 反向除回倍速显示录制原始速度。
+  if (session.speed !== 1) {
+    s.vx *= session.speed;
+    s.vy *= session.speed;
+    s.vz *= session.speed;
+  }
   const maxTime =
     (session.data.header.frameCount - 1) * Math.max(1, session.data.header.frameIntervalMs);
   // 播完判定：playTime 已 clamp 到终点 → 发完这一帧即停止驱动。否则会持续
@@ -966,6 +1029,8 @@ export async function spawnReplay(
   sessions.set(player.id, session);
   session.timer = setIntervalSafe(() => tickSession(session), TICK_MS);
   for (const g of session.ghosts) renderGhost(session, g);
+  // 按该玩家当前偏好应用 ghost 标签显隐（默认显示；隐藏偏好是临时设置不落库）
+  applyLabelVisibilityForPlayer(session, player.id);
 
   if (isGhost) {
     // 自由录制回放：ghost 放当前世界（不切世界、不观战），同世界玩家看得见
@@ -1180,6 +1245,7 @@ export function stopReplaySession(playerId: number): void {
 /** 玩家断线清理（发起的会话销毁） */
 export function cleanupPlayback(playerId: number): void {
   stopReplaySession(playerId);
+  hiddenReplayLabels.delete(playerId); // 临时偏好随断线重置（默认显示）
 }
 
 /** 服务器退出：销毁全部回放会话 */

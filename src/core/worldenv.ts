@@ -3,7 +3,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getSetting } from "@/personalize/settings";
-import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
+import { setIntervalSafe, clearIntervalSafe, setTimeoutSafe } from "@/core/timers";
 import { isInRace } from "@/race/room";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { DEFAULT_CHARSET } from "@/utils/constants";
@@ -155,8 +155,15 @@ const MAP_ICON_STREAM_DISTANCE = 2500;
  *    城市内的图标显示、走远消失——按城市就近显示，不再全图常驻铺满小地图）
  * 3. 系统传送点 → 3D 标签（"/名称 + 描述"）
  * 4. 启用赛道起点 → 3D 标签（"输入 /r s 赛道名 开始比赛"）+ 地图图标（类型 53）
+ *
+ * attempt（内部重试计数）：onInit 时机 DB 连接池可能尚未就绪，任一段查询失败会让
+ * 该段实体缺失且永不补建（地图图标/传送点/赛道起点消失）。任一段失败 → 整体延迟
+ * 重试补加载（上限 WORLD_ENV_RETRY 次），重试前先清掉已建的部分实体防重复创建。
  */
-export async function initWorldEnvironment(): Promise<void> {
+const WORLD_ENV_RETRY = 5;
+const WORLD_ENV_RETRY_MS = 30_000;
+
+export async function initWorldEnvironment(attempt = 1): Promise<void> {
   // 1. 全局时间天气（现实时间同步 + 分时段天气）
   syncWorldClock();
   currentWeather = weatherByTime(new Date().getHours());
@@ -166,6 +173,7 @@ export async function initWorldEnvironment(): Promise<void> {
   const icons: DynamicMapIcon[] = [];
   const labels: TextLabel[] = [];
   const checkpoints: DynamicCheckpoint[] = [];
+  let failed = false;
 
   // 2. 地图图标（数据库 map_icon 表）
   // 用 DynamicMapIcon 流式图标：streamDistance 覆盖一个城市范围（SA 城市半径
@@ -198,7 +206,8 @@ export async function initWorldEnvironment(): Promise<void> {
       `[worldenv] 已创建 ${icons.length} 个地图图标（流式，城市范围 ${MAP_ICON_STREAM_DISTANCE}）`,
     );
   } catch (e) {
-    logger.error("[worldenv] 加载地图图标失败", e);
+    logger.error(`[worldenv] 加载地图图标失败（第 ${attempt} 次）`, e);
+    failed = true;
   }
 
   // 3. 系统传送点 3D 标签
@@ -227,7 +236,8 @@ export async function initWorldEnvironment(): Promise<void> {
     }
     logger.info(`[worldenv] 已创建 ${tps.length} 个系统传送点标签`);
   } catch (e) {
-    logger.error("[worldenv] 加载传送点标签失败", e);
+    logger.error(`[worldenv] 加载传送点标签失败（第 ${attempt} 次）`, e);
+    failed = true;
   }
 
   // 4. 赛道起点展示：对齐原版 RaceGetCpsQuery 三件套——
@@ -287,10 +297,22 @@ export async function initWorldEnvironment(): Promise<void> {
     }
     logger.info(`[worldenv] 已展示 ${raceLabels} 个赛道起点`);
   } catch (e) {
-    logger.error("[worldenv] 加载赛道起点失败", e);
+    logger.error(`[worldenv] 加载赛道起点失败（第 ${attempt} 次）`, e);
+    failed = true;
   }
 
+  // 提交（覆盖旧引用；失败段为空数组，onExit 按当前 worldEnv 清理）
   worldEnv = { icons, labels, checkpoints };
+
+  // 任一段失败（onInit 时机 DB 未就绪等一次性故障）：清掉已建的部分实体后
+  // 延迟重试补加载（上限内），防地图图标/传送点/赛道起点缺失且无人发现。
+  // 上限达后放弃——持续连不上说明 DB 真有问题，不再空转重试
+  if (failed && attempt < WORLD_ENV_RETRY) {
+    setTimeoutSafe(() => {
+      clearWorldEnvironment();
+      void initWorldEnvironment(attempt + 1);
+    }, WORLD_ENV_RETRY_MS);
+  }
 }
 
 /** 玩家当前应跟随的现实游戏时间 */

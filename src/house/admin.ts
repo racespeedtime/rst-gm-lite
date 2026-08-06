@@ -14,6 +14,7 @@ import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import { loadAllHouseObjects, unloadAllHouseObjects, applyHouseRemovedBuildings } from "./index";
+import { isSuperAdmin } from "@/admin/op";
 import { sysMsg } from "@/utils/msg";
 import type { MenuBack } from "@/core/panel";
 
@@ -507,6 +508,12 @@ async function houseActions(
 
 /** OP 房屋管理入口：房屋列表（分页，含启用状态/关联赛道）→ 操作菜单 */
 export async function openHouseAdminMenu(player: Player, back?: MenuBack): Promise<void> {
+  // 内部复查权限（对齐 attire/admin、profile、replay/menu 的纵深防御）：面板
+  // visible 过滤可能被绕过（如 /sz 等聚合入口直接调用），入口处再校验一次
+  if (!isSuperAdmin(player)) {
+    sysMsg(player, "house", "你无权管理房屋", "error");
+    return back?.();
+  }
   ensureDirs(); // 惰性建目录（导入/导出可用）
   const again = () => openHouseAdminMenu(player, back);
   const houses = await prisma.house.findMany({

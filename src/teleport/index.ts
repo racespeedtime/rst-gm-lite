@@ -6,6 +6,7 @@ import { isSuperAdmin } from "@/admin/op";
 import { isPlayerLocked } from "@/core/interaction";
 import { sessionManager } from "@/sessions/manager";
 import { isInRace } from "@/race/room";
+import { isObserving } from "@/core/observe";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
@@ -16,6 +17,16 @@ import { containsSensitiveWord } from "@/utils/sensitive";
 const TP_TIMEOUT_MS = 18_000;
 /** 传送后冻结时长（对齐原版 DynUpdateStart：等待 obj 流式加载，避免下坠穿模） */
 const TELEPORT_FREEZE_MS = 2000;
+/** 高空冻结阈值：目标 Z 超过 SA 地图最高点（Mt Chiliad ≈ 810）即视为高空/地图外——
+ *  传送到这类坐标物体加载距离极远，不冻结会持续下坠/穿模 */
+const TP_HIGH_Z = 800;
+/** 地图边界：SA 地图 XY 边界约 ±3000，超出即地图外（隐形墙之外/加载不到地面） */
+const TP_MAP_RADIUS = 3000;
+
+/** 目标坐标是否属于"极端传送"（高空/地图外）：必须强制冻结等加载，不论车内车外 */
+function isExtremeTeleport(x: number, y: number, z: number): boolean {
+  return z > TP_HIGH_Z || Math.abs(x) > TP_MAP_RADIUS || Math.abs(y) > TP_MAP_RADIUS;
+}
 
 /** 临时位置（/s 保存 /l 传送） */
 interface TempPos {
@@ -68,6 +79,13 @@ export function teleportTo(
   angle: number,
   interiorId: number,
 ): void {
+  // 观战/回放观战禁止传送：传送会打断 spectating 视角（setPos 后客户端镜头错乱、
+  // 观战目标失真）。所有传送入口（/名称 //名称 /tpa /面板 传送点 /house goto）
+  // 都经 teleportTo，在此统一拦截——调用方无需各自判断
+  if (isObserving(player.id)) {
+    sysMsg(player, "tp", "观战中不能传送（/tv off 后可传送）", "warn");
+    return;
+  }
   player.setInterior(interiorId);
   if (player.isInAnyVehicle()) {
     const veh = player.getVehicle()!;
@@ -81,21 +99,24 @@ export function teleportTo(
   // 传送后短暂冻结（对齐原版 DynUpdateStart）：服务端立即传送，但客户端要
   // 几百 ms 才流式加载周边物体（房屋 obj 等）——不冻结会先下坠/穿模。
   // 冻结期间暂停物理（不会掉落），恢复时物体已加载。
-  freezeAfterTeleport(player);
+  freezeAfterTeleport(player, x, y, z);
 }
 
 /** 传送冻结定时器句柄（playerId → timeout，防重复传送时旧解冻提前打断） */
 const freezeTimers = new Map<number, NodeJS.Timeout>();
 
 /**
- * 传送后短暂冻结玩家（车内不冻结——车有物理，冻结车辆反而不自然）。
+ * 传送后短暂冻结玩家（等待流式加载）。
  * 对齐原版 DynUpdateStart：TogglePlayerControllable(false) + "Objects Loading"
  * 提示 + 2 秒后解冻。GameText 不支持中文，保持原版英文文案。
  * 重复传送（2 秒内再传）：刷新定时器，保证解冻以最后一次传送为准。
+ * 车内普通坐标不冻结（车有物理，冻结车辆反而不自然）；**极端坐标（高空/地图外，
+ * 见 isExtremeTeleport）车内也冻结**——车辆在物体未加载的高空/边界会持续下坠
+ * 穿模，必须先等物体流式加载。
  */
-function freezeAfterTeleport(player: Player): void {
+function freezeAfterTeleport(player: Player, x: number, y: number, z: number): void {
   if (player.isNpc() || !player.isConnected()) return;
-  if (player.isInAnyVehicle()) return;
+  if (player.isInAnyVehicle() && !isExtremeTeleport(x, y, z)) return;
   try {
     player.toggleControllable(false);
   } catch {
@@ -282,6 +303,9 @@ export function initTeleport(): void {
       player.setPos(saved.x, saved.y, saved.z);
       player.setFacingAngle(saved.facingAngle);
     }
+    // /l 之前没走 freezeAfterTeleport——传回高空/地图外位置（如飞行赛道/边界点）
+    // 同样需要等物体加载，否则下坠穿模
+    freezeAfterTeleport(player, saved.x, saved.y, saved.z);
     sysMsg(player, "tp", "已传送回保存的位置", "success");
     return next();
   });
@@ -663,6 +687,11 @@ async function createTeleportFlow(player: Player, back?: MenuBack): Promise<void
 
 /** OP 管理传送点：分页列表 → 删除（二次验证） */
 async function manageTeleports(player: Player, back?: MenuBack): Promise<void> {
+  // 纵深防御：面板 visible 过滤外，入口再复查一次（对齐 house-admin 先例）
+  if (!isSuperAdmin(player)) {
+    sysMsg(player, "tp", "只有管理员能管理传送点", "warn");
+    return back?.();
+  }
   const points = await prisma.teleport.findMany({
     where: { deletedAt: null },
     orderBy: [{ isSystem: "desc" }, { name: "asc" }],

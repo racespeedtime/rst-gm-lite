@@ -230,12 +230,31 @@ export function onPlayerDisconnectVehicle(player: Player): void {
  * /c <modelId> 刷车 · /c wode 召唤 · /cc c1 c2 换色
  * /c lock 锁车 · /c chepai 文字 · /c kick 踢乘客
  */
-/** 召唤当前爱车到身边并上车（/c wode · /cars wode 共用） */
-export function summonMyVehicle(player: Player): void {
-  const veh = playerVehs.get(player.id);
+/** 召唤当前爱车到身边并上车（/c wode · /cars wode 共用）。
+ * 实体已损毁/被清（大世界炸车 onDeath 会销毁实体）时，回数据库重建**最近用过**
+ * 的爱车——"已损毁 /c wode 重新刷出"的提示必须真的能刷出，否则提示自相矛盾。
+ * 重建走 spawnVehicle（懒复用该模型外观预设 + 一人一车 + 放入车内）。 */
+export async function summonMyVehicle(player: Player): Promise<void> {
+  let veh = playerVehs.get(player.id);
   if (!veh || !veh.isValid()) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有爱车（或已损毁），先 /c 车辆ID 刷车");
-    return;
+    // 实体没了但 DB 爱车仍在（损毁只清了实体，user_vehicle 行未删）：重建
+    const auth = getAuthState(player.id);
+    if (!auth) {
+      player.sendClientMessage(COLOR_ERROR, "请先登录");
+      return;
+    }
+    const last = await prisma.userVehicle.findFirst({
+      where: { userId: auth.userId, deletedAt: null },
+      orderBy: { updatedAt: "desc" }, // 最近用过的爱车（损毁前开的那辆）
+    });
+    if (!last) {
+      player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先 /c 车辆ID 刷车");
+      return;
+    }
+    const ok = await spawnVehicle(player, last.modelId, true);
+    if (!ok) return;
+    veh = playerVehs.get(player.id);
+    if (!veh || !veh.isValid()) return;
   }
   const pos = player.getPos();
   const angle = player.isInAnyVehicle()
@@ -469,7 +488,7 @@ export function initVehicleCommands(): void {
     if (!arg || Number.isNaN(+arg)) {
       player.sendClientMessage(
         COLOR_WHITE,
-        "刷车: /c [车辆ID400-611] · /c list 图片选车 · /c wode 召唤 · /cc 色1 色2 · /c lock · /c chepai 文字 · /c kick · /c 3d 速度表",
+        "刷车: /c [车辆ID400-611] · /c list 图片选车 · /c wode 召唤 · /cc 色1 色2 · /c lock · /c chepai 文字 · /c kick · /c 3d 3D速度表 · /c 2d 2D速度表",
       );
       return next();
     }
@@ -483,7 +502,7 @@ export function initVehicleCommands(): void {
   });
 
   PlayerEvent.onCommandText(["c wode", "veh wode"], ({ player, next }) => {
-    summonMyVehicle(player);
+    void summonMyVehicle(player);
     return next();
   });
 
@@ -543,6 +562,20 @@ export function initVehicleCommands(): void {
       showSpeed: nextOn ? true : setting.showSpeed,
     });
     notifySaved(player, `3D速度表已${nextOn ? "开启" : "关闭"}`);
+    return next();
+  });
+
+  // /c 2d 2D速度表开关（对齐 /c 3d 的互斥语义：开 2d 关 3d，联动总开关）
+  PlayerEvent.onCommandText(["c 2d", "veh 2d"], async ({ player, next }) => {
+    const setting = await getSetting(player);
+    if (!setting) return next();
+    const nextOn = !setting.showSpeed2d;
+    await updateSetting(player, {
+      showSpeed2d: nextOn,
+      showSpeed3d: false,
+      showSpeed: nextOn ? true : setting.showSpeed,
+    });
+    notifySaved(player, `2D速度表已${nextOn ? "开启" : "关闭"}`);
     return next();
   });
 

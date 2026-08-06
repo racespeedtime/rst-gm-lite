@@ -13,6 +13,7 @@ import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
 import { registerObjectCollision, clearObjectCollisions } from "@/core/collision";
 import { teleportTo } from "@/teleport";
+import { setTimeoutSafe } from "@/core/timers";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { RACE_WORLD_BASE } from "@/race/room";
@@ -138,9 +139,15 @@ interface HouseLoadStats {
  * 行顺序（按 houseId, index）：先建 obj 实体 → material/materialtext 绑定同屋 obj 材质
  * → removeobj 收集（登录时应用）→ 3dtext/CreateVehicle/area 直接创建。
  * 支持重载：开头清掉上一轮注册的 colandreas 碰撞，防止同批物体重复注册。
+ * attempt（内部重试计数）：onInit 时机 DB 连接池可能尚未就绪，一次查询失败会让
+ * 整批房屋实体（obj/标签/车辆）缺失且永不补建——失败后 30s 重试（上限
+ * HOUSE_LOAD_RETRY 次），DB 就绪后自动补加载；成功或达到上限停止。
  */
-export async function loadAllHouseObjects(): Promise<void> {
-  // 防重复注册：若本函数被再次调用（重载），先销毁上一轮的碰撞注册
+const HOUSE_LOAD_RETRY = 5;
+const HOUSE_LOAD_RETRY_MS = 30_000;
+
+export async function loadAllHouseObjects(attempt = 1): Promise<void> {
+  // 防重复注册：若本函数被再次调用（重载/重试成功后的再次加载），先销毁上一轮的碰撞注册
   clearObjectCollisions();
   const stats: HouseLoadStats = {
     obj: 0,
@@ -153,6 +160,15 @@ export async function loadAllHouseObjects(): Promise<void> {
     skipped: 0,
     errors: 0,
   };
+  // 声明提到 try 外：中途失败（DB 断开/创建异常）时 catch 需清理已创建的部分
+  // 实体，防残留 + 防重试重复创建
+  const objs: DynamicObject[] = [];
+  const labels: Dynamic3DTextLabel[] = [];
+  const vehicles: Vehicle[] = [];
+  const areas: DynamicArea[] = [];
+  const buildings: typeof removedBuildings = [];
+  // 材质绑定目标：houseId -> (objIndex -> DynamicObject)，供 material/materialtext 查找
+  const objByHouse = new Map<string, Map<number, DynamicObject>>();
   try {
     const models = await prisma.houseModel.findMany({
       // 只加载未软删且启用的房屋：软删房（deletedAt != null）若 isEnabled 仍为
@@ -162,13 +178,6 @@ export async function loadAllHouseObjects(): Promise<void> {
       include: { house: { include: { race: { select: { id: true } } } } },
     });
 
-    const objs: DynamicObject[] = [];
-    const labels: Dynamic3DTextLabel[] = [];
-    const vehicles: Vehicle[] = [];
-    const areas: DynamicArea[] = [];
-    const buildings: typeof removedBuildings = [];
-    // 材质绑定目标：houseId -> (objIndex -> DynamicObject)，供 material/materialtext 查找
-    const objByHouse = new Map<string, Map<number, DynamicObject>>();
     const skippedTypes = new Set<string>();
     const houseName = (id: string | null, fallback: string): string =>
       id ? fallback : "(未关联房屋)";
@@ -424,7 +433,42 @@ export async function loadAllHouseObjects(): Promise<void> {
         (skippedTypes.size > 0 ? `（不支持的动态类型：${[...skippedTypes].join(",")}）` : ""),
     );
   } catch (e) {
-    logger.error("[house] 加载房屋模型失败", e);
+    logger.error(`[house] 加载房屋模型失败（第 ${attempt} 次）`, e);
+    // 清理本次已创建的部分实体（中途失败残留），防重试时重复创建同批实体
+    for (const obj of objs) {
+      try {
+        if (obj.isValid()) obj.destroy();
+      } catch {
+        /* 已失效 */
+      }
+    }
+    for (const label of labels) {
+      try {
+        if (label.isValid()) label.destroy();
+      } catch {
+        /* 已失效 */
+      }
+    }
+    for (const veh of vehicles) {
+      try {
+        if (veh.isValid()) veh.destroy();
+      } catch {
+        /* 已失效 */
+      }
+    }
+    for (const area of areas) {
+      try {
+        if (area.isValid()) area.destroy();
+      } catch {
+        /* 已失效 */
+      }
+    }
+    // onInit 时机 DB 未就绪等一次性失败：延迟重试补加载（上限内），防整批房屋
+    // 实体缺失且无人发现（obj 不建 = 赛道/房屋场景消失）。上限达后放弃——
+    // 持续连不上说明 DB 真有问题，不再空转重试
+    if (attempt < HOUSE_LOAD_RETRY) {
+      setTimeoutSafe(() => void loadAllHouseObjects(attempt + 1), HOUSE_LOAD_RETRY_MS);
+    }
   }
 }
 

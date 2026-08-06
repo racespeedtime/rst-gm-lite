@@ -28,6 +28,7 @@ import {
 } from "@/race/room";
 import { openChangeTrackMenu } from "@/race/roomUi";
 import { isEditing, exitEdit } from "@/race/editor";
+import { isInChallenge, goChallenge, restartChallenge, exitChallenge } from "@/replay/challenge";
 import { showMySessionLogs } from "@/auth/sessionLog";
 import { showMyProfile } from "@/core/profile";
 import { openHelp } from "@/core/help";
@@ -107,21 +108,10 @@ const panelGroups: PanelGroup[] = [
         run: openChangeTrackMenu,
       },
       {
-        label: "重开比赛",
-        raceSafe: true,
-        // 仅房主：当前赛道重置回起点（同一赛道再来一场），倒计时/比赛中也可用
-        visible: (player) => {
-          const pr = getRacePlayerState(player.id);
-          const room = pr ? getRaceRoom(pr.roomId) : undefined;
-          return !!room && room.state !== "FINISHED" && room.ownerId === player.id;
-        },
-        run: restartRace,
-      },
-      {
         label: "重生",
         raceSafe: true,
-        // 比赛房间组仅在比赛中显示；RACING 重生回上一 CP（对齐原版 /kill），
-        // 未开跑（等待/倒计时）正常重生
+        // 常用操作置前：比赛房间组仅在比赛中显示；RACING 重生回上一 CP
+        //（对齐原版 /kill），未开跑（等待/倒计时）正常重生
         run: (player) => {
           const pr = getRacePlayerState(player.id);
           const room = pr ? getRaceRoom(pr.roomId) : undefined;
@@ -156,10 +146,70 @@ const panelGroups: PanelGroup[] = [
         },
       },
       {
+        label: "重开比赛",
+        raceSafe: true,
+        // 仅房主：当前赛道重置回起点（同一赛道再来一场），倒计时/比赛中也可用
+        visible: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          return !!room && room.state !== "FINISHED" && room.ownerId === player.id;
+        },
+        run: async (player, back) => {
+          // 二次确认：重开会作废整场进度、所有成员回到起点（影响全房，防误触）
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          const res = await showDialog(
+            player,
+            new Dialog({
+              style: DialogStylesEnum.MSGBOX,
+              caption: "重开比赛",
+              info: `确定重开比赛「${room?.raceName ?? ""}」吗？\n当前比赛将作废，所有成员回到起点重新开始！`,
+              button1: "确认重开",
+              button2: "取消",
+            }),
+          );
+          if (res && res.response === 1) {
+            await restartRace(player);
+          }
+          return back?.();
+        },
+      },
+      {
         label: "离开房间",
         raceSafe: true,
         run: (player, back) => {
           leaveRace(player);
+          return back?.();
+        },
+      },
+    ],
+  },
+  {
+    label: "影子挑战",
+    desc: "开始 / 重开 / 退出",
+    // 状态驱动分组：不自动展开单子项（待命时"退出挑战"可能成为唯一可见项，自动
+    // 展开会在按 Y 瞬间直接退出挑战——对齐比赛房间组的防误触处理）
+    noAutoExpand: true,
+    // 仅在影子挑战中显示；其余玩法组在挑战中自动隐藏（对齐比赛房间的收窄——
+    // 挑战是独立竞速世界，刷车/传送/换装等玩法操作会破坏挑战状态）
+    visible: (player) => isInChallenge(player.id),
+    items: [
+      {
+        label: "开始（起跑）",
+        raceSafe: true,
+        // goChallenge 内部按状态校验：待命→倒计时、比赛中提示已开始、倒计时中提示等待
+        run: goChallenge,
+      },
+      {
+        label: "重开（回起点）",
+        raceSafe: true,
+        run: restartChallenge,
+      },
+      {
+        label: "退出挑战",
+        raceSafe: true,
+        run: (player, back) => {
+          exitChallenge(player);
           return back?.();
         },
       },
@@ -252,9 +302,9 @@ const panelGroups: PanelGroup[] = [
   },
 ];
 
-/** 组内可见条目（组级条件 + 条目级条件 + 比赛/编辑限制） */
+/** 组内可见条目（组级条件 + 条目级条件 + 比赛/编辑/挑战限制） */
 function getVisibleItems(group: PanelGroup, player: Player): PanelItem[] {
-  const restricted = isInRace(player.id) || isEditing(player.id);
+  const restricted = isInRace(player.id) || isEditing(player.id) || isInChallenge(player.id);
   return group.items.filter((item) => {
     if (item.visible && !item.visible(player)) return false;
     if (restricted && !item.raceSafe) return false;

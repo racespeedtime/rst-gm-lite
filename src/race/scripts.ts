@@ -8,7 +8,8 @@ import {
   addVehicleComponentIfPossible,
 } from "@/vehicles";
 
-import { COLOR_RACE, COLOR_ERROR } from "@/utils/colors";
+import { COLOR_RACE } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /** 脚本运算模式 */
 type Op = "|" | "+" | "-" | "*" | "/";
@@ -148,11 +149,11 @@ export function setVehicleSpeed(veh: Vehicle, kmh: number, angleDeg: number, z?:
 /**
  * 超级起步（superstart）：开局 GO 瞬间沿车头方向给全车一个向前初速（对齐 speed 脚本
  * 坐标系：角度 = 车头朝向 + 90）。只认第一 CP 的配置，写其他地方无效；不写默认生效
- * （默认 SUPERSTART_DEFAULT_KMH）。参数：superstart 速度(KM/H)，无参数/非法 → 默认，
+ * （默认 SUPERSTART_DEFAULT_KMH=160）。参数：superstart 速度(KM/H)，无参数/非法 → 默认，
  * 写 superstart 0 可关闭该赛道起步加速。全局仅开局一次（beginRace 触发），
  * 重生不激活——过 CP 时 execCpScript 静默跳过（见 case "superstart"）。
  */
-export const SUPERSTART_DEFAULT_KMH = 100;
+export const SUPERSTART_DEFAULT_KMH = 160;
 
 export function getSuperStartKmh(cps: { scripts: string[] }[]): number {
   for (const script of cps[0]?.scripts ?? []) {
@@ -180,10 +181,7 @@ export function execCpScript(
   const veh = player.getVehicle();
 
   const err = (msg: string): void => {
-    player.sendClientMessage(
-      COLOR_ERROR,
-      `[赛车] ${ctx.raceName} 第${ctx.cpid + 1}个检查点脚本错误: ${msg}`,
-    );
+    sysMsg(player, "race", `${ctx.raceName} 第${ctx.cpid + 1}个检查点脚本错误: ${msg}`, "error");
   };
 
   switch (fn) {
@@ -271,7 +269,9 @@ export function execCpScript(
       break;
     }
     case "msg": {
-      player.sendClientMessage(COLOR_RACE, `[赛车] ${args.join(" ")}`);
+      // msg 是赛道作者写的自定义文本（原版直接 SendClientMessage，无前缀——
+      // 前缀会污染作者文案；内容安全由敏感词系统在写入时把关，这里原样输出）
+      player.sendClientMessage(COLOR_RACE, args.join(" "));
       break;
     }
     case "speed": {
@@ -428,9 +428,11 @@ export function execCpScript(
     default:
       // 对齐原版 Race_Cp_Script_Start：未知函数给玩家提示，且不中断后续脚本
       logger.warn(`[race] 未知脚本函数: ${fn}`);
-      player.sendClientMessage(
-        COLOR_RACE,
-        `[赛车] ${ctx.raceName} 第${ctx.cpid + 1}个检查点脚本错误: 不存在函数[${fn}]`,
+      sysMsg(
+        player,
+        "race",
+        `${ctx.raceName} 第${ctx.cpid + 1}个检查点脚本错误: 不存在函数[${fn}]`,
+        "error",
       );
       return true;
   }

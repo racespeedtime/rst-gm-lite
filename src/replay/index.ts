@@ -161,6 +161,10 @@ export function discardRaceReplay(playerId: number, raceId?: string | null, user
       });
       // 只作废"未完成"段（rank==null）；有 rank 说明该段有人冲线，保留
       if (!row || row.rank != null) return;
+      // 防误删：只作废"刚落盘的本次"（延迟 800ms 内创建）——极端场景下玩家在
+      // 房间销毁后立刻新开同赛道比赛且无人完成落盘，可能把新录像当本场作废。
+      // 限定 createdAt 在最近 30 秒内，历史未完成录像不在此路径作废
+      if (Date.now() - row.createdAt.getTime() > 30_000) return;
       deleteRecordingFile(row.fileName);
       await prisma.replay.update({ where: { id: row.id }, data: { deletedAt: new Date() } });
       logger.info(`[replay] 作废无人完成的比赛回放 ${row.fileName}（playerId=${playerId}）`);

@@ -138,6 +138,16 @@ const loginSpawned = new Set<number>();
  *  出现在 A 点再瞬移到 B 点（客户端可见闪烁传送） */
 const pendingSpawnPos = new Map<number, { x: number; y: number; z: number; angle: number }>();
 
+/** 预计算下一次 onSpawn 的落点（死亡重生/比赛掉线重连共用）：
+ *  onSpawn 消费后自动清除；配合 setSpawnInfo 让 open.mp 的 spawn 落在指定位置，
+ *  避免 respawnBySetting 再按 RANDOM/LAST_POSITION 随机定位（重连会把人拉离赛道） */
+export function setPendingSpawnPos(
+  playerId: number,
+  pos: { x: number; y: number; z: number; angle: number },
+): void {
+  pendingSpawnPos.set(playerId, pos);
+}
+
 /** 断线清理登录出生标记（防 playerId 复用残留跳过重生定位） */
 export function cleanupLoginSpawned(playerId: number): void {
   loginSpawned.delete(playerId);

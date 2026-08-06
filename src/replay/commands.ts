@@ -4,8 +4,8 @@ import { isPlayerLocked } from "@/core/interaction";
 import { isInRace } from "@/race/room";
 import { showDialog } from "@/utils/dialog";
 import { startRecording, stopRecording, isRecording } from "./recorder";
-import { controlReplay, getReplaySession, REPLAY_SPEEDS } from "./playback";
-import { isInChallenge, cleanupChallenge, goChallenge, restartChallenge } from "./challenge";
+import { controlReplay, getReplaySession, REPLAY_SPEEDS, toggleReplayLabels } from "./playback";
+import { isInChallenge, exitChallenge, goChallenge, restartChallenge } from "./challenge";
 import { openReplayMenu } from "./menu";
 import { COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
 
@@ -102,6 +102,16 @@ export function initReplayCommands(): void {
         controlReplay(player, action, arg);
         return next();
       }
+      case "label": {
+        // ghost 身份标签（车顶"身份+扮演谁+ghost N/M"）临时显隐：不落库，
+        // 断线重置为显示。多分身时标签可能遮挡视线，玩家可暂时屏蔽
+        const visible = toggleReplayLabels(player);
+        player.sendClientMessage(
+          visible ? COLOR_SUCCESS : COLOR_INFO,
+          `回放 ghost 标签已${visible ? "显示" : "隐藏"}`,
+        );
+        return next();
+      }
       case "help":
       default: {
         // /rp 帮助：MSGBOX 弹出（7 行聊天刷屏不友好；Dialog 支持中文）
@@ -119,6 +129,7 @@ export function initReplayCommands(): void {
                 `  speed [${REPLAY_SPEEDS.join("|")}]  倍速（不填则提示当前倍速）`,
                 "  seek <秒|mm:ss>  跳转（多分身保持错峰）",
                 "  watch     观看回放视角（比赛回放带 C P/TIME/BEST）",
+                "  label     显示/隐藏 ghost 身份标签（默认显示）",
                 "  stop      停止回放",
                 "",
                 "面板入口：/p → 回放 分组，功能与命令一致",
@@ -147,12 +158,8 @@ export function initReplayCommands(): void {
       return next();
     }
     if (arg === "stop") {
-      if (!isInChallenge(player.id)) {
-        player.sendClientMessage(COLOR_ERROR, "你不在影子挑战中");
-        return next();
-      }
-      cleanupChallenge(player.id);
-      player.sendClientMessage(COLOR_SUCCESS, "影子挑战已退出");
+      // 统一走 exitChallenge（不在挑战中也会明确提示）
+      exitChallenge(player);
       return next();
     }
     player.sendClientMessage(
