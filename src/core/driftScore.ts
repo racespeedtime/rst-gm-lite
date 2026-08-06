@@ -3,18 +3,26 @@ import { Player, PlayerStateEnum, VehicleEvent } from "@infernus/core";
 /**
  * 漂移积分系统（纯展示，无实际效果）：
  * - 检测漂移（车身朝向 vs 运动方向的夹角差，对齐 drift-detection.inc），累计积分
- * - Forza 式连击倍率：连续漂移不中断 3s 倍率 +1（×1..×8），中断归 1
+ * - Forza 式连击倍率：累计漂移 2s 倍率 +1（×1..×8）；中断有 1.5s 宽限
+ *   （DRIFT_BREAK_GRACE_MS，对齐参考实现的超时语义）——短暂失速/回正不打断连击
  * - 显示分数走"滚动逼近"动画（displayScore 每 tick 向实际 score 靠拢）
  * - 单次漂移积分有上限（SCORE_CAP）：加到上限停止累加
- * - 无漂移活动超时（DRIFT_RESET_MS）→ 积分归 0、倍率重置（TD 隐藏，下次重新开始计算）
+ * - 无漂移活动超时（DRIFT_RESET_MS）→ 积分归 0（TD 隐藏，下次重新开始计算）
  * - 车身损伤状态变化（碰撞/爆胎/部件掉落）→ 打断：积分归 0 重来
  * - 无独立定时器：由 gui 100ms tick 调 tickDriftScore（onExit 由 clearAllTimers 兜底）
  * - per-player 状态 Map，断线经 cleanupDriftScore 清理
  */
 
-/** 连击倍率：每连续有效 MULTIPLIER_STEP_MS +1，封顶 ×8 */
+/** 连击倍率：累计漂移时间每 2 秒 +1，封顶 ×8 */
 const MULTIPLIER_MAX = 8;
-const MULTIPLIER_STEP_MS = 3000;
+const MULTIPLIER_STEP_MS = 2000;
+/**
+ * 漂移中断宽限：非漂移状态持续超过该时长才算打断连击（对齐 drift-detection.inc
+ * 的 DRIFT_TIMEOUT_INTERVAL=1.5s 超时语义）——真实漂移中角度/速度会瞬时跌破
+ * 阈值（甩尾抖动、短暂回正），无宽限则任何一帧中断都把倍率清零，永远卡 x1。
+ * 宽限内恢复漂移：倍率与累计保留（只冻结新增累计），连击不断。
+ */
+const DRIFT_BREAK_GRACE_MS = 1500;
 /** 漂移判定（对齐 drift-detection.inc 默认阈值）：
  * - 漂移角 = 车身朝向 vs 运动方向夹角差（度），∈ [12°, 80°]——过小不算（直行）、
  *   过大不算（失控打转）；用角度而非横向速度判定，低速甩尾也能识别（横向速度
@@ -105,16 +113,16 @@ function normAngle180(a: number): number {
   return ((((a + 180) % 360) + 360) % 360) - 180;
 }
 
-/** 无漂移活动：记超时起点；超时归 0（下次重新开始计算）。
- *  lastActiveAt 一并清零——否则重新漂移时 elapsed = now - lastActiveAt 会把整个
- *  空闲期算进连击倍率（idle 每 tick 虽归 1 倍率，但残留的 lastActiveAt 让恢复
- *  首 tick 白送一次倍率）。 */
-function idleDrift(st: DriftScoreState, now: number): void {
+/** 无漂移活动：宽限内不打断连击；超过宽限倍率归 1；超过 DRIFT_RESET_MS 积分归 0。
+ *  lastActiveAt 置 0 冻结累计——宽限内恢复漂移时首 tick elapsed=0，中断期不计入倍率。 */
+function handleIdleDrift(st: DriftScoreState, now: number): void {
   if (st.inactiveSince === 0) st.inactiveSince = now;
-  st.multiplier = 1;
-  st.multiplierMs = 0;
-  st.status = "none";
   st.lastActiveAt = 0;
+  st.status = "none";
+  if (now - st.inactiveSince >= DRIFT_BREAK_GRACE_MS) {
+    st.multiplier = 1;
+    st.multiplierMs = 0;
+  }
   if (now - st.inactiveSince >= DRIFT_RESET_MS) {
     st.score = 0;
     st.displayScore = 0;
@@ -126,8 +134,9 @@ function idleDrift(st: DriftScoreState, now: number): void {
  * 每 tick 推进玩家漂移积分（gui 100ms tick 调用）：
  * - 读车辆速度（getVelocity 世界轴 ×180 = km/h）与车头方向（getMatrix.at* 单位向量）
  * - 漂移角 = 车身朝向角（atan2(atY,atX)）与运动方向角（atan2(vy,vx)）的夹角差；
- *   漂移 = 速度 ≥ 45 且 漂移角 ∈ [12°, 80°]；否则无活动（超时归 0）
- * - 漂移：按强度累加 score（×multiplier），封顶 SCORE_CAP；连续 3s 倍率 +1（封顶 ×8）
+ *   漂移 = 速度 ≥ 45 且 漂移角 ∈ [12°, 80°]；否则无活动（宽限内不打断连击，
+ *   超宽限倍率归 1、超时积分归 0）
+ * - 漂移：按强度累加 score（×multiplier），封顶 SCORE_CAP；累计 2s 倍率 +1（封顶 ×8）
  * - displayScore 每 tick 向 score 逼近（滚动动画：差值的 20% 步进，差 <10 直追）
  */
 export function tickDriftScore(player: Player): void {
@@ -138,9 +147,9 @@ export function tickDriftScore(player: Player): void {
   const st = getDriftScore(player.id);
   const veh = player.isInAnyVehicle() ? player.getVehicle() : null;
   const now = Date.now();
-  // 不在车内 / 非司机：视为无活动（超时归 0）
+  // 不在车内 / 非司机：视为无活动（宽限内不打断连击，超宽限倍率归 1、超时积分归 0）
   if (!veh || !veh.isValid() || player.getState() !== PlayerStateEnum.DRIVER) {
-    idleDrift(st, now);
+    handleIdleDrift(st, now);
     st.displayScore += Math.round((st.score - st.displayScore) * 0.2);
     if (Math.abs(st.score - st.displayScore) < 10) st.displayScore = st.score;
     return;
@@ -148,9 +157,9 @@ export function tickDriftScore(player: Player): void {
   const vel = veh.getVelocity();
   const mat = veh.getMatrix();
   if (!vel.ret || !mat.ret) {
-    // 读取失败（罕见）：按无活动处理——推进 inactiveSince 计时 + 归 0 收敛，
-    // 否则连续失败时 3s 归零永不触发、displayScore 不收敛
-    idleDrift(st, now);
+    // 读取失败（罕见）：按无活动处理——推进计时 + 归 0 收敛，
+    // 否则连续失败时超时归零永不触发、displayScore 不收敛
+    handleIdleDrift(st, now);
     st.displayScore += Math.round((st.score - st.displayScore) * 0.2);
     if (Math.abs(st.score - st.displayScore) < 10) st.displayScore = st.score;
     return;
@@ -165,8 +174,10 @@ export function tickDriftScore(player: Player): void {
   const driftAngle = Math.abs(normAngle180(heading - moveDir));
 
   if (speed >= DRIFT_SPEED_MIN && driftAngle >= DRIFT_ANGLE_MIN && driftAngle <= DRIFT_ANGLE_MAX) {
-    // 连续漂移：推进倍率累计（防首 tick 大跳：lastActiveAt 未设用 now）
-    const elapsed = now - (st.lastActiveAt || now);
+    st.inactiveSince = 0; // 恢复/持续漂移：清中断计时（宽限内恢复则连击保留）
+    // 倍率累计 = 本次漂移 tick 间隔（lastActiveAt 在中断期被冻结为 0，宽限恢复
+    // 首 tick elapsed=0——中断期不混入；连续漂移每 tick ≈100ms，2s 即 +1 级）
+    const elapsed = st.lastActiveAt > 0 ? now - st.lastActiveAt : 0;
     st.multiplierMs += elapsed;
     if (st.multiplierMs >= MULTIPLIER_STEP_MS) {
       st.multiplierMs %= MULTIPLIER_STEP_MS;
@@ -174,14 +185,13 @@ export function tickDriftScore(player: Player): void {
     }
     st.status = "drift";
     st.lastActiveAt = now;
-    st.inactiveSince = 0;
     // 强度积分：速度 × 漂移角占比 × 倍率；封顶 SCORE_CAP（加到上限停止累加）
     if (st.score < SCORE_CAP) {
       const gain = Math.round(speed * (driftAngle / 100) * st.multiplier);
       st.score = Math.min(SCORE_CAP, st.score + gain);
     }
   } else {
-    idleDrift(st, now);
+    handleIdleDrift(st, now);
   }
 
   // 显示分数滚动逼近实际分（动画：步进差值 20%，接近直追）
