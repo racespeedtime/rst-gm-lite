@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync, readdirSync, renameSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  readdirSync,
+  renameSync,
+  readFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { logger } from "@/logger";
 
@@ -8,6 +16,72 @@ import { logger } from "@/logger";
  */
 
 export const RECORDING_DIR = "scriptfiles/recordings";
+
+/**
+ * 待落库索引文件（recordings/index.json）：
+ * 落盘但 DB 记录未确认（create 未 settle / 抛异常）的录像条目。同步 fs 写——
+ * 服务器退出瞬间（onExit 同步钩子）也能可靠写完；重启时补建 DB 记录后清条目，
+ * 防"文件写了但无索引 → 孤儿清理误删"（DB 抖动/退出即丢录像）。
+ */
+export const PENDING_INDEX = join(RECORDING_DIR, "index.json");
+
+/** 待落库条目字段 = 重建 DB replay 记录所需的全部 */
+export interface PendingReplayEntry {
+  type: string;
+  userId: string;
+  recorderName: string;
+  raceId: string | null;
+  raceName: string | null;
+  vehicleModelId: number;
+  fileName: string;
+  durationMs: number;
+  frameCount: number;
+  fileSize: number;
+  rank: number | null;
+  finished: boolean | null;
+  raceRoomId: number | null;
+}
+
+/** 读取待落库索引（文件不存在/损坏返回空数组） */
+export function readPendingIndex(): PendingReplayEntry[] {
+  try {
+    if (!existsSync(PENDING_INDEX)) return [];
+    const raw = readFileSync(PENDING_INDEX, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (e) {
+    logger.error(`[replay] 读待落库索引失败`, e);
+    return [];
+  }
+}
+
+/** 写待落库索引（整体覆写） */
+export function writePendingIndex(entries: PendingReplayEntry[]): void {
+  try {
+    ensureRecordingDir();
+    writeFileSync(PENDING_INDEX, JSON.stringify(entries, null, 2), "utf8");
+  } catch (e) {
+    logger.error(`[replay] 写待落库索引失败`, e);
+  }
+}
+
+/** 新增一条待落库条目（落盘后、create 前调用；同步写防退出丢索引） */
+export function addPendingEntry(entry: PendingReplayEntry): void {
+  const entries = readPendingIndex();
+  if (!entries.some((x) => x.fileName === entry.fileName)) {
+    entries.push(entry);
+  }
+  writePendingIndex(entries);
+}
+
+/** 移除一条待落库条目（create 成功后调用，零残留） */
+export function removePendingEntry(fileName: string): void {
+  const entries = readPendingIndex();
+  const next = entries.filter((x) => x.fileName !== fileName);
+  if (next.length !== entries.length) {
+    writePendingIndex(next);
+  }
+}
 
 /** 建目录（递归）。GameMode.onInit 时调用；失败仅告警不崩溃 */
 export function ensureRecordingDir(): void {

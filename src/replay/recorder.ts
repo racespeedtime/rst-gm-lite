@@ -15,7 +15,12 @@ import {
   type ReplayFrame,
   type ReplayHeader,
 } from "./format";
-import { saveRecordingFile, deleteRecordingFile } from "./storage";
+import {
+  saveRecordingFile,
+  deleteRecordingFile,
+  addPendingEntry,
+  removePendingEntry,
+} from "./storage";
 import { getReplaySession } from "./playback";
 import { isInChallenge } from "./challenge";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
@@ -506,6 +511,24 @@ export async function stopRecording(
     logger.warn(`[replay] 录制会话无 userId，删除文件 ${fileName}（playerId=${playerId}）`);
     return null;
   }
+  // 先写待落库索引（同步 fs）：create 未 settle（服务器退出瞬间）/抛异常时，
+  // 重启靠索引补建 DB 记录，防"文件写了但无索引 → 孤儿清理误删"。create 成功
+  // 后移除条目（正常路径零残留）
+  addPendingEntry({
+    type: session.type,
+    userId: session.userId,
+    recorderName: session.recorderName || "未知",
+    raceId: session.raceId,
+    raceName: session.raceName,
+    vehicleModelId: session.vehicleModelId,
+    fileName,
+    durationMs,
+    frameCount: session.frames.length,
+    fileSize: buf.length,
+    rank: opts?.rank ?? null,
+    finished: opts?.finished ?? null,
+    raceRoomId: session.raceRoomId ?? null,
+  });
   try {
     const created = await prisma.replay.create({
       data: {
@@ -524,6 +547,7 @@ export async function stopRecording(
         raceRoomId: session.raceRoomId ?? null, // 比赛房间 id（作废精确匹配本场；ghost 为 null）
       },
     });
+    removePendingEntry(fileName); // DB 记录已建：移出待落库索引
     if (player && player.isConnected() && !opts?.quiet) {
       player.sendClientMessage(
         COLOR_SUCCESS,
@@ -546,11 +570,10 @@ export async function stopRecording(
     return { id: created.id, fileName };
   } catch (e) {
     logger.error(`[replay] 写回放元数据失败`, e);
-    // DB 写入失败：文件已落盘但无索引 → 删除文件（防孤儿文件永久占空间；
-    // 启动时另有孤儿扫描兜底历史残留）
-    deleteRecordingFile(fileName);
+    // DB 写入失败：文件已落盘 + 待落库索引已记（见上）——保留文件，启动时按
+    // 索引补建 DB 记录（不删文件：删了则整段录像丢失；索引兜底保证最终落库）
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage(COLOR_ERROR, "回放元数据保存失败，已删除录像");
+      player.sendClientMessage(COLOR_ERROR, "回放元数据保存失败，录像将在下次启动补录");
     }
     return null;
   }
@@ -729,7 +752,11 @@ export function initRecorder(): void {
   fallbackTimer = setIntervalSafe(fallbackSample, FALLBACK_INTERVAL_MS);
 }
 
-/** 停止录制系统（onExit/清理）：全部强制落盘 + 停定时器 */
+/** 停止录制系统（onExit/清理）：全部强制落盘 + 停定时器。
+ *  退出瞬间 onExit 是同步钩子不等待 async——但 stopRecording 内部已是"同步写
+ *  文件 → 同步写待落库索引 → await create"的顺序：create 未 settle（退出即进程
+ *  终止）时条目已同步落盘，重启靠索引补建 DB 记录，防"文件已写但无索引 →
+ *  孤儿清理误删"。create 成功会移除条目（正常路径零残留）。 */
 export async function cleanupRecorder(): Promise<void> {
   if (fallbackTimer) {
     clearIntervalSafe(fallbackTimer);

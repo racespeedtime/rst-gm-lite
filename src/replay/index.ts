@@ -1,10 +1,12 @@
 import { Player } from "@infernus/core";
 import { IPacket, PacketIdList } from "@infernus/raknet";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { setTimeoutSafe } from "@/core/timers";
-import { deleteRecordingFile } from "./storage";
+import { deleteRecordingFile, readPendingIndex, writePendingIndex, RECORDING_DIR } from "./storage";
 import { initReplayCommands } from "./commands";
 import {
   initRecorder,
@@ -41,9 +43,42 @@ import { ensureRecordingDir, cleanupOrphanFiles } from "./storage";
 /** 初始化回放系统（callbacks init 序列调用） */
 export function initReplay(): void {
   ensureRecordingDir();
-  // 启动清理：孤儿回放文件（DB 无记录但文件在）与 .tmp 残留（写文件中断半成品）
+  // 启动清理 + 补建：
+  // 1. 先补建待落库索引（上一轮退出/DB 失败时文件已落盘但记录未确认的录像）——
+  //    对每条：文件已不存在 → 删条目；DB 已有该 fileName（含软删）→ 删条目；
+  //    否则 create 建记录，成功删条目。补建后才进孤儿清理，防补建过的文件被误删
+  // 2. 再清孤儿回放文件（DB 无记录且不在索引）与 .tmp 残留
   void (async () => {
     try {
+      const pending = readPendingIndex();
+      if (pending.length > 0) {
+        logger.info(`[replay] 待落库索引 ${pending.length} 条，开始补建 DB 记录`);
+        const existing = await prisma.replay.findMany({
+          where: { fileName: { in: pending.map((p) => p.fileName) } },
+          select: { fileName: true },
+        });
+        const existingNames = new Set(existing.map((r) => r.fileName));
+        const remaining: typeof pending = [];
+        for (const entry of pending) {
+          try {
+            if (!existsSync(join(RECORDING_DIR, entry.fileName))) {
+              logger.warn(`[replay] 补建跳过：文件不存在 ${entry.fileName}`);
+              continue; // 文件没了，条目随之丢弃
+            }
+            if (existingNames.has(entry.fileName)) {
+              logger.warn(`[replay] 补建跳过：DB 已有记录 ${entry.fileName}`);
+              continue; // 记录已存在（含软删），条目丢弃
+            }
+            await prisma.replay.create({ data: entry });
+            logger.info(`[replay] 补建落库 ${entry.fileName}`);
+          } catch (e) {
+            // 单条失败保留条目（下次启动再试），其余继续
+            remaining.push(entry);
+            logger.error(`[replay] 补建失败 ${entry.fileName}`, e);
+          }
+        }
+        writePendingIndex(remaining);
+      }
       const recorded = await prisma.replay.findMany({
         where: { deletedAt: null },
         select: { fileName: true },
