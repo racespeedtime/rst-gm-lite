@@ -161,10 +161,12 @@ export function discardRaceReplay(playerId: number, raceId?: string | null, user
       });
       // 只作废"未完成"段（rank==null）；有 rank 说明该段有人冲线，保留
       if (!row || row.rank != null) return;
-      // 防误删：只作废"刚落盘的本次"（延迟 800ms 内创建）——极端场景下玩家在
-      // 房间销毁后立刻新开同赛道比赛且无人完成落盘，可能把新录像当本场作废。
-      // 限定 createdAt 在最近 30 秒内，历史未完成录像不在此路径作废
-      if (Date.now() - row.createdAt.getTime() > 30_000) return;
+      // 本路径只在"房间销毁且无人完成"时调用（checkRoomState），查询本身已按
+      // userId+raceId+rank=null 定位，命中的就是未完成录像——删它即语义正确：
+      // 哪怕命中并发/连续另一场的未完成段，它同样该作废；rank 非空（有人完成）
+      // 的录像不会命中，不会被误删。因此不设时间窗口——重连/退赛场景录像落盘
+      // 远早于房间销毁（落盘在重连成功/离开世界时，作废要等窗口过期），30 秒
+      // 硬窗口会让这类录像永久残留（曾有 WorldRallyChampion 未完成录像因此漏删）
       deleteRecordingFile(row.fileName);
       await prisma.replay.update({ where: { id: row.id }, data: { deletedAt: new Date() } });
       logger.info(`[replay] 作废无人完成的比赛回放 ${row.fileName}（playerId=${playerId}）`);
