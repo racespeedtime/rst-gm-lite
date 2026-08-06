@@ -7,6 +7,7 @@ import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
 import { spawnRaceVehicleAt, getDefaultRaceModel } from "./vehicle";
 import { cleanupScriptVehicle } from "./scripts";
+import { isInRace } from "./room";
 import { sysMsg } from "@/utils/msg";
 
 /** UUID 格式（按 id 查赛道前校验，避免非 uuid 输入触发 PostgreSQL 类型错误） */
@@ -78,6 +79,12 @@ export async function canEditRace(player: Player, raceId: string): Promise<boole
 export async function enterRaceEdit(player: Player, raceId: string): Promise<void> {
   if (!(await canEditRace(player, raceId))) {
     sysMsg(player, "race", "你无权编辑该赛道", "error");
+    return;
+  }
+  // 比赛中禁止进编辑：编辑会销毁比赛车（destroyPlayerVehicle）并置 isEditing，
+  // 比赛 CP 计数随即失效、成员被拖离比赛——/r info 详情面板的编辑入口可达此路径
+  if (isInRace(player.id)) {
+    sysMsg(player, "race", "比赛中不能进入赛道编辑，先 /r l 离开", "warn");
     return;
   }
   // 防重复进入泄漏测试车：连续 /r edit A /r edit B 时上一辆测试车不销毁会成

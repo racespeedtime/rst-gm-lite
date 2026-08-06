@@ -140,6 +140,9 @@ export function cleanupOrphanFiles(knownNames: string[]): void {
     if (!existsSync(RECORDING_DIR)) return;
     for (const f of readdirSync(RECORDING_DIR)) {
       const full = join(RECORDING_DIR, f);
+      // 待落库索引本体（index.json）不是回放文件，且必须保留——否则每次启动
+      // 都把上一轮未落库条目删掉，DB 再失败时对应 .rec 变孤儿被本函数清掉
+      if (full === PENDING_INDEX) continue;
       if (f.endsWith(".tmp")) {
         rmSync(full, { force: true });
         logger.warn(`[replay] 清理残留临时文件 ${f}`);

@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
 
 /**
- * 回放文件二进制格式（rec v3，存于 scriptfiles/recordings/）：
+ * 回放文件二进制格式（当前 rec v8，存于 scriptfiles/recordings/）：
  * - 定长 Header + 定长帧 Body；帧 = 位置(3×f32) + 四元数(4×f32) + 速度(3×f32)
  *   + 车型(i32) + CP进度(i32) + 时(u8) + 分(u8) + 天气(u8) + 血量(f32)
+ *   + 后续版本尾部追加的按键/在线/时间戳/名次字段（见 FORMAT_VERSION 注释）
  * - 定长帧设计：seek/后退/快进 = O(1) 偏移直取，无需顺序解析；
  *   回放时整文件读入内存 Buffer，纯内存切帧零 IO
  *
@@ -19,7 +20,7 @@ import { readFileSync } from "node:fs";
  * - v3 起 header 末尾自描述 frameBytes（帧字节数）——未来帧加字段时版本
  *   +1 且 frameBytes 写入新值，旧文件按各自帧布局照常解析，零破坏
  * - 读端 parseHeader/parseReplayFile 按版本分支：v2 头 72B / 帧 55B，
- *   v3 头 76B（多 4B frameBytes）/ 帧仍 55B
+ *   v3 头 76B（多 4B frameBytes）；帧字段按 frameBytes 逐版追加读取
  */
 
 /** 魔数 + 版本（首个 8 字节签名，兼容性/损坏检测） */
@@ -155,7 +156,7 @@ export interface ReplayData {
 const V = (n: number): number => (Number.isFinite(n) ? n : 0);
 const U8 = (n: number): number => Math.max(0, Math.min(255, Math.round(n)));
 
-/** 编码 Header（当前版本 v3：末尾带 frameBytes）→ Buffer */
+/** 编码 Header（v3+ 布局：末尾带 frameBytes）→ Buffer */
 export function encodeHeader(h: ReplayHeader): Buffer {
   const buf = Buffer.allocUnsafe(HEADER_BYTES);
   buf.write(MAGIC, 0, "ascii");
@@ -200,7 +201,7 @@ export function encodeHeader(h: ReplayHeader): Buffer {
   return buf;
 }
 
-/** 编码单帧 → Buffer（当前帧布局 73B：v6 的 69B + relTimeMs u32） */
+/** 编码单帧 → Buffer（当前帧布局 74B：v7 的 73B + rank u8） */
 export function encodeFrame(f: ReplayFrame): Buffer {
   const buf = Buffer.allocUnsafe(FRAME_BYTES);
   buf.writeFloatLE(V(f.x), 0);

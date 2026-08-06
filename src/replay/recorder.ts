@@ -449,8 +449,9 @@ export async function stopRecording(
   }
 
   // 时长：录制起止真实时间差（播放推进仍按帧序，帧间不均以插值平滑）。
-  // 不用 frames.length×33ms——RakNet 拦截失效时只剩兜底采样（每 2s 一帧），
-  // 帧数算出的时长会严重偏短（6 秒录制 3 帧 ≈ 0.1s），提示误导。
+  // 不用 frames.length×33ms——RakNet 拦截失效时只剩兜底采样（FALLBACK_GAP_MS
+  // =100ms 一帧），帧数算出的时长会严重偏短（6 秒录制 60 帧按 33ms 算 ≈ 2s），
+  // 提示误导。
   const durationMs = Math.max(1, Date.now() - session.startAt);
   // 实际帧间隔：时长 / (帧数-1)。回放 sampleAt 按 header.frameIntervalMs×frameCount
   // 算播放总时长——若固定写 33ms 而实际帧间隔是 100ms（兜底采样），总时长
@@ -632,7 +633,7 @@ export function dropRecording(playerId: number): void {
   sessions.delete(playerId);
 }
 
-/** 兜底采样定时器（每 500ms）：RakNet 中断时补帧，防播放卡顿 */
+/** 兜底采样定时器（FALLBACK_INTERVAL_MS=100ms）：RakNet 中断时补帧，防播放卡顿 */
 function fallbackSample(): void {
   for (const session of sessions.values()) {
     // 掉线挂起：玩家不在线，车停在掉线位置，时间继续流逝——每 100ms 生成一帧

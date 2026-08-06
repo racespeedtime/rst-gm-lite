@@ -249,7 +249,7 @@ function joinRoomFlow(player: Player): void {
     return;
   }
   void joinRoom(player, room).then(() => {
-    broadcastToRoom(room, `[赛车] ${player.getName().name} 加入了比赛`);
+    broadcastToRoom(room, `${player.getName().name} 加入了比赛`);
   });
 }
 

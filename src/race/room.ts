@@ -67,9 +67,8 @@ import { MIN_Z } from "@/utils/map";
 import { COLOR_RACE } from "@/utils/colors";
 import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
 
-/** 第一名完成后的结束倒计时（秒） */
+/** 第一名完成后的结束宽限时长（毫秒） */
 const END_GRACE_MS = 20_000;
-/** UUID 格式（/r s 按 id 查询前校验，避免非法字符串触发 uuid 类型错误） */
 /** 赛道名/ID 查重共用（roomUi 命令层也用：/r s /r info /r edit 按名或 id 查赛道） */
 export const UUID_RE =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -698,9 +697,14 @@ export async function restartRace(player: Player): Promise<void> {
     sysMsg(player, "race", "比赛已结束（房间已解散），请重新创建比赛", "error");
     return;
   }
-  // 中断进行中的比赛（倒计时动画/结束宽限定时器清理）
+  // 中断进行中的比赛（倒计时动画/结束宽限定时器清理）。endTimer 必须置回
+  // undefined：重开是同一 room 对象，否则新一场第一名冲线时 `!room.endTimer`
+  // 门控（finishPlayer）永远 false → 宽限永不挂载、房间卡 RACING
   for (const m of room.members.values()) cancelCountdownFx(m.id);
-  if (room.endTimer) clearTimeoutSafe(room.endTimer);
+  if (room.endTimer) {
+    clearTimeoutSafe(room.endTimer);
+    room.endTimer = undefined;
+  }
   const wasRunning = room.state === "RACING" || room.state === "COUNTDOWN";
   room.state = "WAITING";
   // 本场是否已有完成者：有人冲线（results 非空）→ 未完成成员的录像应按"有人
@@ -971,6 +975,10 @@ function beginRace(room: RaceRoom): void {
         }
       }
     }
+    // await 让出期间房间可能已销毁（/r l 全员离开→checkRoomState）/重开：
+    // 此时再对成员 setTime/写缓存会把"已结束房间"的成员时间或已重开的房间
+    // 统一时间改乱，直接放弃本次精修
+    if (rooms.get(room.id) !== room || room.state !== "RACING") return;
     for (const m of room.members.values()) {
       if (!m.isConnected()) continue;
       m.setTime(hour, minute);
@@ -1551,7 +1559,10 @@ function endRoom(room: RaceRoom): void {
   if (room.state === "FINISHED") return;
   room.state = "FINISHED";
   for (const m of room.members.values()) cancelCountdownFx(m.id);
-  if (room.endTimer) clearTimeoutSafe(room.endTimer);
+  if (room.endTimer) {
+    clearTimeoutSafe(room.endTimer);
+    room.endTimer = undefined;
+  }
   // 最终排名结算：完成者按用时升序，未完成者按进度（CP 数）降序
   const ranked: {
     playerId: number;
@@ -1685,7 +1696,10 @@ function checkRoomState(room: RaceRoom): void {
     room.state = "FINISHED";
     // 全员离开：各自的倒计时动画链随断线自停（组件帧守卫），成员残留 TD 一并清
     for (const m of room.members.values()) cancelCountdownFx(m.id);
-    if (room.endTimer) clearTimeoutSafe(room.endTimer);
+    if (room.endTimer) {
+      clearTimeoutSafe(room.endTimer);
+      room.endTimer = undefined;
+    }
     destroyRaceTds(room);
     cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
     // 有人完成（room.results 非空）→ 比赛有成绩，录像保留：挂起会话落盘、

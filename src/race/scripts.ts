@@ -5,8 +5,11 @@ import {
   destroyPlayerVehicle,
   getOwnedVehicle,
   registerOwnedVehicle,
+  getOrCreateUserVehicle,
   addVehicleComponentIfPossible,
 } from "@/vehicles";
+import { applyVehiclePreset } from "@/attire";
+import { getAuthState } from "@/auth/auth";
 
 import { COLOR_RACE } from "@/utils/colors";
 import { sysMsg } from "@/utils/msg";
@@ -266,6 +269,23 @@ export function execCpScript(
       }
       // 新车成为玩家爱车（对齐原版 BuyID = 新车）；离开/结束比赛时随玩家保留
       registerOwnedVehicle(player.id, v);
+      // 懒建 user_vehicle 行（cveh 换车不销毁旧行、也从不建新模型行——不补的话
+      // 后续 /cc 换色、改装店存件（ensureDefaultPresetTx 的 update 找不到行）会
+      // 静默失败、断线位置保存 updateMany 零命中）。异步不阻塞 CP 热路径；
+      // 若有默认预设一并应用外观（颜色/挂件，对齐 spawnVehicle）
+      const auth = getAuthState(player.id);
+      if (auth) {
+        void (async () => {
+          try {
+            const { uv } = await getOrCreateUserVehicle(player, model);
+            if (uv.defaultPresetId) {
+              await applyVehiclePreset(v, uv.defaultPresetId, player.id);
+            }
+          } catch (e) {
+            logger.error(`[race] cveh 换车懒建爱车行失败 player=${player.id} model=${model}`, e);
+          }
+        })();
+      }
       break;
     }
     case "msg": {
