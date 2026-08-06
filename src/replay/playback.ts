@@ -29,6 +29,7 @@ import {
   parseReplayFile,
   decodeFrame,
   lerpFrame,
+  FRAME_BYTES_V7,
   type ReplayData,
   type ReplayFrame,
 } from "./format";
@@ -326,11 +327,10 @@ export function getReplayDebugState(playerId: number): ReplayDebugState | null {
   if (!s || s.ghosts.length === 0) return null;
   const g = s.ghosts[0];
   const sampled = sampleAt(s.data, g.playTime);
-  const interval = Math.max(1, s.data.header.frameIntervalMs);
   return {
     playTimeMs: g.playTime,
-    durationMs: s.data.header.frameCount * interval,
-    frameIndex: Math.floor(g.playTime / interval),
+    durationMs: replayDurationMs(s.data),
+    frameIndex: sampleIndexAt(s.data, g.playTime).index,
     frameCount: s.data.header.frameCount,
     currentKmh: sampled ? Math.hypot(sampled.vx, sampled.vy, sampled.vz) : 0,
     online: sampled ? sampled.online : true,
@@ -420,16 +420,76 @@ export interface SampledState {
   online: boolean;
 }
 
-/** 按播放时间取插值帧（帧序保证前后一致性；超出范围 clamp 到边界帧）。（challenge 复用） */
+/** 播放时长（毫秒）：v7 起用帧时间戳精确（末帧-首帧）；旧文件回退帧数×间隔。
+ *  与 sampleAt 的 maxTime / seek 上限统一（renderGhost/tickSession/challenge 复用）。 */
+export function replayDurationMs(data: ReplayData): number {
+  const { header } = data;
+  if (header.frameCount === 0) return 0;
+  const last = frameTimeAt(data, header.frameCount - 1);
+  return Math.max(0, last);
+}
+
+/** 帧绝对时间（毫秒）：v7 帧时间戳（相对录制开始，首帧偏移）；旧文件回退 idx×间隔。
+ *  惰性构建全帧时间戳缓存（采样 O(1)，整文件读入时一次性计算；只读缓存共享安全）。 */
+export function frameTimeAt(data: ReplayData, index: number): number {
+  const { header, frames } = data;
+  const fb = header.frameBytes;
+  if (fb >= FRAME_BYTES_V7 && data.frameTs) return data.frameTs[index] ?? 0;
+  if (fb >= FRAME_BYTES_V7) {
+    const count = header.frameCount;
+    const ts: number[] = new Array(count);
+    for (let i = 0; i < count; i++) {
+      ts[i] = frames.readUInt32LE(i * fb + 69);
+    }
+    data.frameTs = ts;
+    return ts[index] ?? 0;
+  }
+  // 旧文件（v6 及以下）：无帧时间戳 → 均匀间隔回退（历史行为）
+  return index * Math.max(1, header.frameIntervalMs);
+}
+
+/** 帧定位（sampleAt / syncObserverTds 共用）：返回播放时间对应的帧索引与钳制后的时间。
+ *  v7 按每帧真实时间戳二分（帧间真实间隔不等——掉线静止帧 100ms / RakNet 驾驶帧
+ *  33ms——必须按真实时间定位，否则静止段频率摊平全片、驾驶段回放被放慢）；
+ *  旧文件无时间戳（relTimeMs=0）→ 均匀间隔回退（历史行为）。判定用 header 的
+ *  自描述 frameBytes（兼容旧文件），不依赖 FORMAT_VERSION */
+export function sampleIndexAt(
+  data: ReplayData,
+  playTime: number,
+): { index: number; lastIndex: number; t: number } {
+  const { header } = data;
+  const interval = Math.max(1, header.frameIntervalMs);
+  const lastIndex = header.frameCount - 1;
+  const maxTime = lastIndex * interval;
+  const fb = header.frameBytes;
+  if (fb >= FRAME_BYTES_V7) {
+    const lastTime = frameTimeAt(data, lastIndex);
+    if (playTime >= lastTime) return { index: lastIndex, lastIndex, t: lastTime };
+    let a = 0;
+    let b = lastIndex;
+    // 二分：找最后一个 time ≤ playTime 的帧（帧时间戳单调不减——每帧记录相对
+    // 录制开始的真实时间，采样时点单调）
+    while (a < b) {
+      const mid = (a + b + 1) >> 1;
+      if (frameTimeAt(data, mid) <= playTime) a = mid;
+      else b = mid - 1;
+    }
+    const t = Math.max(frameTimeAt(data, 0), Math.min(lastTime, playTime));
+    return { index: a, lastIndex, t };
+  }
+  const t = Math.min(maxTime, Math.max(0, playTime));
+  return { index: Math.floor(t / interval), lastIndex, t };
+}
+
+/**
+ * 按播放时间取插值帧：v7 按帧时间戳二分定位（见 sampleIndexAt）；旧文件回退
+ * 均匀间隔。帧序保证前后一致性；超范围 clamp。（challenge 复用） */
 export function sampleAt(data: ReplayData, playTime: number): SampledState | null {
   const { header, frames } = data;
   if (header.frameCount === 0) return null;
   const interval = Math.max(1, header.frameIntervalMs);
-  // 帧坐标 = 时间 / 间隔（最后一帧边界）
   const lastIdx = header.frameCount - 1;
-  const maxTime = lastIdx * interval;
-  const t = Math.min(maxTime, Math.max(0, playTime));
-  const idx = Math.floor(t / interval);
+  const { index: idx, t } = sampleIndexAt(data, playTime);
   const pick = (f: ReplayFrame): SampledState => {
     return {
       x: f.x,
@@ -467,7 +527,12 @@ export function sampleAt(data: ReplayData, playTime: number): SampledState | nul
   const a = decodeFrame(frames, idx, data.header.frameBytes);
   const b = decodeFrame(frames, idx + 1, data.header.frameBytes);
   if (!a || !b) return null;
-  const frac = (t - idx * interval) / interval;
+  // 插值系数：v7 用帧间真实时间差（时间戳模式），旧文件用均匀间隔
+  const span =
+    header.frameBytes >= FRAME_BYTES_V7
+      ? frameTimeAt(data, idx + 1) - frameTimeAt(data, idx)
+      : interval;
+  const frac = span > 0 ? (t - frameTimeAt(data, idx)) / span : 0;
   return pick(lerpFrame(a, b, frac));
 }
 
@@ -587,8 +652,7 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     s.vy *= session.speed;
     s.vz *= session.speed;
   }
-  const maxTime =
-    (session.data.header.frameCount - 1) * Math.max(1, session.data.header.frameIntervalMs);
+  const maxTime = frameTimeAt(session.data, session.data.header.frameCount - 1);
   // 播完判定：playTime 已 clamp 到终点 → 发完这一帧即停止驱动。否则会持续
   // 重发"位置恒定、速度非零"的尾帧——客户端物理每帧按速度跑动又被服务器拉回，
   // 车辆原地抖动/朝向乱转（终点地面起伏或碰撞干扰时更明显）。
@@ -736,7 +800,8 @@ function tickSession(session: ReplaySession): void {
   }
   const dt = elapsed * session.speed;
   const lastIdx = session.data.header.frameCount - 1;
-  const maxTime = lastIdx * session.data.header.frameIntervalMs;
+  // 播放边界：v7 按真实时间戳（末帧时间）；旧文件回退均匀间隔
+  const maxTime = frameTimeAt(session.data, lastIdx);
   for (const g of session.ghosts) {
     // 播放时间推进并 clamp 到 [0, maxTime]（播到结尾停在边界，不循环；seek 可回看）
     g.playTime = Math.min(maxTime, Math.max(0, g.playTime + dt));
@@ -773,10 +838,12 @@ function syncObserverTds(session: ReplaySession): void {
   if (session.tds.size === 0 || session.ghosts.length === 0) return;
   const s = sampleAt(session.data, session.ghosts[0].playTime);
   if (!s) return;
-  const idx = Math.floor(
-    session.ghosts[0].playTime / Math.max(1, session.data.header.frameIntervalMs),
+  // TD 时间 = 当前播放时间（v7 帧时间戳模式按真实时间轴，与 sampleAt 一致；
+  // 旧文件回退均匀间隔 idx×interval）
+  const timeMs = Math.min(
+    frameTimeAt(session.data, session.data.header.frameCount - 1),
+    session.ghosts[0].playTime,
   );
-  const timeMs = idx * session.data.header.frameIntervalMs;
   const cpText = `C  P / ~p~${s.cpProgress}~w~/~y~${session.data.header.totalCp || 1}`;
   const timeText = `TIME / ${fmtRaceTime(timeMs)}`;
   if (cpText !== session.lastCpText || timeText !== session.lastTimeText) {
@@ -860,8 +927,9 @@ export async function spawnReplay(
   const isGhost = replay.type === "ghost";
   const worldId = isGhost ? player.getVirtualWorld() : allocReplayWorld();
   const ghosts: Ghost[] = [];
-  // 播放总时长 = 播放终点 (frameCount-1)×interval（与 renderGhost/tickSession 一致）
-  const duration = (data.header.frameCount - 1) * data.header.frameIntervalMs;
+  // 播放总时长 = 播放终点（末帧时间戳；v7 真实时间轴，旧文件回退均匀间隔）——
+  // 与 renderGhost/tickSession 一致
+  const duration = replayDurationMs(data);
   // 分身错峰间隔：自定义（opts.staggerMs，毫秒）或自动等分总时长（count 辆均匀铺开）。
   // 用 || 而非 ??：显式传 0 视为"未指定"（0 间隔 = 无错峰，非用户本意）
   const baseGap = opts?.staggerMs || (count > 1 ? duration / count : 0);
@@ -1129,10 +1197,10 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         player.sendClientMessage(COLOR_ERROR, "时间格式无效（秒或 mm:ss）");
         return;
       }
-      // seek 上限 = 播放终点 (frameCount-1)×interval（与 renderGhost/tickSession
-      // 的 maxTime 一致；旧 frameCount×interval 多一格，seek 到尾端会直接触发
-      // atEnd 停发 + "已播完"提示重置失效）
-      const max = (session.data.header.frameCount - 1) * session.data.header.frameIntervalMs;
+      // seek 上限 = 播放终点（v7 末帧时间戳 / 旧文件均匀间隔——与
+      // renderGhost/tickSession 的 maxTime 一致；旧 frameCount×interval 多一格，
+      // seek 到尾端会直接触发 atEnd 停发 + "已播完"提示重置失效）
+      const max = frameTimeAt(session.data, session.data.header.frameCount - 1);
       const target = Math.min(max, Math.max(0, ms));
       for (const g of session.ghosts) {
         // 保持分身的错峰偏移：各分身落在 target + 自身偏移（clamp 到文件末尾），

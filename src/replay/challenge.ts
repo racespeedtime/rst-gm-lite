@@ -40,6 +40,7 @@ import {
   getReplaySession,
   registerReplayNpcForReplay,
   unregisterReplayNpcForReplay,
+  frameTimeAt,
 } from "./playback";
 import { registerObserveCandidate, unregisterObserveCandidate } from "@/core/observe";
 import { DEFAULT_CHARSET } from "@/utils/constants";
@@ -200,7 +201,8 @@ function renderGhost(ch: ChallengeSession): void {
       );
     }
   }
-  const maxTime = (ch.data.header.frameCount - 1) * Math.max(1, ch.data.header.frameIntervalMs);
+  // 影子播完边界 = 播放终点（v7 末帧时间戳 / 旧文件均匀间隔——对齐 playback）
+  const maxTime = frameTimeAt(ch.data, ch.data.header.frameCount - 1);
   // 倒计时期间：playTime 停在起始帧（startFrame=录制发车帧）→ 按静止帧渲染
   //（速度/按键清零，影子停在起点等发车；GO 后 tick 推进 playTime 才离开
   // startFrame，恢复正常驱动）。起始帧如果是换车帧，ensureGhostVehicle 只在
@@ -555,8 +557,8 @@ function tickChallenge(ch: ChallengeSession): void {
   if (p && p.isConnected()) {
     ensureChallengeCar(p, ch);
   }
-  // 影子播完时间 = 播放终点 (frameCount-1)×interval（对齐 playback）
-  const dur = (ch.data.header.frameCount - 1) * ch.data.header.frameIntervalMs;
+  // 影子播完时间 = 播放终点（v7 末帧时间戳 / 旧文件均匀间隔——对齐 playback）
+  const dur = frameTimeAt(ch.data, ch.data.header.frameCount - 1);
   // 影子播放用真实流逝时间推进（固定 16ms/tick 在定时器节流时影子会慢放，
   // 与玩家实际速度不同步）；clamp 250ms 防卡顿后跳变
   const now = Date.now();

@@ -34,8 +34,13 @@ const MAGIC = "RSTREP01";
  *   旧 v4/v3/v2 文件照读（这些字段取 0/false）
  * - v6 再追加 online(u8)——该帧玩家是否在线（掉线重连的静止帧标 false，
  *   回放/挑战据此识别掉线段）。旧 v5 及以下文件照读（默认在线）
+ * - v7 再追加 relTimeMs(u32)——该帧相对录制开始的时间戳（毫秒）。掉线挂起
+ *   静止帧（兜底 100ms 一帧）与正常驾驶帧（RakNet ~33ms 一帧）采样率不同，
+ *   落盘的 frameIntervalMs 是"平均间隔"，把静止段频率摊到全片会让驾驶段
+ *   回放被放慢（长赛道掉线回放明显像 0.5 倍速）。v7 起播放按每帧时间戳
+ *   精确定位（二分），旧 v6 及以下文件照读（relTimeMs=0，回退均匀间隔）
  */
-export const FORMAT_VERSION = 6;
+export const FORMAT_VERSION = 7;
 
 /** 录制类型（recorder 写 header 用） */
 export const REPLAY_TYPE_GHOST = 0;
@@ -49,13 +54,17 @@ const FRAME_BYTES_V4 = FRAME_BYTES_V2 + 2;
 const FRAME_BYTES_V5 = FRAME_BYTES_V4 + 11;
 /** v6：帧 69B = v5 帧 + online1（该帧玩家是否在线；掉线静止帧 false） */
 const FRAME_BYTES_V6 = FRAME_BYTES_V5 + 1;
+/** v7：帧 73B = v6 帧 + relTimeMs4（该帧相对录制开始的时间戳，毫秒） */
+const FRAME_BYTES_V7 = FRAME_BYTES_V6 + 4;
 /** v2：头 72B = magic8 + ver1 + type1 + interval2 + model4 + pos12 + quat16 + vel12 + count4 + dur4 + totalCp4 + bestMs4 */
 const HEADER_BYTES_V2 = 72;
 /** v3+：头 76B = v2 头 + frameBytes4（自描述，未来帧字段追加零破坏） */
 const HEADER_BYTES_V3 = HEADER_BYTES_V2 + 4;
 
-/** 当前帧字节数（v6） */
-export const FRAME_BYTES = FRAME_BYTES_V6;
+/** 当前帧字节数（v7） */
+export const FRAME_BYTES = FRAME_BYTES_V7;
+/** v7 帧字节数（播放端判断文件是否带时间戳——判定用 header.frameBytes 比较） */
+export { FRAME_BYTES_V7 };
 /** 当前头字节数（v3+ 头布局不变） */
 export const HEADER_BYTES = HEADER_BYTES_V3;
 
@@ -95,6 +104,8 @@ export interface ReplayFrame {
   trainSpeed: number;
   /** 该帧玩家是否在线（掉线重连的静止帧 false；旧文件默认 true） */
   online: boolean;
+  /** 该帧相对录制开始的时间戳（毫秒，v7 起写入；sample 统一注入；旧文件默认 0） */
+  relTimeMs?: number;
 }
 
 export interface ReplayHeader {
@@ -127,6 +138,8 @@ export interface ReplayData {
   /** 该文件的头字节数（按版本） */
   headerBytes: number;
   frames: Buffer; // Body 切片（从 header 末尾开始）
+  /** v7 帧时间戳惰性缓存（sampleAt 二分用；文件只读缓存共享安全，首次构建后复用） */
+  frameTs?: number[];
 }
 
 const V = (n: number): number => (Number.isFinite(n) ? n : 0);
@@ -177,7 +190,7 @@ export function encodeHeader(h: ReplayHeader): Buffer {
   return buf;
 }
 
-/** 编码单帧 → Buffer（当前帧布局 68B：v2 的 55B + keys u16 + v5 追加字段） */
+/** 编码单帧 → Buffer（当前帧布局 73B：v6 的 69B + relTimeMs u32） */
 export function encodeFrame(f: ReplayFrame): Buffer {
   const buf = Buffer.allocUnsafe(FRAME_BYTES);
   buf.writeFloatLE(V(f.x), 0);
@@ -206,6 +219,7 @@ export function encodeFrame(f: ReplayFrame): Buffer {
   buf.writeUInt16LE((f.trailerId | 0) & 0xffff, 62); // v5：拖挂
   buf.writeFloatLE(V(f.trainSpeed), 64); // v5：火车速度
   buf.writeUInt8(f.online ? 1 : 0, 68); // v6：在线标记（掉线静止帧 false）
+  buf.writeUInt32LE(f.relTimeMs ?? 0, 69); // v7：相对录制开始的时间戳（毫秒）
   return buf;
 }
 
@@ -321,6 +335,8 @@ export function decodeFrame(buf: Buffer, index: number, frameBytes: number): Rep
     trainSpeed: frameBytes >= FRAME_BYTES_V5 ? buf.readFloatLE(o + 64) : 0,
     // v6 起读在线标记；旧文件（frameBytes<69）视为全程在线
     online: frameBytes >= FRAME_BYTES_V6 ? buf.readUInt8(o + 68) === 1 : true,
+    // v7 起读时间戳；旧文件（frameBytes<73）默认 0（播放回退均匀间隔）
+    relTimeMs: frameBytes >= FRAME_BYTES_V7 ? buf.readUInt32LE(o + 69) : 0,
   };
 }
 

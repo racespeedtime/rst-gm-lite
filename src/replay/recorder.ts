@@ -182,8 +182,11 @@ function checkRecordingBoundary(session: RecordingSession, player: Player): bool
   return false;
 }
 
-/** 采样一次（RakNet 驱动） */
+/** 采样一次（RakNet 驱动）：统一注入帧时间戳（相对录制开始，v7 落盘）。
+ *  帧间真实间隔不等（RakNet ~33ms / 掉线静止帧 100ms / 兜底采样），播放端
+ *  按此时间戳精确定位，避免"平均间隔"把掉线段频率摊到全片导致驾驶段放慢。 */
 function sample(session: RecordingSession, frame: ReplayFrame): void {
+  frame.relTimeMs = Date.now() - session.startAt; // 帧每次采样都是新对象，直接赋值零复制
   session.frames.push(frame);
   session.last = frame;
   session.lastSampleAt = Date.now();
