@@ -106,13 +106,14 @@ export function initChat(): void {
     // 名字本体剥离颜色码（supportAllNickname 允许昵称含 {RRGGBB}，防聊天注入），prefix/suffix 彩色装饰保留
     const name = getChatDisplayName(player.id, sanitizeChatText(player.getName().name));
     const range = getChatRange(player.id);
-    // 敏感词拦截：含敏感词的消息拒绝发送（对齐 backend 聊天审/安全约定；
-    // 在 sanitize 之后检测——剥离颜色码/控制字符后的净文本，防用 {RRGGBB} 拆词绕过）
-    if (containsSensitiveWord(text)) {
+    // 敏感词拦截：含敏感词的消息拒绝发送（对齐 backend 聊天审/安全约定）。
+    // 必须在 sanitize 之后的净文本上检测——剥离颜色码/控制字符后再查，防
+    // "{RRGGBB}" 之类中缀把 AC 自动机匹配链拆断、绕过拦截（拆词攻击）
+    const safeText = sanitizeChatText(text);
+    if (containsSensitiveWord(safeText)) {
       player.sendClientMessage(COLOR_ERROR, "消息包含敏感内容，已拒绝发送");
       return false;
     }
-    const safeText = sanitizeChatText(text);
     if (range === "public") {
       // 全局：发给所有在线玩家（含自己），NPC 除外
       for (const p of Player.getInstances()) {

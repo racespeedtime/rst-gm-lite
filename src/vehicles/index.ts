@@ -118,7 +118,6 @@ export async function getOrCreateUserVehicle(
   return { uv, colors };
 }
 
-/** 应用车辆外观（默认预设的 颜色/paintjob/改装件） */
 /**
  * 刷车（懒创建爱车 + 一人一车 + 完整预设外观 + 氮气）。
  * 比赛默认发车/无车兜底也走这里（silent=true）：玩家有该模型爱车则复用其外观，

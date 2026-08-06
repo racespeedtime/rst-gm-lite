@@ -171,6 +171,11 @@ export async function runAuthFlow(player: Player): Promise<AuthState | null> {
         old.kick();
       }
     }
+    // 认证期间可能掉线：hasSuperAdminRole 是 await，此窗口内断线时
+    // closePlayerSession 已按 pending 兜底关闭会话并清 pendingSessions——若
+    // 仍登记会留下幽灵条目（会话已 OFFLINE 却留在 authStates：心跳持续刷新
+    // lastHeartbeatAt、DB 会话永 ONLINE；playerId 复用后 findOnline 误踢新连接）
+    if (!player.isConnected()) return null;
     const auth: AuthState = {
       userId: user.id,
       username: name,
@@ -189,6 +194,9 @@ export async function runAuthFlow(player: Player): Promise<AuthState | null> {
   }
   const result = await doRegister(player, name);
   if (!result) return null;
+  // 注册事务期间可能断线（openGameSession 已写会话 + pendingSessions）：
+  // 断线则 closePlayerSession 已兜底关闭，不再登记（防幽灵条目，见登录路径注释）
+  if (!player.isConnected()) return null;
   const auth: AuthState = {
     userId: result.userId,
     username: name,

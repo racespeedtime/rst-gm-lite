@@ -205,7 +205,17 @@ export class SessionManager {
     });
     this.privateSessions.set(session.id, session);
     // 静默加入：房主不需要"加入了战局"提示（下面"创建成功，你是房主"已覆盖）
-    const joined = await this.joinSession(player, session);
+    let joined: { ok: boolean; reason?: string };
+    try {
+      joined = await this.joinSession(player, session);
+    } catch (e) {
+      // joinSession 内部抛异常（teleportTo 查出生点等 DB 故障）：同样回收登记，
+      // 防幽灵战局 + worldId 未归还；向上抛由调用方认证流程兜底
+      this.privateSessions.delete(session.id);
+      this.freedWorldIds.push(session.worldId); // 归还 world id 供复用
+      player.sendClientMessage(SESSION_COLOR, "战局创建失败，请稍后重试");
+      throw e;
+    }
     // 加入失败（比赛/编辑中拦截等）必须回收：战局已登记但玩家没进去，
     // 会留下 0 人、房主不在、无人可清理的幽灵战局（除非房主断线）
     if (!joined.ok) {

@@ -245,8 +245,9 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
       player.sendClientMessage(COLOR_ERROR, "颜色代码需为 0-255 的整数");
       return toThis();
     }
-    veh.changeColors(c1, c2);
-    player.sendClientMessage(COLOR_SUCCESS, `颜色已更换为 ${c1} / ${c2}`);
+    // 换色复用 changeMyVehicleColor（持久化到默认预设，与 /cc 行为一致——
+    // 否则重刷车/重登录颜色还原，玩家困惑）
+    changeMyVehicleColor(player, c1, c2);
     return toThis();
   } else if (res.listItem === 3) {
     // 踢乘客

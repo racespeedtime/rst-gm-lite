@@ -414,16 +414,14 @@ export async function loadAllHouseObjects(attempt = 1): Promise<void> {
       }
     }
 
-    // 提交新集合（替换旧引用，卸载函数据此清理）
-    loadedObjects.length = 0;
+    // 提交新集合：先销毁上一批已加载的实体（卸载函数据此清理；幂等，首次为空）。
+    // 失败重试的定时器与 OP 手动重载可能并发：若不销毁旧批，重试回调成功后再
+    // 提交会留下上一批的 obj/标签/车/area 双份实体，且新数组使旧批无法再被清理
+    unloadAllHouseObjects();
     loadedObjects.push(...objs);
-    loadedLabels.length = 0;
     loadedLabels.push(...labels);
-    loadedVehicles.length = 0;
     loadedVehicles.push(...vehicles);
-    loadedAreas.length = 0;
     loadedAreas.push(...areas);
-    removedBuildings.length = 0;
     removedBuildings.push(...buildings);
 
     logger.info(

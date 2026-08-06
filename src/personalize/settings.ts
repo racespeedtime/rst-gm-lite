@@ -9,7 +9,7 @@ import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUs
 // 避免双导入风格；历史 import { COLOR_SUCCESS } from "./settings" 已清理）
 
 /**
- * 设置进程内缓存：GUI 200ms 轮询等高频读走缓存，避免每 tick 查库。
+ * 设置进程内缓存：GUI 100ms 轮询等高频读走缓存，避免每 tick 查库。
  * 变更时写库并同步更新缓存；断线时清理。
  */
 const settingCache = new Map<string, SysUserSettingModel>();
@@ -32,7 +32,7 @@ export function getCachedSettingByUserId(userId: string): SysUserSettingModel | 
 
 /**
  * 批量预取设置填充缓存（一次 DB 查询替代逐条 findUnique）：
- * 高频轮询（GUI 200ms tick）遇到缓存冷启动/大量失效时，用 findMany in 一次
+ * 高频轮询（GUI 100ms tick）遇到缓存冷启动/大量失效时，用 findMany in 一次
  * 拿回全部缺失行，避免 N 次串行往返。查不到的行（设置未创建）不写缓存。
  */
 export async function preloadSettingsBatch(userIds: string[]): Promise<void> {

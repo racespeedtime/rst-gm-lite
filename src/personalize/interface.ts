@@ -110,7 +110,7 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     return again();
   }
   if (index === 8) {
-    // 调试信息：全局开关（DB 持久化），GUI 200ms tick 检测后自动创建/销毁
+    // 调试信息：全局开关（DB 持久化），GUI 100ms tick 检测后自动创建/销毁
     await toggleSetting(player, "showDebugInfo", "调试信息");
     return again();
   }

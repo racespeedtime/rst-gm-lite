@@ -201,6 +201,8 @@ export async function requestTpa(player: Player, targetId: number): Promise<bool
     sysMsg(player, "tp", "对方关闭了接受传送", "warn");
     return false;
   }
+  // await 让出后重查：await 期间双方可能互发 /tpa（各自先过前面的检查），
+  // 不复查会形成双向请求，任一 /ta 都可能触发双份传送
   if (tpFromId.has(target.id) || tpGotoId.has(target.id)) {
     sysMsg(player, "tp", "对方正在处理其他请求", "warn");
     return false;

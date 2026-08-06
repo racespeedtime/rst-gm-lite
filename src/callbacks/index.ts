@@ -303,7 +303,7 @@ initRateLimit();
 // 出生系统（定时保存在线位置）
 initSpawnSystem();
 
-// GUI 系统（速度表 / 网络信息，每 200ms 刷新，timer 由 GameMode.onExit 统一清理）
+// GUI 系统（速度表 / 网络信息，每 100ms 刷新，timer 由 GameMode.onExit 统一清理）
 initGui();
 
 // 爱车系统（刷车命令 + 位置定时保存 + 改装店 mod 存储）

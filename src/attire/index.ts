@@ -100,7 +100,7 @@ const PLAYER_BONES = [
 
 /**
  * 应用人物预设：按 preset_item 顺序 setAttachedObject（bone 附着）。
- * 先清空已有槽位，再逐件应用（上限 20 槽）。
+ * 先清空已有槽位，再逐件应用（上限 MAX_PLAYER_ATTIRE=10 槽）。
  * 返回是否实际应用（false = 装扮显示关闭 / 预设不存在，调用方提示与实际一致）。
  */
 export async function applyPlayerPreset(player: Player, presetId: string | null): Promise<boolean> {

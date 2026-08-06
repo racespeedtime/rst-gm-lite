@@ -174,9 +174,11 @@ function addToQueue(el: ElevatorInstance, floorId: number): boolean {
   return true;
 }
 
-/** 玩家呼叫某层（已在队列/已被呼叫则拒绝） */
+/** 玩家呼叫某层（已在队列/已被呼叫则拒绝；电梯已在该层同样拒绝——否则走
+ *  "关门 → 零距离移动"路径，streamer 不触发 moved 事件时状态卡 MOVING 整梯停摆） */
 function callElevator(el: ElevatorInstance, player: Player, floorId: number): boolean {
   if (el.requestedBy[floorId] !== InvalidEnum.PLAYER_ID || queueHas(el, floorId)) return false;
+  if (floorId === el.floor) return false; // 电梯已在此层（含停留中）
   el.requestedBy[floorId] = player;
   if (!addToQueue(el, floorId)) {
     // 队列满：回滚占坑，避免该楼层被永久占用（原版遗留问题）
@@ -452,6 +454,8 @@ async function showFloorDialog(el: ElevatorInstance, player: Player): Promise<vo
   const floorId = res.listItem;
   if (el.requestedBy[floorId] !== InvalidEnum.PLAYER_ID || queueHas(el, floorId)) {
     player.sendClientMessage(COLOR_ERROR, "[电梯] 该楼层已在队列中");
+  } else if (floorId === el.floor) {
+    player.sendClientMessage(COLOR_ERROR, "[电梯] 电梯已在此楼层");
   } else if (didRequest(el, player)) {
     player.sendClientMessage(COLOR_ERROR, "[电梯] 您已呼叫过电梯");
   } else {
