@@ -297,6 +297,8 @@ model SysUserSetting {
   acceptTeleport     Boolean  @default(true) @map("accept_teleport")
   /** 右上角时间 TextDraw 显示（按 syncGameTime/自定义时间推算） */
   showTimeGui        Boolean  @default(true) @map("show_time_gui")
+  /** 漂移积分 TextDraw 显示（纯展示：漂移/高速累计分 + 连击倍率） */
+  showDriftScore     Boolean  @default(true) @map("show_drift_score")
   showPlayerAttire   Boolean  @default(true) @map("show_player_attire")
   sessionType        String   @default("PRIVATE") @map("session_type") @db.VarChar(10)
   sessionPassword    String?  @map("session_password") @db.VarChar(32)

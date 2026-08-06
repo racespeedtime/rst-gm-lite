@@ -41,6 +41,7 @@ import {
   syncStuntState,
   syncNoCollisionState,
 } from "@/core/vehicleAuto";
+import { cleanupDriftScore } from "@/core/driftScore";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
 import { initSkinCommands } from "@/personalize/skinPicker";
 import { initQuickCommands } from "@/personalize/quickActions";
@@ -241,6 +242,8 @@ PlayerEvent.onDisconnect(({ player, reason, next }) => {
   cleanupInvincible(player.id);
   // 车辆自动：清理换色/氮气计时
   cleanupVehicleAuto(player.id);
+  // 漂移积分：清理状态 Map（TD 已由 cleanupGui 销毁）
+  cleanupDriftScore(player.id);
   // 玩家标识：清理 NameTag/聊天名缓存
   cleanupPlayerStyle(player.id);
   // 万能面板：清理层级记忆（断线后重新登录从主面板开始）

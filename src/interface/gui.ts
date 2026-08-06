@@ -28,6 +28,8 @@ import {
   type DebugInfoState,
 } from "./debugInfo";
 import { createTimeTd, destroyTimeTd, updateTimeTd, type TimeGuiState } from "./timeGui";
+import { createDriftTd, destroyDriftTd, updateDriftTd, type DriftTdState } from "./driftTd";
+import { tickDriftScore } from "@/core/driftScore";
 import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUserSetting";
 
 /** 刷新频率（原版 updateSpeedometer 定时器为 200ms；提升到 100ms 对齐回放
@@ -52,6 +54,8 @@ interface PlayerGui {
   buildTd: TextDraw | null;
   /** 右上角时间 TD（showTimeGui 控制） */
   timeTd: TimeGuiState | null;
+  /** 漂移积分 TD（showDriftScore 控制，纯展示） */
+  driftTd: DriftTdState | null;
   /** 上次更新网络面板的时间戳（网络面板每秒更新，与 100ms 速度表 tick 分离） */
   netstatAt: number;
 }
@@ -82,6 +86,7 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     debugInfo: null,
     buildTd: null,
     timeTd: null,
+    driftTd: null,
     netstatAt: 0,
   };
   guis.set(player.id, gui);
@@ -104,6 +109,10 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     if (gui.timeTd) {
       destroyTimeTd(gui.timeTd);
       gui.timeTd = null;
+    }
+    if (gui.driftTd) {
+      destroyDriftTd(gui.driftTd);
+      gui.driftTd = null;
     }
     return;
   }
@@ -166,6 +175,16 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   } else if (gui.timeTd) {
     // 已创建：重新显示（hideAllGui 关闭后）
   }
+
+  // 漂移积分 TD（showDriftScore 控制，纯展示；隐藏时积分数值仍累计）
+  if (setting.showDriftScore && !gui.driftTd) {
+    gui.driftTd = createDriftTd(player);
+  } else if (gui.driftTd && !setting.showDriftScore) {
+    destroyDriftTd(gui.driftTd);
+    gui.driftTd = null;
+  } else if (gui.driftTd) {
+    // 已创建：重新显示（hideAllGui 关闭后）
+  }
 }
 
 /** 刷新单个玩家 GUI 的文本 */
@@ -192,6 +211,12 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
   if (gui.debugInfo) updateDebugInfo(player, gui.debugInfo, kmh);
   // 右上角时间（文本 diff，时间未变零 native）
   if (gui.timeTd) updateTimeTd(gui.timeTd, player);
+  // 漂移积分：先推进计分（100ms tick，仅开关开启时创建了 TD 才累计——开关关
+  // 时不调 tickDriftScore，积分为 0 且不累计，重开从零开始）
+  if (gui.driftTd) {
+    tickDriftScore(player);
+    updateDriftTd(gui.driftTd, player);
+  }
   // 网络面板速率是每秒增量（KB/s），须每秒更新（对齐原版 network GUI）；
   // 不跟 100ms 速度表 tick 一起刷，否则速率数值偏小且刷新过快看不清
   if (gui.netstat && Date.now() - gui.netstatAt >= 1000) {
@@ -274,6 +299,7 @@ export function cleanupGui(playerId: number): void {
     destroyDebugInfo(gui.debugInfo);
     destroyBuildVersionTd(gui.buildTd);
     destroyTimeTd(gui.timeTd);
+    destroyDriftTd(gui.driftTd);
   } catch (e) {
     logger.error(`[gui] 清理 ${playerId} 的 GUI 失败`, e);
   }

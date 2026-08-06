@@ -33,6 +33,7 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     { name: "速度表 3d", value: toggleText(setting.showSpeed3d) },
     { name: "特技显示", value: toggleText(setting.showStunt) },
     { name: "右上角时间显示", value: toggleText(setting.showTimeGui) },
+    { name: "漂移积分显示", value: toggleText(setting.showDriftScore) },
     { name: "调试信息（位置/朝向/按键等）", value: toggleText(setting.showDebugInfo) },
   ];
   const index = await pickOption(
@@ -104,6 +105,11 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     return again();
   }
   if (index === 7) {
+    // 漂移积分：全局开关（DB 持久化），纯展示无实际效果，关闭即不累计不显示
+    await toggleSetting(player, "showDriftScore", "漂移积分显示");
+    return again();
+  }
+  if (index === 8) {
     // 调试信息：全局开关（DB 持久化），GUI 200ms tick 检测后自动创建/销毁
     await toggleSetting(player, "showDebugInfo", "调试信息");
     return again();
