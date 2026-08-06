@@ -1423,6 +1423,8 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   room.resultIndex.set(player.id, time);
   const rank = room.results.length; // 完成顺序 = 名次（同一起点同时开始）
   broadcastToRoom(room, `${player.getName().name} 完成比赛！用时 ${formatTime(time)}`);
+  // 完成反馈音效（对齐 countdownFx 的数字 1056 / GO 1057 音效族，冲线用 1058）
+  player.playSound(1058);
   // 完成瞬间即落盘本段录像（带名次）：完成者掉线不进重连窗口，若等 endRoom
   // 才落盘，宽限期内掉线会经 forceStopRecording 以无 rank 落盘 → 录像永远
   // 误标"未完成"。提前落盘后 endRoom 的 raceRecordingStop 对已移除会话是 no-op。
