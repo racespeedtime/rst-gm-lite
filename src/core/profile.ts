@@ -1,7 +1,6 @@
 import { Dialog, DialogStylesEnum, Player, PlayerEvent, PlayerStateEnum } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState, hasSuperAdminRole } from "@/auth/auth";
-import { isSuperAdmin } from "@/admin/op";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { pickOption } from "@/personalize/settings";
 import { startObservePlayer } from "@/core/observe";
@@ -155,18 +154,62 @@ export async function showMyProfile(player: Player, back?: MenuBack): Promise<vo
   return back?.();
 }
 
-/** OP 入口：按用户名查看任意玩家信息（不要求在线）。取消返回上一层 */
-export async function showProfileByUsername(player: Player, back?: MenuBack): Promise<void> {
-  if (!isSuperAdmin(player)) {
-    player.sendClientMessage(COLOR_ERROR, "仅管理员可查看他人信息");
+/** 按用户名精确查并展示玩家信息（不要求在线）。返回是否查到 */
+async function showProfileByName(player: Player, username: string): Promise<boolean> {
+  const user = await prisma.sysUser.findUnique({ where: { username } });
+  if (!user) {
+    player.sendClientMessage(COLOR_ERROR, `用户 ${username} 不存在`);
+    return false;
+  }
+  await showProfile(player, user.id, `${username} 的信息`);
+  return true;
+}
+
+/** 分页列出全部玩家（在线优先，含离线），选中查看信息 */
+async function listAllPlayers(player: Player, back?: MenuBack): Promise<void> {
+  const users = await prisma.sysUser.findMany({
+    where: { deletedAt: null },
+    orderBy: { username: "asc" },
+    take: 200, // 上限防全表拉取；名字升序便于浏览
+    select: { id: true, username: true },
+  });
+  if (users.length === 0) {
+    player.sendClientMessage(COLOR_ERROR, "暂无玩家");
     return back?.();
   }
+  // 在线集（status=ONLINE 的会话）：在线优先排序，列表标注状态
+  const onlineSessions = await prisma.sysUserGameSession.findMany({
+    where: { status: "ONLINE" },
+    select: { userId: true },
+  });
+  const online = new Set(onlineSessions.map((s) => s.userId));
+  users.sort((a, b) => {
+    const ao = online.has(a.id) ? 1 : 0;
+    const bo = online.has(b.id) ? 1 : 0;
+    return bo - ao || a.username.localeCompare(b.username, "zh-CN");
+  });
+  const r = await showPagedDialog(player, {
+    caption: `玩家列表（${users.length}，在线优先）`,
+    data: users,
+    headers: ["玩家", "状态"],
+    format: (u) => [u.username, online.has(u.id) ? "{00FF00}在线" : "{808080}离线"],
+    button1: "查看信息",
+    button2: "返回",
+  });
+  if (!r) return back?.();
+  await showProfile(player, r.item.id, `${r.item.username} 的信息`);
+  return back?.();
+}
+
+/** 查看任意玩家信息（全员可用，不要求在线）：输入用户名，或留空列出全部玩家分页选。
+ *  取消返回上一层。OP 面板与 /info 命令、/p 面板「查看玩家信息」共用 */
+export async function openLookupPlayerInfo(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.INPUT,
       caption: "查看玩家信息",
-      info: "输入要查询的用户名：",
+      info: "输入要查询的玩家名（留空 = 列出全部玩家）：",
       button1: "确定",
       button2: "取消",
     }),
@@ -174,14 +217,17 @@ export async function showProfileByUsername(player: Player, back?: MenuBack): Pr
   if (!res) return;
   if (res.response !== 1) return back?.();
   const username = res.inputText.trim();
-  if (!username) return back?.();
-  const user = await prisma.sysUser.findUnique({ where: { username } });
-  if (!user) {
-    player.sendClientMessage(COLOR_ERROR, `用户 ${username} 不存在`);
-    return back?.();
+  if (!username) {
+    await listAllPlayers(player, back);
+    return;
   }
-  await showProfile(player, user.id, `${username} 的信息`);
+  await showProfileByName(player, username);
   return back?.();
+}
+
+/** OP 面板入口（历史名称，行为同 openLookupPlayerInfo）：按用户名查看任意玩家信息 */
+export async function showProfileByUsername(player: Player, back?: MenuBack): Promise<void> {
+  await openLookupPlayerInfo(player, back);
 }
 
 /**
@@ -297,7 +343,7 @@ async function listPlayerReplays(
   await openReplayActions(player, r.item, { allowDelete: false });
 }
 
-/** 初始化：点击玩家（Tab 记分板双击）→ 操作菜单 */
+/** 初始化：点击玩家（Tab 记分板双击）→ 操作菜单 + /info 命令（全员可查任意玩家） */
 export function initPlayerInfo(): void {
   PlayerEvent.onClickPlayer(({ player, clickedPlayer, next }) => {
     // 点击者正处在其他对话框流程（万能面板等）→ 忽略，避免覆盖当前对话框
@@ -310,5 +356,17 @@ export function initPlayerInfo(): void {
     }
     void openClickPlayerMenu(player, clickedPlayer);
     return true;
+  });
+
+  // /info 查看任意玩家信息（不要求在线，不限于点击在线玩家）：
+  // /info 无参 → 列出全部玩家分页（在线优先）；/info 名字 → 按用户名直接查
+  PlayerEvent.onCommandText("info", ({ player, subcommand, next }) => {
+    const arg = subcommand[0];
+    if (arg) {
+      void showProfileByName(player, arg.trim());
+    } else {
+      void listAllPlayers(player);
+    }
+    return next();
   });
 }

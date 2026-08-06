@@ -30,7 +30,7 @@ import { openChangeTrackMenu } from "@/race/roomUi";
 import { isEditing, exitEdit } from "@/race/editor";
 import { isInChallenge, goChallenge, restartChallenge, exitChallenge } from "@/replay/challenge";
 import { showMySessionLogs } from "@/auth/sessionLog";
-import { showMyProfile } from "@/core/profile";
+import { showMyProfile, openLookupPlayerInfo } from "@/core/profile";
 import { openHelp } from "@/core/help";
 import { openReplayMenuPanel } from "@/replay/menu";
 import { showDialog } from "@/utils/dialog";
@@ -264,6 +264,12 @@ const panelGroups: PanelGroup[] = [
     desc: "信息 / 登录记录 / 密码 / 快捷操作",
     items: [
       { label: "我的信息", raceSafe: true, run: showMyProfile },
+      {
+        label: "查看玩家信息",
+        desc: "输入玩家名 / 列出全部玩家",
+        raceSafe: true,
+        run: openLookupPlayerInfo,
+      },
       { label: "我的登录记录", raceSafe: true, run: showMySessionLogs },
       { label: "修改密码", raceSafe: true, run: changeOwnPassword },
       { label: "快捷操作", raceSafe: true, run: openQuickActionsMenu },
