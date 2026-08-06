@@ -2,7 +2,7 @@ import { Player, TextDraw } from "@infernus/core";
 import { getObserveTarget } from "@/core/observe";
 import { getReplayDebugState } from "@/replay/playback";
 import { getCachedSetting } from "@/personalize/settings";
-import { getWorldWeather } from "@/core/worldenv";
+import { getWorldWeather, isTimeTransitioning } from "@/core/worldenv";
 import { isInRace } from "@/race/room";
 import { isInChallenge } from "@/replay/challenge";
 
@@ -132,14 +132,19 @@ const p2 = (n: number): string => String(n).padStart(2, "0");
  * - 比赛中（房间统一时间由 beginRace 按房主设置 setTime）/ 回放观看（每帧 setTime
  *   录制赛道时间）/ 影子挑战中：画面时钟 ≠ 设置推算值——回退玩家实际 getTime
  *   （服务器已 setTime 后的结果），保证右上角时间与画面一致
+ * - 时间过渡动画中：游戏时钟正从当前值快速转到目标，同样回退 getTime——右上角
+ *   时间 TD 跟随分针/时针转动，直到过渡结束显示目标时间
  * - 设置缓存未命中（未登录/尚未缓存）→ 同样回退玩家实际 getTime
  * 5Hz 刷新读内存缓存不查库。右上角时间 TD 与 debugInfo 共用。
  */
 export function getDisplayTime(player: Player): string {
   const setting = getCachedSetting(player);
-  // 比赛中/回放观看/影子挑战中画面时钟被 setTime 覆盖，回退实际时间
+  // 比赛中/回放观看/影子挑战/时间过渡中画面时钟被 setTime 覆盖，回退实际时间
   const overridden =
-    isInRace(player.id) || isInChallenge(player.id) || !!getReplayDebugState(player.id);
+    isInRace(player.id) ||
+    isInChallenge(player.id) ||
+    isTimeTransitioning(player.id) ||
+    !!getReplayDebugState(player.id);
   let hour: number;
   let minute: number;
   if (setting && !overridden) {
@@ -168,10 +173,14 @@ function displayTimeWeather(player: Player): string {
   let hour: number;
   let minute: number;
   let weather: number;
-  // 比赛中（房间统一时间天气）/回放观看（每帧 setTime+setWeather）→ 回退实际值，
-  // 与 getDisplayTime 同口径（画面时钟 ≠ 设置推算值）
+  // 比赛中（房间统一时间天气）/回放观看（每帧 setTime+setWeather）/时间过渡
+  //（时钟快转中）→ 回退实际值，与 getDisplayTime 同口径（画面时钟 ≠ 设置推算值）；
+  // 天气只被比赛/回放覆盖，时间过渡不动天气
   const overridden =
-    isInRace(player.id) || isInChallenge(player.id) || !!getReplayDebugState(player.id);
+    isInRace(player.id) ||
+    isInChallenge(player.id) ||
+    isTimeTransitioning(player.id) ||
+    !!getReplayDebugState(player.id);
   if (setting && !overridden) {
     hour = setting.syncGameTime ? new Date().getHours() : setting.timeHour;
     minute = setting.syncGameTime ? new Date().getMinutes() : setting.timeMinute;

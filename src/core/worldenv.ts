@@ -345,9 +345,12 @@ function realGameTime(): { hour: number; minute: number } {
 /** timeFlow=false 时每分钟重置玩家个人时间的定时器句柄（keyed by playerId） */
 const timeFlowTimers = new Map<number, NodeJS.Timeout>();
 
-/** 时间过渡动画的步进数与单步间隔（总时长 2 秒：200ms × 10 步） */
-const TIME_TRANSITION_STEPS = 10;
-const TIME_TRANSITION_STEP_MS = 200;
+/**
+ * 时间过渡动画的步进间隔（50ms 高频）：游戏内时间只有时:分，没有秒——过渡
+ * 表现的是"分针/时针在快速转动"，帧率越高越平滑（50ms = 20fps，跨小时进位
+ * 不再一格格跳）。总时长随跨度浮动，见 animateTimeTo 的步数策略。
+ */
+const TIME_TRANSITION_STEP_MS = 50;
 
 /** 时间过渡动画定时器句柄（keyed by playerId）：个人时间设置快速变化到目标，模拟时间流逝感 */
 const timeTransitionTimers = new Map<number, NodeJS.Timeout>();
@@ -359,9 +362,18 @@ export function cancelTimeTransition(playerId: number): void {
   timeTransitionTimers.delete(playerId);
 }
 
+/** 玩家是否处于时间过渡动画中（GUI 时间显示据此回退实际 getTime——
+ *  动画中间值与设置推算值/现实时间不一致，右上角时间 TD 与 debug 面板须跟随画面时钟） */
+export function isTimeTransitioning(playerId: number): boolean {
+  return timeTransitionTimers.has(playerId);
+}
+
 /**
- * 时间过渡动画：从当前时间经 2 秒快速变化到目标（每 200ms 一步、步进按剩余
- * 跨度均摊——大跨度快跳、小跨度缓跳，模拟"时间在快速流逝"而非瞬跳）。
+ * 时间过渡动画：从当前时间快速变化到目标，模拟"时钟快转"而非瞬跳。
+ * 步数按跨度自适应（游戏内时间只有时:分）：
+ * - 跨度 ≤ 60 分钟 → 按 1 分钟/步（真正的分针转动，逐分钟平滑）
+ * - 更大跨度 → 60 步均摊（时针转动，每步十几~几十分钟）
+ * 50ms 一帧，总时长 = 步数 × 50ms（1 分钟跨度 ≈ 0.1s，12 小时跨度 ≈ 3s）。
  * 方向取较短回绕路径（≤12h，避免绕远一整圈）。目标与当前相同直接设置（无
  * 动画）。断线自动停止（每步检查 isConnected）；重设前须先 cancelTimeTransition。
  */
@@ -376,18 +388,20 @@ function animateTimeTo(player: Player, targetHour: number, targetMinute: number)
   // 较短方向：正向 N 分钟 vs 回绕 24h-N 取小的；step 为有符号增量（负 = 回绕倒退）
   const fwd = (((target - start) % 1440) + 1440) % 1440;
   const step = fwd <= 720 ? fwd : fwd - 1440;
+  // 步数自适应：|step| ≤ 60 按 1 分钟一步（分针转动）；更大按 60 步均摊（时针转动）
+  const steps = Math.min(60, Math.max(1, Math.abs(step)));
   let i = 1;
   const tick = () => {
     if (!player.isConnected()) {
       timeTransitionTimers.delete(player.id);
       return;
     }
-    const now = (((start + (step * i) / TIME_TRANSITION_STEPS) % 1440) + 1440) % 1440;
+    const now = (((start + (step * i) / steps) % 1440) + 1440) % 1440;
     // 先对总分钟取整再拆小时/分钟：分钟满 60 直接进位到小时
     //（Math.round(now%60)%60 会让 12:59.5 显示成 12:00 回绕）
     const total = Math.floor(now);
     player.setTime(Math.floor(total / 60), total % 60);
-    if (i >= TIME_TRANSITION_STEPS) {
+    if (i >= steps) {
       // 收尾：精确落到目标（浮点累计可能差 1 分钟）
       player.setTime(((targetHour % 24) + 24) % 24, ((targetMinute % 60) + 60) % 60);
       timeTransitionTimers.delete(player.id);
