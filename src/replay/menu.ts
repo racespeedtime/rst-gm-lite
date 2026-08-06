@@ -9,21 +9,11 @@ import { spawnReplay, controlReplay, getReplaySession, REPLAY_SPEEDS } from "./p
 import { startRecording, stopRecording, isRecording } from "./recorder";
 import { isInChallenge, startChallengeWithReplay } from "./challenge";
 import { isInRace } from "@/race/room";
+import { formatDuration, formatShortDate } from "@/utils/format";
 import type { MenuBack } from "@/core/panel";
 import { COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
 
-/** 时长格式化（mm:ss 或 ss） */
-function fmtDur(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/** 时间格式化（MM-DD HH:MM）：固定格式，避免 toLocaleString 输出依赖 ICU/locale
- * （zh-CN 不补零时 "2026/8/4 15:20:30" 用 slice(5,16) 会切出半个秒数 "8/4 15:20:3"） */
-function fmtTime(d: Date): string {
-  return `${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-}
+/** 时长/时间格式化收敛至 utils/format（formatDuration/formatShortDate） */
 
 /** 类型标签 */
 function typeLabel(t: string): string {
@@ -102,8 +92,8 @@ export async function openReplayMenu(
       typeLabel(v.type),
       v.raceName || "—",
       v.type === "race" ? (v.rank != null ? `No.${v.rank}` : "{FF0000}未完成") : "—",
-      fmtDur(v.durationMs),
-      fmtTime(v.createdAt),
+      formatDuration(v.durationMs),
+      formatShortDate(v.createdAt),
     ],
     button1: "操作",
     button2: "取消",
@@ -210,8 +200,8 @@ export async function openPublicReplayMenu(player: Player, back?: MenuBack): Pro
       v.recorderName,
       v.raceName || "—",
       v.rank != null ? `No.${v.rank}` : "{FF0000}未完成",
-      fmtDur(v.durationMs),
-      fmtTime(v.createdAt),
+      formatDuration(v.durationMs),
+      formatShortDate(v.createdAt),
     ],
     button1: "操作",
     button2: "取消",
@@ -242,8 +232,8 @@ export async function openOpReplayPanel(player: Player, back?: MenuBack): Promis
       v.recorderName,
       typeLabel(v.type),
       v.raceName || "—",
-      fmtDur(v.durationMs),
-      fmtTime(v.createdAt),
+      formatDuration(v.durationMs),
+      formatShortDate(v.createdAt),
     ],
     button1: "删除",
     button2: "取消",

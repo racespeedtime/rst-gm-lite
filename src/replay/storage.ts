@@ -55,11 +55,15 @@ export function readPendingIndex(): PendingReplayEntry[] {
   }
 }
 
-/** 写待落库索引（整体覆写） */
+/** 写待落库索引（整体覆写，原子：临时文件 + rename——防进程中断留下截断 JSON，
+ *  否则下次读失败返回 [] 会把既有 pending 条目静默清掉、对应 .rec 被孤儿清理删） */
 export function writePendingIndex(entries: PendingReplayEntry[]): void {
   try {
     ensureRecordingDir();
-    writeFileSync(PENDING_INDEX, JSON.stringify(entries, null, 2), "utf8");
+    const tmp = `${PENDING_INDEX}.tmp`;
+    writeFileSync(tmp, JSON.stringify(entries, null, 2), "utf8");
+    rmSync(PENDING_INDEX, { force: true }); // Windows rename 无法覆盖已存在文件
+    renameSync(tmp, PENDING_INDEX);
   } catch (e) {
     logger.error(`[replay] 写待落库索引失败`, e);
   }

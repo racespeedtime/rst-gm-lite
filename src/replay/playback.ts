@@ -1166,6 +1166,26 @@ export async function spawnReplay(
     return false;
   }
 
+  // 跨 await（DB 查回放/查赛道 CP/加载文件）期间玩家可能已断线：不校验就建
+  // 会话会注册孤儿 ghost（NPC/车辆/世界 id/60fps 定时器永久占用——tickSession
+  // 的"发起人离开回放世界自动停止"要求 owner.isConnected，断线后恒不触发；
+  // cleanupReplay 已在断线时跑过，不会二次清理）
+  if (!Player.getInstance(player.id)?.isConnected()) {
+    for (const g of ghosts) {
+      try {
+        unregisterReplayNpc(g.npcPlayerId);
+        unregisterObserveCandidate(g.vehicle.id, "vehicle");
+        g.label.destroy();
+        g.npc.destroy();
+        g.vehicle.destroy();
+      } catch {
+        /* 忽略 */
+      }
+    }
+    freeReplayWorld(worldId);
+    return false;
+  }
+
   const session: ReplaySession = {
     id: replay.id,
     ownerId: player.id,
@@ -1401,15 +1421,21 @@ export function stopReplaySession(playerId: number): void {
       /* 已销毁/失效 */
     }
   }
-  for (const pid of [...session.tds.keys()]) {
+  // 快照 TD 持有者：恢复时间/天气需要遍历（销毁 TD 会清空 session.tds，须先存）
+  const tdsHolders = [...session.tds.keys()];
+  for (const pid of tdsHolders) {
     destroyObserverTds(session, pid);
   }
   // 独立世界（比赛回放）的会话：会话销毁后世界无人使用 → 回收世界 id 供复用
   if (session.replayType === "race") freeReplayWorld(session.worldId);
+  // 取消进行中的开场倒计时动画（owner + watchers 的 TD/句柄一并清）
+  for (const pid of [session.ownerId, ...session.watchers]) {
+    cancelCountdownFx(pid);
+  }
   // 恢复观察者视角时间/天气：syncObserverTds 随帧给 TD 持有者 setTime/setWeather，
   // 停止后不恢复会停留在最后一帧的值，直到下次重生/登录才被 worldenv 重刷。
   // 按玩家设置重放世界时间/天气（applyWorldEnv 读个性化设置，异步无感）
-  for (const pid of session.tds.keys()) {
+  for (const pid of tdsHolders) {
     const p = Player.getInstance(pid);
     if (p && p.isConnected()) {
       void applyWorldEnv(p).catch(() => {

@@ -79,11 +79,20 @@ export function initReplay(): void {
         }
         writePendingIndex(remaining);
       }
+      // 补建期间可能有录制完成并 addPendingEntry（运行期并发）——重新读合并，
+      // 防 writePendingIndex(remaining) 把新条目覆盖丢（其 create 若恰失败则变孤儿）
+      const merged = readPendingIndex();
       const recorded = await prisma.replay.findMany({
         where: { deletedAt: null },
         select: { fileName: true },
       });
       const names = new Set(recorded.map((r) => r.fileName));
+      // 孤儿清理 keep 集 = DB 有效记录 + 待落库索引条目：补建失败（remaining 还在
+      // 索引里）的文件必须保留，否则同批孤儿扫描会把它删掉 → 下次启动补建
+      // "文件不存在"条目丢弃，录像永久丢失
+      for (const entry of merged) {
+        names.add(entry.fileName);
+      }
       cleanupOrphanFiles([...names]);
     } catch (e) {
       logger.error(`[replay] 孤儿文件扫描失败`, e);

@@ -124,9 +124,13 @@ export function rebindRecording(
   oldPlayerId: number,
   newPlayerId: number,
   raceRoomId?: number,
+  userId?: string,
 ): void {
   const session = sessions.get(oldPlayerId);
   if (!session || !session.suspended) return;
+  // userId 归属（重连者身份）：断线期间 old pid 可能被新连接复用开了挂起会话——
+  // 同一房间复用 raceRoomId 也会相同，必须按 userId 确认是掉线者自己的会话
+  if (userId != null && session.userId !== userId) return;
   if (raceRoomId != null && session.raceRoomId != null && session.raceRoomId !== raceRoomId) {
     return;
   }
@@ -685,6 +689,14 @@ export function initRecorder(): void {
     IPacket(PacketIdList.DriverSync, ({ playerId, bs, next }) => {
       const session = sessions.get(playerId);
       if (session) {
+        // 挂起中（掉线/退赛）不采样新帧、也不走边界检查：挂起语义 = 由
+        // fallbackSample 生成静止帧（车停原地）；退赛挂起时玩家已回原世界、
+        // 世界 ≠ 录制起始世界，若走 checkRecordingBoundary 会被"已离开录制
+        // 世界"误判自动停止，静止段功能失效
+        if (session.suspended) {
+          bs.resetReadPointer();
+          return next();
+        }
         const player = Player.getInstance(playerId);
         if (player && checkRecordingBoundary(session, player)) {
           // 已触发自动停止：不采样（会话可能已被 stopRecording 移除）
