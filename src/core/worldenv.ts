@@ -3,7 +3,12 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getSetting } from "@/personalize/settings";
-import { setIntervalSafe, clearIntervalSafe, setTimeoutSafe } from "@/core/timers";
+import {
+  setIntervalSafe,
+  clearIntervalSafe,
+  setTimeoutSafe,
+  clearTimeoutSafe,
+} from "@/core/timers";
 import { isInRace } from "@/race/room";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { DEFAULT_CHARSET } from "@/utils/constants";
@@ -337,9 +342,61 @@ function realGameTime(): { hour: number; minute: number } {
 /** timeFlow=false 时每分钟重置玩家个人时间的定时器句柄（keyed by playerId） */
 const timeFlowTimers = new Map<number, NodeJS.Timeout>();
 
+/** 时间过渡动画的步进数与单步间隔（总时长 2 秒：200ms × 10 步） */
+const TIME_TRANSITION_STEPS = 10;
+const TIME_TRANSITION_STEP_MS = 200;
+
+/** 时间过渡动画定时器句柄（keyed by playerId）：个人时间设置快速变化到目标，模拟时间流逝感 */
+const timeTransitionTimers = new Map<number, NodeJS.Timeout>();
+
+/** 取消玩家进行中的时间过渡动画（重设/断线时调用；链式句柄由本表追踪） */
+export function cancelTimeTransition(playerId: number): void {
+  const t = timeTransitionTimers.get(playerId);
+  if (t) clearTimeoutSafe(t);
+  timeTransitionTimers.delete(playerId);
+}
+
+/**
+ * 时间过渡动画：从当前时间经 2 秒快速变化到目标（每 200ms 一步、步进按剩余
+ * 跨度均摊——大跨度快跳、小跨度缓跳，模拟"时间在快速流逝"而非瞬跳）。
+ * 方向取较短回绕路径（≤12h，避免绕远一整圈）。目标与当前相同直接设置（无
+ * 动画）。断线自动停止（每步检查 isConnected）；重设前须先 cancelTimeTransition。
+ */
+function animateTimeTo(player: Player, targetHour: number, targetMinute: number): void {
+  const cur = player.getTime();
+  const start = (cur.ret ? cur.hour : 12) * 60 + (cur.ret ? cur.minute : 0);
+  const target = (((targetHour % 24) + 24) % 24) * 60 + (((targetMinute % 60) + 60) % 60);
+  if (start === target) {
+    player.setTime(((targetHour % 24) + 24) % 24, ((targetMinute % 60) + 60) % 60);
+    return;
+  }
+  // 较短方向：正向 N 分钟 vs 回绕 24h-N 取小的；step 为有符号增量（负 = 回绕倒退）
+  const fwd = (((target - start) % 1440) + 1440) % 1440;
+  const step = fwd <= 720 ? fwd : fwd - 1440;
+  let i = 1;
+  const tick = () => {
+    if (!player.isConnected()) {
+      timeTransitionTimers.delete(player.id);
+      return;
+    }
+    const now = (((start + (step * i) / TIME_TRANSITION_STEPS) % 1440) + 1440) % 1440;
+    player.setTime(Math.floor(now / 60), Math.round(now % 60) % 60);
+    if (i >= TIME_TRANSITION_STEPS) {
+      // 收尾：精确落到目标（浮点累计可能差 1 分钟）
+      player.setTime(((targetHour % 24) + 24) % 24, ((targetMinute % 60) + 60) % 60);
+      timeTransitionTimers.delete(player.id);
+      return;
+    }
+    i++;
+    timeTransitionTimers.set(player.id, setTimeoutSafe(tick, TIME_TRANSITION_STEP_MS));
+  };
+  timeTransitionTimers.set(player.id, setTimeoutSafe(tick, TIME_TRANSITION_STEP_MS));
+}
+
 /**
  * 按玩家设置应用世界环境（时间/天气）。
  * - syncGameTime=true → 跟随服务器时间；false → setTime(timeHour, timeMinute)
+ * - 时间设置走过渡动画（快速变化到目标，模拟时间流逝，不瞬跳）
  * - syncWorldWeather=true → 跟随服务器天气；false → setWeather(weather)
  * - timeFlow=false → 每分钟重置回设定时间（个人时间冻结）
  */
@@ -351,12 +408,16 @@ export async function applyWorldEnv(player: Player): Promise<void> {
   const setting = await getSetting(player);
   if (!setting) return;
 
+  // 取消进行中的时间过渡动画：重设时间先断旧链，防旧动画继续覆盖新设置
+  cancelTimeTransition(player.id);
+
   if (setting.syncGameTime) {
-    // 跟随大世界时间（现实时间映射）
+    // 跟随大世界时间（现实时间映射）：过渡动画快速变化到当前现实时间
     const t = realGameTime();
-    player.setTime(t.hour, t.minute);
+    animateTimeTo(player, t.hour, t.minute);
   } else {
-    player.setTime(setting.timeHour, setting.timeMinute);
+    // 个人时间：过渡动画快速变化到设定时间
+    animateTimeTo(player, setting.timeHour, setting.timeMinute);
   }
   if (setting.syncWorldWeather) {
     // 跟随服务器当前天气（currentWeather，会随分时段/轮换变化，而非固定常量）
@@ -381,9 +442,10 @@ export async function applyWorldEnv(player: Player): Promise<void> {
   }
 }
 
-/** 清理玩家 timeFlow 定时器（断线时调用） */
+/** 清理玩家时间相关定时器（断线时调用）：冻结定时器 + 进行中的时间过渡动画 */
 export function clearWorldEnvForPlayer(playerId: number): void {
   const timer = timeFlowTimers.get(playerId);
   if (timer) clearIntervalSafe(timer);
   timeFlowTimers.delete(playerId);
+  cancelTimeTransition(playerId);
 }
