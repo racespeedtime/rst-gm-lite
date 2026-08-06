@@ -62,7 +62,7 @@ import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
 import { sessionManager } from "@/sessions/manager";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { formatTime } from "@/utils/format";
-import { sysMsg } from "@/utils/msg";
+import { PREFIX, sysMsg } from "@/utils/msg";
 import { MIN_Z } from "@/utils/map";
 import { COLOR_RACE } from "@/utils/colors";
 import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
@@ -275,10 +275,11 @@ export function isRaceCommandAllowed(command: string): boolean {
 }
 
 /** 房间方法：广播 */
-/** 广播给房间内所有在线成员（roomUi 命令层加入提示也用） */
+/** 广播给房间内所有在线成员（roomUi 命令层加入提示也用）。
+ *  前缀统一在此拼接（PREFIX.race）：调用点只传正文，防漏写/手写前缀 */
 export function broadcastToRoom(room: RaceRoom, msg: string): void {
   for (const m of room.members.values()) {
-    m.sendClientMessage(COLOR_RACE, msg);
+    m.sendClientMessage(COLOR_RACE, `${PREFIX.race} ${msg}`);
   }
 }
 
@@ -396,7 +397,7 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
         // 房主断线：窗口内不转移房主（重连恢复），但保留窗口
         broadcastToRoom(
           room,
-          `[赛车] ${Player.getInstance(playerId)?.getName().name ?? "玩家"} 掉线，${Math.round(window / 1000)} 秒内可重连`,
+          `${Player.getInstance(playerId)?.getName().name ?? "玩家"} 掉线，${Math.round(window / 1000)} 秒内可重连`,
         );
         cleanupObserve(playerId);
         return;
@@ -412,11 +413,11 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
           room.ownerId = next;
           room.ownerUserId = getAuthState(next)?.userId ?? "";
           const np = Player.getInstance(next);
-          broadcastToRoom(room, `[赛车] 房主已掉线，${np?.getName().name ?? next} 成为新房主`);
+          broadcastToRoom(room, `房主已掉线，${np?.getName().name ?? next} 成为新房主`);
         }
       }
       if (room.state === "WAITING") {
-        broadcastToRoom(room, `[赛车] 一名玩家离开了比赛`);
+        broadcastToRoom(room, `一名玩家离开了比赛`);
       }
       checkRoomState(room);
     }
@@ -439,11 +440,12 @@ function cleanupExpiredReconnects(room: RaceRoom): void {
       // 重连超时：挂起中的录制落盘保留（未完成段，含掉线静止帧——玩家没回来，
       // 录像停在原地；无人完成则由房间销毁路径作废）。用 slot.playerId（掉线时
       // 的 id）找挂起会话——挂起会话键控在 playerId 上。归属校验：断线期间该
-      // playerId 可能被新连接复用并开了别的房间的录制，不能误停别人的活跃会话
-      //（与 endRoom/checkRoomState 的 raceRoomId 校验一致）
+      // playerId 可能被新连接复用开了录制（同一房间也可能被同房新成员复用——
+      // raceRoomId 会相同），必须再比 userId 才能确认是掉线者自己的会话，防误停
+      // 别人的活跃录制（与 endRoom/checkRoomState 的归属校验一致）
       if (slot && isRecording(slot.playerId)) {
         const rec = getRecording(slot.playerId);
-        if (!rec || !rec.raceRoomId || rec.raceRoomId === room.id) {
+        if (rec && rec.userId === uid && (!rec.raceRoomId || rec.raceRoomId === room.id)) {
           void stopRecording(slot.playerId, { quiet: true });
         }
       }
@@ -454,7 +456,7 @@ function cleanupExpiredReconnects(room: RaceRoom): void {
           room.ownerId = next;
           room.ownerUserId = getAuthState(next)?.userId ?? "";
           const np = Player.getInstance(next);
-          broadcastToRoom(room, `[赛车] 房主重连超时，${np?.getName().name ?? next} 成为新房主`);
+          broadcastToRoom(room, `房主重连超时，${np?.getName().name ?? next} 成为新房主`);
         }
       }
     }
@@ -670,7 +672,7 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
     mp.cpSnapshots = []; // 换赛道：清空旧赛道的回退快照（防按旧赛道车型/time/weather 回撤）
     await positionPlayerAtStart(m, room);
   }
-  broadcastToRoom(room, `[赛车] 房主将赛道更换为「${race.name}」，成员已移至起点`);
+  broadcastToRoom(room, `房主将赛道更换为「${race.name}」，成员已移至起点`);
   return true;
 }
 
@@ -752,8 +754,20 @@ export async function restartRace(player: Player): Promise<void> {
       }
     }
   }
+  // 本场无人完成：已落盘的未完成段（掉线已落盘/上一轮重开落盘的旧段）同样作废
+  //——重开是新一场，旧段无成绩价值，不能随下一场有人完成而永久保留。只处理
+  // 内存中已无会话的 pid（挂起会话上面已 drop；在房成员的段落盘时 discard 原子
+  // 删除无 DB 行，这里按 userId 快照作废命中不了），discardRaceReplay 按
+  // userId+raceId+raceRoomId+rank=null 精确匹配旧段，不伤新一场的录制
+  if (!someoneFinished) {
+    for (const pid of room.raceMembersLast.keys()) {
+      if (!isRecording(pid)) {
+        discardRaceReplay(pid, room.raceId, room.raceMembersLast.get(pid), room.id);
+      }
+    }
+  }
   if (wasRunning) {
-    broadcastToRoom(room, `[赛车] 房主重开了比赛（赛道不变「${room.raceName}」），成员已回到起点`);
+    broadcastToRoom(room, `房主重开了比赛（赛道不变「${room.raceName}」），成员已回到起点`);
   } else {
     sysMsg(player, "race", `已重置比赛（赛道 ${room.raceName}），成员已回到起点`, "info");
   }
@@ -885,6 +899,10 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
       player.setFacingAngle(first.angle);
     }
   }
+  // await spawnVehicle 期间玩家可能已离开（/r l）/断线、房间可能已被销毁
+  //（checkRoomState）——续体不校验会创建孤儿 TD（set 进已销毁的 room、show 在
+  // 已非成员的玩家屏幕，leaveRace 已跑过拿不到这个新 TD）
+  if (!isInRace(player.id) || rooms.get(room.id) !== room) return;
   // 创建比赛信息 UI（加入房间即显示，对齐原版 Race_Game_Join → CreatePRaceTextDraw；
   // 倒计时/开赛不再重建；换赛道时需先销毁旧的再重建）
   const tds = createRaceTd(player, room);
@@ -911,7 +929,7 @@ export async function startRace(player: Player): Promise<void> {
     return;
   }
   room.state = "COUNTDOWN";
-  broadcastToRoom(room, "[赛车] 比赛倒计时开始！");
+  broadcastToRoom(room, "比赛倒计时开始！");
   // 倒计时：TextDraw 动画（掉落弹跳 + 放大淡出），GO 显示瞬间开赛（对齐回放/挑战）。
   // onGo 回调检查 state：重开/结束置非 COUNTDOWN 后不再 beginRace（门控保留）
   playCountdown(
@@ -1062,7 +1080,7 @@ function beginRace(room: RaceRoom): void {
     m.playSound(1057);
     m.setCameraBehind();
   }
-  broadcastToRoom(room, "[赛车] 比赛开始！");
+  broadcastToRoom(room, "比赛开始！");
 }
 
 /** 比赛信息 UI 通用样式（对齐原版 CreatePRaceTextDraw）：
@@ -1396,11 +1414,24 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   room.results.push({ playerId: player.id, time, name: player.getName().name });
   room.resultIndex.set(player.id, time);
   const rank = room.results.length; // 完成顺序 = 名次（同一起点同时开始）
-  broadcastToRoom(room, `[赛车] ${player.getName().name} 完成比赛！用时 ${formatTime(time)}`);
+  broadcastToRoom(room, `${player.getName().name} 完成比赛！用时 ${formatTime(time)}`);
   // 完成瞬间即落盘本段录像（带名次）：完成者掉线不进重连窗口，若等 endRoom
   // 才落盘，宽限期内掉线会经 forceStopRecording 以无 rank 落盘 → 录像永远
   // 误标"未完成"。提前落盘后 endRoom 的 raceRecordingStop 对已移除会话是 no-op。
   raceRecordingStop(player.id, { rank, finished: true });
+  // 第一名完成：立即挂 20s 宽限定时器（同步段、在任何 await 之前）——若延后到
+  // 结算对话框/DB 写纪录之后再挂，完成者掉线（cleanupRacePlayer 删 playerRaces，
+  // 后续续体直接 return）或对话框一直挂着（await 永不 resolve）时 endTimer 永不
+  // 挂载 → 房间永久卡 RACING、无人完赛则无任何路径触发 endRoom
+  if (rank === 1 && !room.endTimer) {
+    const unfinishedNow = [...room.members.values()].filter(
+      (m) => !playerRaces.get(m.id)?.finished,
+    ).length;
+    if (unfinishedNow > 0 || room.reconnectSlots.size > 0) {
+      broadcastToRoom(room, "第一名已完成，20 秒后比赛结束");
+      room.endTimer = setTimeoutSafe(() => endRoom(room), END_GRACE_MS);
+    }
+  }
 
   // 写纪录（record 为毫秒）
   let isPB = false;
@@ -1501,7 +1532,7 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   }
   // 第一名完成、还有成员（含窗口玩家）在 → 20s 宽限等他们冲线
   if (rank === 1 && !room.endTimer) {
-    broadcastToRoom(room, "[赛车] 第一名已完成，20 秒后比赛结束");
+    broadcastToRoom(room, "第一名已完成，20 秒后比赛结束");
     room.endTimer = setTimeoutSafe(() => endRoom(room), END_GRACE_MS);
   }
   // 自动观战下一个未完成玩家（二次确认目标仍有效）。
@@ -1661,21 +1692,22 @@ function checkRoomState(room: RaceRoom): void {
     // 已落盘段不作废。仅"无人完成"才作废删除（挂起丢弃 + 已落盘段删除）。
     const someoneFinished = room.results.length > 0;
     for (const pid of room.raceMembersLast.keys()) {
-      // 归属校验：只处理属于本房间的录制会话（玩家退赛后又加入别的房间时，
-      // 其新会话 raceRoomId 是别的房间——防误停/误丢另一房间的活跃录制）
+      // 当前 pid 上的会话归属：只处理本房间的挂起/活跃会话（玩家退赛后又加入
+      // 别的房间时，其新会话 raceRoomId 是别的房间——防误停/误丢另一房间的录制）
       const rec = getRecording(pid);
       const mine = !rec || !rec.raceRoomId || rec.raceRoomId === room.id;
-      if (!mine) continue;
-      if (isRecording(pid)) {
+      if (isRecording(pid) && mine) {
         if (someoneFinished) {
           void stopRecording(pid, { quiet: true }); // 挂起会话落盘保留（含静止段）
         } else {
           dropRecording(pid); // 挂起会话：丢弃（静止段无成绩价值）
         }
-      } else if (!someoneFinished) {
-        // 已落盘未完成段：作废（raceRoomId 精确匹配本场——防误删"有人完成的
-        // 比赛里掉线玩家的保留段"；用 userId 快照——掉线/重连超时者 auth 已清，
-        // 传参兜底离线作废）
+      }
+      // 已落盘未完成段作废：不依赖 isRecording 状态——pid 可能已被新连接复用
+      // 开了别的房间录制（isRecording=true 且归属不符），旧用户本场的落盘段
+      // 仍须作废。discardRaceReplay 按 userId+raceId+raceRoomId 精确匹配本场
+      //（rank=null），只会命中旧段，碰不到新用户（不同 userId）的活跃会话
+      if (!someoneFinished) {
         discardRaceReplay(pid, room.raceId, room.raceMembersLast.get(pid), room.id);
       }
     }
@@ -1698,11 +1730,12 @@ export function leaveRace(player: Player): void {
     room.members.delete(player.id);
     room.lastPositions.delete(player.id); // 掉线快照缓存随成员离开清理
     room.afk.delete(player.id); // 挂机累计随离开清理（防 Map 残留）
+    cancelCountdownFx(player.id); // 倒计时中离开：停掉自己的倒计时动画（视觉/音效残留）
     // 离开者不再被观战：清理指向该成员的观察者 CP 箭头（观察者切走/继续看别人）
     for (const [oid, mid] of [...spectatorCpMap]) {
       if (mid === player.id) clearSpectatorCp(oid);
     }
-    broadcastToRoom(room, `[赛车] ${player.getName().name} 离开了比赛`);
+    broadcastToRoom(room, `${player.getName().name} 离开了比赛`);
     const tds = room.raceTextTds.get(player.id);
     if (tds) {
       for (const td of Object.values(tds)) {
@@ -1717,7 +1750,7 @@ export function leaveRace(player: Player): void {
       if (next != null) {
         room.ownerId = next;
         const np = Player.getInstance(next);
-        broadcastToRoom(room, `[赛车] 房主已离开，${np?.getName().name ?? next} 成为新房主`);
+        broadcastToRoom(room, `房主已离开，${np?.getName().name ?? next} 成为新房主`);
       }
     }
     checkRoomState(room);
@@ -1760,8 +1793,13 @@ function tickRooms(): void {
   for (const room of rooms.values()) {
     // WAITING 房间超时回收（10 分钟无人开始 → 解散，防僵尸房间累积）
     if (room.state === "WAITING" && now - room.createdAt > 10 * 60 * 1000) {
-      broadcastToRoom(room, "[赛车] 比赛房间因长时间未开始已解散");
+      broadcastToRoom(room, "比赛房间因长时间未开始已解散");
       for (const m of room.members.values()) {
+        // 解散先清成员观战态（endRoom/restartRace 同序）：成员可能在房间世界
+        // /tv 观战他人，不 stopObserve 则其 observeStates 残留、prevWorld 快照
+        // 指向即将回收的房间世界——世界 id 复用到新房后 /tv off 会把它塞进
+        // 别人的新比赛世界
+        if (isObserving(m.id)) stopObserve(m);
         const mp = playerRaces.get(m.id);
         // 加入即切到房间世界：解散时恢复成员原世界（防留在房间世界成幽灵）
         if (mp) {
@@ -1970,12 +2008,15 @@ function syncRaceTds(): void {
       if (!isObserving(pid)) continue;
       const st = getObserveTarget(pid);
       if (!st || st.kind !== "player") continue;
+      // 跨房间校验：房间 X 成员可能 /tv 观战别的房间的步行玩家，此时不能用
+      // 目标房间 Y 的 startTime 写本房间 X 的 TD（"Y 的时间 + 自己的名次"错乱）
+      const tmp = playerRaces.get(st.targetId);
+      if (!tmp || tmp.roomId !== room.id) continue;
       const target = Player.getInstance(st.targetId);
       if (!target || !target.isConnected()) continue;
-      const tmp = playerRaces.get(st.targetId);
       const tds = room.raceTextTds.get(pid);
       const cache = room.tdTextCache.get(pid);
-      if (!tmp || !tds || !cache || tmp.finished) continue;
+      if (!tds || !cache || tmp.finished) continue;
       if (!tds.time.isValid()) continue;
       const cs = Math.floor((now - tmp.startTime) / 10);
       if (cs !== cache.timeCs) {
@@ -2368,10 +2409,11 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       room.reconnectUntil.delete(auth.userId);
       room.reconnectSlots.delete(auth.userId);
       // 归属校验（对齐 cleanupExpiredReconnects）：断线期间该 playerId 可能被新
-      // 连接复用并开了别的房间的录制，不能误停别人的活跃会话
+      // 连接复用开了录制（含同一房间被同房新成员复用——raceRoomId 相同），须再
+      // 比 userId 才是掉线者自己的挂起会话，防误停别人的活跃会话
       if (slot && isRecording(slot.playerId)) {
         const rec = getRecording(slot.playerId);
-        if (!rec || !rec.raceRoomId || rec.raceRoomId === room.id) {
+        if (rec && rec.userId === auth.userId && (!rec.raceRoomId || rec.raceRoomId === room.id)) {
           void stopRecording(slot.playerId, { quiet: true });
         }
       }
@@ -2396,7 +2438,7 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     // 断在旧 id 上、回放缺段），且旧 id 残留挂起会话占内存。传 raceRoomId 归属
     // 校验：旧 id 可能已被新连接占用来开别的房间的挂起会话，不能劫持
     if (slot && slot.playerId !== player.id) {
-      rebindRecording(slot.playerId, player.id, room.id);
+      rebindRecording(slot.playerId, player.id, room.id, auth.userId);
     }
     room.members.set(player.id, player);
     room.raceMembersLast.set(player.id, auth.userId); // 重新登记本场录制成员（userId 快照供离线作废）
@@ -2479,7 +2521,7 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     // onSpawn（玩家被直接放回车里）——手动重挂默认人物装扮，否则整个重连比赛
     // 期间装扮缺失
     void reapplyCurrentPlayerPreset(player);
-    broadcastToRoom(room, `[赛车] ${player.getName().name} 已重连比赛！`);
+    broadcastToRoom(room, `${player.getName().name} 已重连比赛！`);
     sysMsg(
       player,
       "race",
@@ -2490,7 +2532,7 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     if (room.ownerId === player.id || room.ownerUserId === auth.userId) {
       room.ownerId = player.id;
       room.ownerUserId = auth.userId;
-      broadcastToRoom(room, `[赛车] ${player.getName().name} 恢复了房主身份`);
+      broadcastToRoom(room, `${player.getName().name} 恢复了房主身份`);
     }
     return true;
   }

@@ -6,7 +6,7 @@ import { isSuperAdmin } from "@/admin/op";
 import { pickOption } from "@/personalize/settings";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
-import { formatTime } from "@/utils/format";
+import { formatTime, formatDuration, formatShortDate } from "@/utils/format";
 import { sysMsg } from "@/utils/msg";
 import { swapSortIndex, nextSortIndex, compactSortIndex } from "@/utils/sort";
 import type { MenuBack } from "@/core/panel";
@@ -93,23 +93,7 @@ async function createRaceFlow(player: Player, back?: MenuBack): Promise<void> {
   }
 }
 
-/** 短日期（MM-DD HH:MM），用于列表多列展示 */
-function fmtShortDate(d: Date): string {
-  const pad2 = (n: number): string => String(n).padStart(2, "0");
-  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
-
-/** 时长格式化（mm:ss 或 ss，回放列表用，与 replay/menu 同口径） */
-function fmtDur(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/** 时间格式化（MM-DD HH:MM，回放列表用，与 replay/menu 同口径） */
-function fmtTime(d: Date): string {
-  return fmtShortDate(d);
-}
+/** 时长格式化（mm:ss 或 ss，回放列表用）与短日期（MM-DD HH:MM）收敛至 utils/format */
 
 /** 赛道列表（全部/我的）：排序选择 + 多列展示，选择进入详情 */
 async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBack): Promise<void> {
@@ -170,14 +154,14 @@ async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBac
             `${Math.round(Number(race.totalLength))}m`,
             `${race.laps ?? 1}`,
             race.sysUser?.username ?? "?",
-            fmtShortDate(race.createdAt),
+            formatShortDate(race.createdAt),
           ]
         : [
             String(index + 1),
             race.name,
             `${Math.round(Number(race.totalLength))}m`,
             `${race.laps ?? 1}`,
-            fmtShortDate(race.createdAt),
+            formatShortDate(race.createdAt),
           ],
     button1: "选择",
     button2: "取消",
@@ -276,8 +260,8 @@ async function listRaceReplays(player: Player, raceId: string, back?: MenuBack):
     format: (v) => [
       v.recorderName,
       v.rank != null ? `No.${v.rank}` : "—",
-      fmtDur(v.durationMs),
-      fmtTime(v.createdAt),
+      formatDuration(v.durationMs),
+      formatShortDate(v.createdAt),
     ],
     button1: "操作",
     button2: "返回",
@@ -307,7 +291,7 @@ async function leaderboardFlow(player: Player, raceId: string, back?: MenuBack):
       String(index + 1),
       r.sysUser?.username ?? "?",
       formatTime(r.record),
-      fmtShortDate(r.createdAt),
+      formatShortDate(r.createdAt),
     ],
     // 纯浏览：点行无选中语义，仅翻页/确定返回（防"点了没反应"的困惑）
     selectable: false,
