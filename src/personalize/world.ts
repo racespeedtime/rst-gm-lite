@@ -20,8 +20,9 @@ import type { MenuBack } from "@/core/panel";
 /**
  * 玩家游戏内颜色色板：经典 SA-MP PlayerColors[200]（0xAARRGGBB，0-99 唯一、
  * 100-199 为前段重复）。忠实保留原版配色——老玩家对这套默认玩家颜色有肌肉记忆
- * （小地图点/NameTag 都是这套色）。运行时转 #RRGGBB（alpha 恒 FF）+ 去重（去重后
- * 99 色，因原数组前段末尾 0xD8C762FF 出现两次）。加自定义共 100 条 × 每页 20 = 5 页铺满。
+ * （小地图点/NameTag 都是这套色）。运行时转 #RRGGBB（alpha 恒 FF）+ 去重（原
+ * 数组 99 条目去重后 98 色——0x94436eff 与 0x4c436eff 同转 #436eff 重复）。
+ * 每页 20，98 色 = 5 页铺满。
  */
 const SA_PLAYER_COLORS = [
   0xff8c13ff, 0xc715ffff, 0x20b2aaff, 0xdc143cff, 0x6495edff, 0xf0e68cff, 0x778899ff, 0xff1493ff,

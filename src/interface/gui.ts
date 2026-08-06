@@ -122,15 +122,14 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     gui.hidden = true;
     return;
   }
-  // 从 hideAllGui 恢复：重新显示所有存活 TD（2d/3d/netstat/time/drift），
-  // 之后 tick 不再重复 show（TextDrawShowForPlayer 无内部去重）
+  // 从 hideAllGui 恢复：重新显示所有存活 TD（2d/netstat 是唯二 hide 不 destroy 的
+  // 两组；timeTd/driftTd 在 hideAllGui 时被 destroy，恢复时由下方创建分支重建且
+  // 创建自带 show——此处无需处理），之后 tick 不再重复 show（TextDrawShowForPlayer
+  // 无内部去重）
   if (gui.hidden) {
     gui.hidden = false;
     gui.speedoTd.forEach((t) => t.show(player));
     gui.netstat?.tds.forEach((t) => t.show(player));
-    gui.timeTd?.td.show(player);
-    gui.driftTd?.scoreTd.show(player);
-    gui.driftTd?.badgeTd.show(player);
   }
 
   // 2d 速度表（总开关 + showSpeed2d）。show 只在创建/从 hideAllGui 恢复时发

@@ -65,9 +65,16 @@ export async function runLobby(player: Player): Promise<void> {
   // 进入对应战局（再次断线防护）
   if (!player.isConnected()) return;
   if (enterMode === "OWN_SESSION") {
-    // 已有自身战局则回到（createSession 内部处理防重复创建），没有则创建
-    const pw = setting?.sessionPassword ?? null;
-    await sessionManager.createSession(player, `${player.getName().name} 的战局`, pw);
+    // 已有自身战局则回到（createSession 内部处理防重复创建），没有则创建。
+    // 战局创建失败（DB 故障/加入拦截）降级回公共大世界照常出生——与上面
+    // "保存失败不致命"同口径：登录流程不应因战局问题把玩家踢出服务器
+    try {
+      const pw = setting?.sessionPassword ?? null;
+      await sessionManager.createSession(player, `${player.getName().name} 的战局`, pw);
+    } catch (e) {
+      logger.error(`[lobby] ${player.getName().name} 创建战局失败，回公共大世界`, e);
+      await sessionManager.joinPublicWorld(player);
+    }
   } else {
     await sessionManager.joinPublicWorld(player);
   }

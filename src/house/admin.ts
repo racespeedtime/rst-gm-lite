@@ -13,7 +13,13 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
-import { loadAllHouseObjects, unloadAllHouseObjects, applyHouseRemovedBuildings } from "./index";
+import {
+  loadAllHouseObjects,
+  unloadAllHouseObjects,
+  applyHouseRemovedBuildings,
+  setHouseObjectsVisibleForPlayer,
+} from "./index";
+import { getSetting } from "@/personalize/settings";
 import { isSuperAdmin } from "@/admin/op";
 import { sysMsg } from "@/utils/msg";
 import type { MenuBack } from "@/core/panel";
@@ -137,6 +143,10 @@ async function reloadHouseObjects(): Promise<void> {
     if (p.isNpc() || !p.isConnected()) continue;
     try {
       applyHouseRemovedBuildings(p);
+      // 重载重建的 obj 默认可见：按玩家"显示物件"设置重新应用显隐——否则关闭
+      // 物件的玩家在 OP 重载后会突然看到全部房屋物件（直到重登/再开关）
+      const setting = await getSetting(p);
+      setHouseObjectsVisibleForPlayer(p, setting?.showObject ?? true);
     } catch {
       /* 玩家失效等，忽略 */
     }
