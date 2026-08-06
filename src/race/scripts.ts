@@ -149,11 +149,11 @@ export function setVehicleSpeed(veh: Vehicle, kmh: number, angleDeg: number, z?:
 /**
  * 超级起步（superstart）：开局 GO 瞬间沿车头方向给全车一个向前初速（对齐 speed 脚本
  * 坐标系：角度 = 车头朝向 + 90）。只认第一 CP 的配置，写其他地方无效；不写默认生效
- * （默认 SUPERSTART_DEFAULT_KMH=160）。参数：superstart 速度(KM/H)，无参数/非法 → 默认，
+ * （默认 SUPERSTART_DEFAULT_KMH=221）。参数：superstart 速度(KM/H)，无参数/非法 → 默认，
  * 写 superstart 0 可关闭该赛道起步加速。全局仅开局一次（beginRace 触发），
  * 重生不激活——过 CP 时 execCpScript 静默跳过（见 case "superstart"）。
  */
-export const SUPERSTART_DEFAULT_KMH = 160;
+export const SUPERSTART_DEFAULT_KMH = 221;
 
 export function getSuperStartKmh(cps: { scripts: string[] }[]): number {
   for (const script of cps[0]?.scripts ?? []) {
