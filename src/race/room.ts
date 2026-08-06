@@ -327,8 +327,12 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
     if (room) {
       const tds = room.raceTextTds.get(playerId);
       if (tds) {
+        // infernus 在玩家 onDisconnect 时已自动销毁其全部 PlayerTextDraw
+        //（_id 回到 65535），此处必须 isValid 守卫——裸 destroy 会抛
+        // TextDrawException 中断清理，TD 条目残留，tickRooms/syncRaceTds
+        // 继续对已销毁 TD setString 无限刷屏
         for (const td of Object.values(tds)) {
-          td.destroy();
+          if (td.isValid()) td.destroy();
         }
         room.raceTextTds.delete(playerId);
       }
@@ -1026,7 +1030,7 @@ function beginRace(room: RaceRoom): void {
       // 60fps syncRaceTds 以缓存去重，不清会让开赛首帧拿到上一场的旧文本
       room.tdTextCache.delete(m.id);
       const tds = room.raceTextTds.get(m.id);
-      if (tds) {
+      if (tds && tds.time.isValid()) {
         tds.cp.setString(`C  P / ~p~1~w~/~y~${room.cps.length}`);
         tds.time.setString("TIME / 00:00:00");
         tds.rank.setString("RANK / 1 st");
@@ -1104,7 +1108,11 @@ async function updateBestTd(player: Player, room: RaceRoom, tds: RoomRaceTds): P
       best = rec ? rec.record : -1;
       room.bestTimes.set(auth.userId, best);
     }
-    tds.best.setString(best === -1 ? "BEST / 99:99:99" : `BEST / ${formatRaceTime(best)}`);
+    // DB 查询为异步：查询期间玩家可能已掉线（TD 被 infernus 自动销毁）或
+    // 已离开比赛——setString 前守卫 isValid，防 async 续体对失效 TD 抛错
+    if (tds.best.isValid()) {
+      tds.best.setString(best === -1 ? "BEST / 99:99:99" : `BEST / ${formatRaceTime(best)}`);
+    }
   } catch (e) {
     logger.error(`[race] 查询个人最佳失败 ${player.getName().name}`, e);
   }
@@ -1213,12 +1221,12 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   const cpDone = Math.min(pr.cpIndex + 1, room.cps.length);
   const cpText = `C  P / ~p~${cpDone}~w~/~y~${room.cps.length}`;
   const raceTds = room.raceTextTds.get(player.id);
-  if (raceTds) {
+  if (raceTds && raceTds.cp.isValid()) {
     raceTds.cp.setString(cpText);
   }
   for (const oid of getObserverIdsOf(player.id)) {
     const ot = room.raceTextTds.get(oid);
-    if (ot) {
+    if (ot && ot.cp.isValid()) {
       ot.cp.setString(cpText);
     }
   }
@@ -1347,7 +1355,7 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   // 本次成绩优于旧纪录（或首次）→ 立即更新 BEST TD 与房间缓存（对齐原版刷新个人记录）
   if (isPB && auth) {
     const raceTds = room.raceTextTds.get(player.id);
-    if (raceTds) {
+    if (raceTds && raceTds.best.isValid()) {
       raceTds.best.setString(`BEST / ${formatRaceTime(time)}`);
       room.bestTimes.set(auth.userId, time);
     }
@@ -1598,7 +1606,7 @@ export function leaveRace(player: Player): void {
     const tds = room.raceTextTds.get(player.id);
     if (tds) {
       for (const td of Object.values(tds)) {
-        td.destroy();
+        if (td.isValid()) td.destroy();
       }
       room.raceTextTds.delete(player.id);
     }
@@ -1801,6 +1809,9 @@ function tickRooms(): void {
 function setRaceTdText(room: RaceRoom, playerId: number, timeText: string, rankText: string): void {
   const tds = room.raceTextTds.get(playerId);
   if (!tds) return;
+  // TD 可能已被销毁但 Map 条目残留（如掉线瞬间 infernus 自动销毁玩家 TD 后
+  // 清理中断）——setString 前守卫 isValid，防止定时器对已销毁 TD 无限抛错
+  if (!tds.time.isValid() || !tds.rank.isValid()) return;
   let cache = room.tdTextCache.get(playerId);
   if (!cache) {
     cache = { time: "", rank: "", timeCs: -1 };
@@ -1835,6 +1846,9 @@ function syncRaceTds(): void {
       const tds = room.raceTextTds.get(m.id);
       const cache = room.tdTextCache.get(m.id);
       if (!mp || !tds || !cache || mp.finished || isObserving(m.id)) continue;
+      // 60fps 热路径：TD 可能因掉线被 infernus 自动销毁（残留条目不命中上面
+      // 的 !tds）——setString 前守卫 isValid，防对已销毁 TD 抛错刷屏
+      if (!tds.time.isValid()) continue;
       // 秒表跳表：仅当显示值（厘秒）变化才格式化+setString——60fps 下大多数
       // tick 的厘秒没变，跳过能省下 formatRaceTime 的除法/padStart/模板串
       const cs = Math.floor((now - mp.startTime) / 10);
@@ -1858,6 +1872,7 @@ function syncRaceTds(): void {
       const tds = room.raceTextTds.get(pid);
       const cache = room.tdTextCache.get(pid);
       if (!tmp || !tds || !cache || tmp.finished) continue;
+      if (!tds.time.isValid()) continue;
       const cs = Math.floor((now - tmp.startTime) / 10);
       if (cs !== cache.timeCs) {
         cache.timeCs = cs;
@@ -2195,12 +2210,12 @@ function writeBackRollbackProgress(
   const cpDone = (target.cumIdx % len) + 1;
   const cpText = `C  P / ~p~${cpDone}~w~/~y~${len}`;
   const raceTds = room.raceTextTds.get(player.id);
-  if (raceTds) {
+  if (raceTds && raceTds.cp.isValid()) {
     raceTds.cp.setString(cpText);
   }
   for (const oid of getObserverIdsOf(player.id)) {
     const ot = room.raceTextTds.get(oid);
-    if (ot) {
+    if (ot && ot.cp.isValid()) {
       ot.cp.setString(cpText);
     }
   }
