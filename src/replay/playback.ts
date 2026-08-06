@@ -38,6 +38,7 @@ import {
 import { join } from "node:path";
 import { RECORDING_DIR } from "./storage";
 import { applyWorldEnv } from "@/core/worldenv";
+import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
 
@@ -227,10 +228,8 @@ export interface ReplaySession {
   playing: boolean;
   paused: boolean;
   speed: number; // 倍速 0.5~4
-  /** 开场倒计时剩余毫秒（>0 = 车停起始帧，3-2-1-GO 模拟比赛开场；0 = 已发车） */
+  /** 开场倒计时剩余毫秒（>0 = 车停起始帧，3-2-1-GO 动画期间；动画 onGo 归 0 放行） */
   countdownMs: number;
-  /** 上次显示的数字（防重复发 GameText） */
-  lastCountdownDisplay: number;
   timer?: NodeJS.Timeout;
   /** 上次播放推进时间（真实流逝计时）：
    *  固定 16ms/tick 推进在事件循环繁忙/定时器节流时实际间隔 >16ms → 播放时间
@@ -784,28 +783,11 @@ function tickSession(session: ReplaySession): void {
   const now = Date.now();
   const elapsed = Math.min(250, now - session.lastTickAt);
   session.lastTickAt = now;
-  // 开场倒计时：模拟比赛 3-2-1-GO（录像从发车帧开始，倒计时是回放系统生成）。
-  // 倒计时期间车停在起始位置（发静止帧锚定），数字/GO 给所有观战者。
+  // 开场倒计时：数字/GO 动画由 spawnReplay 开场 playCountdown 负责（TextDraw），
+  // 本块只推进 countdownMs 并在倒计时期间发静止锚定帧（车停起始位置，速度/按键
+  // 清零，防物理滑走）。countdownMs 归 0 由动画 onGo 触发 → 放行正常播放
   if (session.countdownMs > 0) {
     session.countdownMs -= elapsed;
-    const display = Math.max(0, Math.ceil(session.countdownMs / 1000));
-    if (display !== session.lastCountdownDisplay) {
-      session.lastCountdownDisplay = display;
-      const msg =
-        display > 0
-          ? new GameText(`~y~${display}`, 850, 3)
-          : new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
-      const sound = display > 0 ? 1056 : 1057; // 对齐比赛倒计时音效
-      // 显示对象：发起人 + 观战者（ghost 回放发起人未观战时也显示）
-      const targets = new Set([session.ownerId, ...session.watchers]);
-      for (const pid of targets) {
-        const w = Player.getInstance(pid);
-        if (w && w.isConnected()) {
-          msg.forPlayer(w);
-          w.playSound(sound);
-        }
-      }
-    }
     // 倒计时期间：车停起始位置（发静止帧，速度/按键清零）。与正常路径一样
     // 30Hz 节流——位置恒定，60Hz 重发同样坐标纯浪费带宽（5 分身翻倍发包）
     for (const g of session.ghosts) {
@@ -1198,7 +1180,6 @@ export async function spawnReplay(
     paused: false,
     speed: 1,
     countdownMs: isGhost ? 0 : 3000, // 开场 3-2-1-GO 只对比赛回放模拟（倒计时期间车停起始帧）；自由录制直接播
-    lastCountdownDisplay: 4,
     lastTickAt: Date.now(),
     endedNotified: false,
     tds: new Map(),
@@ -1242,6 +1223,20 @@ export async function spawnReplay(
   }
   player.setVirtualWorld(worldId); // 幂等（startObserveVehicle 已切）
   player.setPos(data.header.startX, data.header.startY, data.header.startZ + 1);
+  // 开场倒计时动画（TextDraw 掉落弹跳+放大淡出，替代 GameText）：数字 3-2-1 期间
+  // countdownMs>0 车停起始帧（tickSession 锚定），GO 显示瞬间放行正常播放。
+  // 数字 1056 / GO 1057 音效由组件播放（对齐比赛倒计时）
+  if (session.countdownMs > 0) {
+    const targets = [...session.watchers]
+      .map((pid) => Player.getInstance(pid))
+      .filter((p): p is Player => !!p && p.isConnected());
+    playCountdown(targets, {
+      numbers: [3, 2, 1],
+      onGo: () => {
+        session.countdownMs = 0;
+      },
+    });
+  }
   player.sendClientMessage(
     COLOR_SUCCESS,
     `回放已开始：${ghosts.length} 台车 · /rp 控制（暂停/快进/倍速/seek）`,
@@ -1334,7 +1329,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       if (target < max) session.endedNotified = false;
       // seek 跳过开场倒计时（用户主动定位到某时刻，不再 3-2-1 等待）
       session.countdownMs = 0;
-      session.lastCountdownDisplay = 4;
+      cancelCountdownFx(player.id); // 取消进行中的开场倒计时动画（TD 一并销毁）
       for (const g of session.ghosts) renderGhost(session, g);
       syncObserverTds(session); // seek 后 TD 状态与时间线一致
       player.sendClientMessage(COLOR_RACE, `已跳转到 ${(target / 1000).toFixed(1)}s`);

@@ -65,6 +65,7 @@ import { formatTime } from "@/utils/format";
 import { sysMsg } from "@/utils/msg";
 import { MIN_Z } from "@/utils/map";
 import { COLOR_RACE } from "@/utils/colors";
+import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
 
 /** 第一名完成后的结束倒计时（秒） */
 const END_GRACE_MS = 20_000;
@@ -164,7 +165,6 @@ interface RaceRoom {
   /** 最近一次 tickRooms 采样的成员位置（200ms 更新；掉线快照兜底——onDisconnect 时
    *  Player.getInstance 可能已失效取不到坐标，用最近采样位置恢复重连定位） */
   lastPositions: Map<number, { x: number; y: number; z: number }>;
-  countdownTimer?: NodeJS.Timeout;
   endTimer?: NodeJS.Timeout;
   /** 每个成员的比赛信息 TextDraw（playerId -> 4 行 TD，开赛时创建） */
   raceTextTds: Map<number, RoomRaceTds>;
@@ -696,8 +696,8 @@ export async function restartRace(player: Player): Promise<void> {
     sysMsg(player, "race", "比赛已结束（房间已解散），请重新创建比赛", "error");
     return;
   }
-  // 中断进行中的比赛（倒计时/结束宽限定时器清理）
-  if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
+  // 中断进行中的比赛（倒计时动画/结束宽限定时器清理）
+  for (const m of room.members.values()) cancelCountdownFx(m.id);
   if (room.endTimer) clearTimeoutSafe(room.endTimer);
   const wasRunning = room.state === "RACING" || room.state === "COUNTDOWN";
   room.state = "WAITING";
@@ -912,24 +912,17 @@ export async function startRace(player: Player): Promise<void> {
   }
   room.state = "COUNTDOWN";
   broadcastToRoom(room, "[赛车] 比赛倒计时开始！");
-  let count = 5;
-  const countdown = () => {
-    if (room.state !== "COUNTDOWN") return;
-    if (count <= 0) {
-      beginRace(room);
-      return;
-    }
-    // 倒计时：黄色数字（对齐原版 ~y~N）+ 音效 1056
-    const gt = new GameText(`~y~${count}`, 850, 3);
-    for (const m of room.members.values()) {
-      if (!m.isConnected()) continue;
-      gt.forPlayer(m);
-      m.playSound(1056);
-    }
-    count--;
-    room.countdownTimer = setTimeoutSafe(countdown, 1000);
-  };
-  countdown();
+  // 倒计时：TextDraw 动画（掉落弹跳 + 放大淡出），GO 显示瞬间开赛（对齐回放/挑战）。
+  // onGo 回调检查 state：重开/结束置非 COUNTDOWN 后不再 beginRace（门控保留）
+  playCountdown(
+    [...room.members.values()].filter((m) => m.isConnected()),
+    {
+      numbers: [5, 4, 3, 2, 1],
+      onGo: () => {
+        if (room.state === "COUNTDOWN") beginRace(room);
+      },
+    },
+  );
 }
 
 /** 正式开赛：切独立世界 + 统一设置房间天气时间 */
@@ -1526,7 +1519,7 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
 function endRoom(room: RaceRoom): void {
   if (room.state === "FINISHED") return;
   room.state = "FINISHED";
-  if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
+  for (const m of room.members.values()) cancelCountdownFx(m.id);
   if (room.endTimer) clearTimeoutSafe(room.endTimer);
   // 最终排名结算：完成者按用时升序，未完成者按进度（CP 数）降序
   const ranked: {
@@ -1659,7 +1652,8 @@ function checkRoomState(room: RaceRoom): void {
     // 置 FINISHED：COUNTDOWN 中全员离开时，倒计时链每步都查 state，置位后
     // beginRace 不再被调用（防闭包链空转几秒无效执行）
     room.state = "FINISHED";
-    if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
+    // 全员离开：各自的倒计时动画链随断线自停（组件帧守卫），成员残留 TD 一并清
+    for (const m of room.members.values()) cancelCountdownFx(m.id);
     if (room.endTimer) clearTimeoutSafe(room.endTimer);
     destroyRaceTds(room);
     cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头

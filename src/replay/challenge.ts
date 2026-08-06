@@ -2,7 +2,6 @@ import {
   Dialog,
   DialogStylesEnum,
   Dynamic3DTextLabel,
-  GameText,
   KeysEnum,
   Npc,
   Player,
@@ -43,6 +42,7 @@ import {
   frameTimeAt,
 } from "./playback";
 import { registerObserveCandidate, unregisterObserveCandidate } from "@/core/observe";
+import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { sysMsg } from "@/utils/msg";
 
@@ -135,6 +135,7 @@ export function cleanupChallenge(playerId: number): void {
   ch.countdownEpoch++; // 代数兜底：清理后任何在途续体/定时链判"代数失配"自停，
   // 防 stop→重开（worldId 复用）后旧对象残留的 async 续体误对新会话起倒计时
   pendingRespawn.delete(playerId);
+  cancelCountdownFx(playerId); // 取消进行中的倒计时动画（断链 + 销毁 TD）
   if (ch.timer) clearIntervalSafe(ch.timer);
   if (ch.endTimer) clearTimeoutSafe(ch.endTimer);
   try {
@@ -413,28 +414,30 @@ function beginChallengeCountdown(player: Player, ch: ChallengeSession): void {
   ch.state = "COUNTDOWN";
   ch.countdownEpoch++; // 打断任何旧倒计时链（restart 后旧链的 pending 步骤靠代数失配自停）
   const epoch = ch.countdownEpoch;
-  let cd = 3;
-  const countdown = (): void => {
-    // 挑战已被清理（中途 stop/掉线）或会话对象已更换（stop→重开，worldId 复用）→
-    // 停倒计时（防泄漏）。用身份判定而非 challenges.has：has 只能证明"当前存在某个
-    // 会话"，不能证明还是本会话——旧对象的续体对上新会话会误起倒计时/双 GO
-    if (challenges.get(player.id) !== ch) return;
-    // 代数失配：期间发生过 restart / 新的 go，旧链必须自停（防双链并行双 GO）
-    if (epoch !== ch.countdownEpoch) return;
-    if (!player.isConnected()) {
-      cleanupChallenge(player.id);
-      return;
-    }
-    // 状态已被 restart 打断（回 STANDBY）→ 停倒计时链
-    if (ch.state !== "COUNTDOWN") return;
-    if (player.isWasted()) {
-      // 死亡打断倒计时 → 回待命（复活后玩家可 /challenge go 重来）
-      ch.state = "STANDBY";
-      sysMsg(player, "challenge", "死亡，已回到起点待命，/challenge go 重新开始", "info");
-      return;
-    }
-    if (cd <= 0) {
-      if (challenges.get(player.id) !== ch) return; // 双保险（身份判定）
+  // 倒计时动画（TextDraw 掉落弹跳+放大淡出，替代 GameText）：数字 3-2-1 + GO。
+  // 音效由组件播放（数字 1056 / GO 1057）。开赛门控（身份/代数/state/死亡）在
+  // onGo 里做——组件只负责动画，即使动画播完但校验不过也不进入 RACING
+  playCountdown([player], {
+    numbers: [3, 2, 1],
+    onGo: () => {
+      // 挑战已被清理（中途 stop/掉线）或会话对象已更换（stop→重开，worldId 复用）→
+      // 不进入 RACING。身份判定而非 challenges.has：has 只能证明"当前存在某个会话"，
+      // 不能证明还是本会话——旧对象的续体对上新会话会误起倒计时/双 GO
+      if (challenges.get(player.id) !== ch) return;
+      // 代数失配：期间发生过 restart / 新的 go，旧链必须自停（防双链并行双 GO）
+      if (epoch !== ch.countdownEpoch) return;
+      if (!player.isConnected()) {
+        cleanupChallenge(player.id);
+        return;
+      }
+      // 状态已被 restart 打断（回 STANDBY）→ 不进 RACING
+      if (ch.state !== "COUNTDOWN") return;
+      if (player.isWasted()) {
+        // 死亡打断倒计时 → 回待命（复活后玩家可 /challenge go 重来）
+        ch.state = "STANDBY";
+        sysMsg(player, "challenge", "死亡，已回到起点待命，/challenge go 重新开始", "info");
+        return;
+      }
       ch.state = "RACING";
       ch.goAt = Date.now(); // 真实起跑时刻（结算/超时计时基准）
       ch.lastTickAt = Date.now(); // 重置影子推进基准（待命可能等很久，防首帧跳变）
@@ -442,19 +445,9 @@ function beginChallengeCountdown(player: Player, ch: ChallengeSession): void {
       // 重设让起点 CP 在 RACING 态重新进入计数（对齐比赛 beginRace 开赛重设），
       // 否则 GO 后驶离起点永远触发不了第一个 CP
       resetChallengeCheckpoint(player, ch);
-      const go = new GameText("~g~GO~r~!~n~~g~GO~r~!", 2000, 3);
-      go.forPlayer(player);
-      player.playSound(1057);
       ch.timer = setIntervalSafe(() => tickChallenge(ch), 16);
-      return;
-    }
-    const gt = new GameText(`~y~${cd}`, 850, 3);
-    gt.forPlayer(player);
-    player.playSound(1056);
-    cd--;
-    setTimeoutSafe(countdown, 1000);
-  };
-  countdown();
+    },
+  });
 }
 
 /** /challenge go：待命 → 倒计时（统一待命制——开始时机由玩家掌控）。
@@ -521,6 +514,7 @@ export function restartChallenge(player: Player): void {
   // 自增 countdownEpoch：在途的 go 刷车 continuation 靠代数失配自停（防 restart 后
   // 误起倒计时），旧倒计时链 pending 步骤同被代数守卫终止
   ch.countdownEpoch++;
+  cancelCountdownFx(player.id); // 打断进行中的倒计时动画（断链 + 销毁 TD）
   if (ch.timer) clearIntervalSafe(ch.timer);
   ch.timer = undefined;
   if (ch.endTimer) clearTimeoutSafe(ch.endTimer);

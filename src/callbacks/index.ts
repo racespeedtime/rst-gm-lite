@@ -42,6 +42,7 @@ import {
   syncNoCollisionState,
 } from "@/core/vehicleAuto";
 import { cleanupDriftScore } from "@/core/driftScore";
+import { cancelCountdownFx, disposeCountdownFxAll } from "@/interface/countdownFx";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
 import { initSkinCommands } from "@/personalize/skinPicker";
 import { initQuickCommands } from "@/personalize/quickActions";
@@ -244,6 +245,8 @@ PlayerEvent.onDisconnect(({ player, reason, next }) => {
   cleanupVehicleAuto(player.id);
   // 漂移积分：清理状态 Map（TD 已由 cleanupGui 销毁）
   cleanupDriftScore(player.id);
+  // 倒计时动画：断线清进行中的 TextDraw 动画链（TD 掉线时 infernus 已自动销毁）
+  cancelCountdownFx(player.id);
   // 玩家标识：清理 NameTag/聊天名缓存
   cleanupPlayerStyle(player.id);
   // 万能面板：清理层级记忆（断线后重新登录从主面板开始）
@@ -414,6 +417,8 @@ GameMode.onInit(({ next }) => {
 GameMode.onExit(({ next }) => {
   // 清理世界环境实体（图标/标签）与玩家 timeFlow 定时器
   clearWorldEnvironment();
+  // 倒计时动画：清空全部进行中的 TextDraw 动画（定时器已由 clearAllTimers 兜底）
+  disposeCountdownFxAll();
   // 回放：销毁全部回放会话（NPC/车辆）+ 录制强制落盘
   shutdownReplay();
   return next();
