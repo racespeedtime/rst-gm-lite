@@ -227,6 +227,9 @@ export async function requestTpa(player: Player, targetId: number): Promise<bool
  * / 与 // 传送点兜底（挂在 onCommandError code 4）：
  * - /名称 → 系统传送点（isSystem=true），全服/战局公告
  * - //名称 → 用户传送点（isSystem=false），仅本人提示
+ * 向下兼容：//名称 无同名用户点时回退查系统点（反之 /名称 无系统点也回退用户点）——
+ * 玩家记错斜杠数量/历史习惯（如 //ldz 实际只有系统点 ldz）也能成功传送，
+ * 且提示按实际命中类型区分系统/用户传送点（回退到系统点照常广播战局，与 /名称 一致）。
  * rawCommand 传 cmdText（保留原始斜杠，如 "/ls" 或 "//ls"），
  * 因 command 参数已被命令解析器剥离前导斜杠（"//ls" 会变成 "ls"）。
  */
@@ -240,9 +243,17 @@ export async function fallbackTeleport(player: Player, rawCommand: string): Prom
     return true;
   }
   try {
-    const point = await prisma.teleport.findFirst({
-      where: { name: teleName, isEnabled: true, deletedAt: null, isSystem: !isUserTele },
+    // 主查询按输入语法（/ → 系统点，// → 用户点）；无结果回退查同名的另一种类型
+    //（双向对称——同名的系统/用户点都存在时优先输入语义，回退仅发生在主查询失败）
+    const primarySystem = !isUserTele;
+    let point = await prisma.teleport.findFirst({
+      where: { name: teleName, isEnabled: true, deletedAt: null, isSystem: primarySystem },
     });
+    if (!point) {
+      point = await prisma.teleport.findFirst({
+        where: { name: teleName, isEnabled: true, deletedAt: null, isSystem: !primarySystem },
+      });
+    }
     if (!point) return false;
     teleportTo(
       player,
@@ -252,14 +263,17 @@ export async function fallbackTeleport(player: Player, rawCommand: string): Prom
       Number(point.angle),
       point.interiorId,
     );
-    if (isUserTele) {
-      sysMsg(player, "tp", `你传送到了 //${teleName}`, "success");
-    } else {
+    // 提示按实际命中类型区分（回退也如实标注）：系统点广播战局 + 本人确认，
+    // 用户点仅本人提示（不广播）
+    if (point.isSystem) {
       const session = sessionManager.getPlayerSession(player);
       // 批量广播不走 sysMsg（无 Player 对象），前缀用 PREFIX 常量保证与单聊一致
       session.broadcast(
         `${PREFIX.tp} ${player.getName().name} 传送到了 ${point.description || point.name} (/${teleName})`,
       );
+      sysMsg(player, "tp", `你传送到了 /${teleName}（系统传送点）`, "success");
+    } else {
+      sysMsg(player, "tp", `你传送到了 //${teleName}（用户传送点）`, "success");
     }
     return true;
   } catch (e) {
