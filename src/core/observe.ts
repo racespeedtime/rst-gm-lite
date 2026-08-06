@@ -328,14 +328,23 @@ async function suggestStop(observer: Player): Promise<void> {
   })
     .show(observer)
     .catch(() => null);
+  // 对话框期间断线：cleanupObserve 已删条目并 emitObserveStop，直接退出防重插
+  //（否则 playerId 复用后新连接继承观战态）
+  if (!observer.isConnected()) return;
   if (res && res.response) {
-    observeStates.delete(observer.id);
-    observer.toggleSpectating(false);
-    observer.setVirtualWorld(prevWorld);
-    observer.setInterior(prevInterior);
-    observer.sendClientMessage(COLOR_ORANGE, "[TV] 已关闭观战");
+    // 期间可能已 /tv off（stopObserve 删条目 + 恢复世界）：重复恢复会重设
+    // 世界/重复提示，且条目已删时按"已处理"跳过
+    if (observeStates.has(observer.id)) {
+      observeStates.delete(observer.id);
+      emitObserveStop(observer.id); // 观察者专属实体清理（房间的 CP 箭头等）
+      observer.toggleSpectating(false);
+      observer.setVirtualWorld(prevWorld);
+      observer.setInterior(prevInterior);
+      observer.sendClientMessage(COLOR_ORANGE, "[TV] 已关闭观战");
+    }
   } else {
-    // 保留观战状态（stopObserve 仍可正常关闭）
+    // 保留观战状态（stopObserve 仍可正常关闭）。期间已 /tv off（stopObserve
+    // 删条目）则不重插——观战态已结束，重插会残留不一致的条目
     if (state && !observeStates.has(observer.id)) {
       observeStates.set(observer.id, state);
     }

@@ -3,6 +3,8 @@ import { getObserveTarget } from "@/core/observe";
 import { getReplayDebugState } from "@/replay/playback";
 import { getCachedSetting } from "@/personalize/settings";
 import { getWorldWeather } from "@/core/worldenv";
+import { isInRace } from "@/race/room";
+import { isInChallenge } from "@/replay/challenge";
 
 /**
  * 调试信息 GUI：屏幕底部居中、尽可能小字号的诊断文本，短标签格式：
@@ -127,14 +129,20 @@ const p2 = (n: number): string => String(n).padStart(2, "0");
 /**
  * 玩家当前应显示的时间（按个性化设置推算实际值，与 applyWorldEnv 同口径）：
  * - syncGameTime=true → 服务器现实时间（new Date 时分）；false → 设置 timeHour:timeMinute
- * 设置缓存未命中（未登录/尚未缓存）→ 回退玩家实际 getTime（服务器按设置 setTime 后的结果）。
+ * - 比赛中（房间统一时间由 beginRace 按房主设置 setTime）/ 回放观看（每帧 setTime
+ *   录制赛道时间）/ 影子挑战中：画面时钟 ≠ 设置推算值——回退玩家实际 getTime
+ *   （服务器已 setTime 后的结果），保证右上角时间与画面一致
+ * - 设置缓存未命中（未登录/尚未缓存）→ 同样回退玩家实际 getTime
  * 5Hz 刷新读内存缓存不查库。右上角时间 TD 与 debugInfo 共用。
  */
 export function getDisplayTime(player: Player): string {
   const setting = getCachedSetting(player);
+  // 比赛中/回放观看/影子挑战中画面时钟被 setTime 覆盖，回退实际时间
+  const overridden =
+    isInRace(player.id) || isInChallenge(player.id) || !!getReplayDebugState(player.id);
   let hour: number;
   let minute: number;
-  if (setting) {
+  if (setting && !overridden) {
     hour = setting.syncGameTime ? new Date().getHours() : setting.timeHour;
     minute = setting.syncGameTime ? new Date().getMinutes() : setting.timeMinute;
   } else {
@@ -160,7 +168,11 @@ function displayTimeWeather(player: Player): string {
   let hour: number;
   let minute: number;
   let weather: number;
-  if (setting) {
+  // 比赛中（房间统一时间天气）/回放观看（每帧 setTime+setWeather）→ 回退实际值，
+  // 与 getDisplayTime 同口径（画面时钟 ≠ 设置推算值）
+  const overridden =
+    isInRace(player.id) || isInChallenge(player.id) || !!getReplayDebugState(player.id);
+  if (setting && !overridden) {
     hour = setting.syncGameTime ? new Date().getHours() : setting.timeHour;
     minute = setting.syncGameTime ? new Date().getMinutes() : setting.timeMinute;
     weather = setting.syncWorldWeather ? getWorldWeather() : setting.weather;

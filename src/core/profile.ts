@@ -53,7 +53,6 @@ function formatTotalSeconds(seconds: number): string {
   return `${m}分`;
 }
 
-/** 毫秒 → mm:ss.SSS（比赛成绩展示，对齐 formatTime） */
 /** 汇总某用户的信息统计（一次聚合查询，零迁移） */
 async function collectProfileStats(userId: string): Promise<ProfileStats | null> {
   const [user, sessions, raceRecords, lastSession] = await Promise.all([

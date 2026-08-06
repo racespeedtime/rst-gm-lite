@@ -22,9 +22,9 @@ interface WorldEnv {
 import { COLOR_LABEL, COLOR_RACE, COLOR_ORANGE } from "@/utils/colors";
 /** 服务器全局天气（作为"世界"环境基准，供 syncWorldWeather 跟随） */
 export const WORLD_WEATHER = 10;
-/** 大世界时间同步间隔（秒）——现实时间映射，每 60 秒同步一次 */
+/** 大世界时间同步间隔（毫秒）——现实时间映射，每 60 秒同步一次 */
 export const WORLD_TIME_SYNC_MS = 60_000;
-/** 天气轮换间隔（秒）——每 30 分钟 20% 概率随机换一次 */
+/** 天气轮换间隔（毫秒）——每 30 分钟 20% 概率随机换一次 */
 export const WEATHER_ROTATE_MS = 30 * 60_000;
 const WEATHER_ROTATE_CHANCE = 0.2;
 /** 常用天气池（晴/多云/雨/雾等） */
@@ -102,7 +102,8 @@ export async function syncWorldClock(): Promise<void> {
 
 /**
  * 每 30 分钟轮换天气：20% 概率从天气池随机换一次，
- * 否则保持当前（分时段基准天气）。同步给 syncWorldWeather 玩家。
+ * 否则按分时段基准天气重算（可能连续相同）。
+ * 同步给 syncWorldWeather 玩家。
  */
 let currentWeather = WORLD_WEATHER;
 

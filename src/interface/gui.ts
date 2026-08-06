@@ -48,6 +48,10 @@ interface PlayerGui {
   speedoKmh: number;
   /** 上次 3d 速度表贴图文本（去重：材质文字重渲染是重型 native，文本不变跳过） */
   speedo3dText: string;
+  /** hideAllGui 隐藏中（hideAllGui=true 时置位，恢复时据此重 show 所有 TD——
+   *  避免每 tick 无条件 show 一整套 TD（2d 22 个 + netstat 11 个 + 其余），
+   *  TextDrawShowForPlayer 无内部去重，10Hz×N 人会是常驻 native 开销） */
+  hidden: boolean;
   netstat: NetstatState | null;
   debugInfo: DebugInfoState | null;
   /** 构建版本 TD（与 debug 联动：showDebugInfo 开关一并创建/销毁） */
@@ -82,6 +86,7 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     speedo3dVehId: null,
     speedoKmh: -1,
     speedo3dText: "",
+    hidden: false,
     netstat: null,
     debugInfo: null,
     buildTd: null,
@@ -114,18 +119,28 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
       destroyDriftTd(gui.driftTd);
       gui.driftTd = null;
     }
+    gui.hidden = true;
     return;
   }
+  // 从 hideAllGui 恢复：重新显示所有存活 TD（2d/3d/netstat/time/drift），
+  // 之后 tick 不再重复 show（TextDrawShowForPlayer 无内部去重）
+  if (gui.hidden) {
+    gui.hidden = false;
+    gui.speedoTd.forEach((t) => t.show(player));
+    gui.netstat?.tds.forEach((t) => t.show(player));
+    gui.timeTd?.td.show(player);
+    gui.driftTd?.scoreTd.show(player);
+    gui.driftTd?.badgeTd.show(player);
+  }
 
-  // 2d 速度表（总开关 + showSpeed2d）
+  // 2d 速度表（总开关 + showSpeed2d）。show 只在创建/从 hideAllGui 恢复时发
+  //（见上 hidden 恢复块）——TD 已可见时每 tick 再 show 是纯冗余 native
   const want2d = setting.showSpeed && setting.showSpeed2d;
   if (want2d && gui.speedoTd.length === 0) {
     gui.speedoTd = createSpeed2d(player);
   } else if (gui.speedoTd.length > 0 && !want2d) {
     destroySpeed2d(gui.speedoTd);
     gui.speedoTd = [];
-  } else if (want2d) {
-    gui.speedoTd.forEach((t) => t.show(player));
   }
 
   // 3d 速度表（总开关 + showSpeed3d + 需在车内 attach 车辆；换车时重建）
@@ -147,8 +162,6 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   } else if (gui.netstat && !setting.showNetstat) {
     destroyNetstat(gui.netstat);
     gui.netstat = null;
-  } else if (gui.netstat) {
-    gui.netstat.tds.forEach((t) => t.show(player));
   }
 
   // 调试信息 GUI（底部居中，数据库开关 showDebugInfo 控制）。

@@ -328,6 +328,15 @@ export function initSpawnSystem(): void {
     // 中断/竞态）才回退 respawnBySetting 的独立计算。
     const pre = pendingSpawnPos.get(player.id);
     if (pre) {
+      // 预计算续体可能慢于这次 onSpawn（DB 缓存 miss/随机点首查库）：陈旧条目
+      // 会被**之后的**任意 onSpawn 误消费——含比赛中 /kill 重生（比赛 onDeath 已
+      // setSpawnInfo + spawn）和编辑模式重生，会把玩家拽回上一次死亡点。比赛/
+      // 编辑的重生由各自系统处理，这里不消费（与 respawnBySetting 门禁同口径）
+      if (isInRace(player.id) || isEditing(player.id)) {
+        // 比赛/编辑重生由各自系统定位，消费并清除防赛后残留误消费
+        pendingSpawnPos.delete(player.id);
+        return next();
+      }
       pendingSpawnPos.delete(player.id);
       void (async () => {
         const auth = getAuthState(player.id);

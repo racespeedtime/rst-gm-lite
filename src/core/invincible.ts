@@ -103,7 +103,10 @@ export function initInvincible(): void {
   });
 
   // raknet 层：子弹同步包拦截——目标为无敌玩家/其车辆时直接丢弃该包。
-  // Pawn.RakNet 约定：return true(1) = 拦截包不交给游戏处理。
+  // Pawn.RakNet 约定：return false(0) = 拦截包不交给游戏处理（插件 OnEvent
+  // 对 false 返回整体拦截，与 replay 的 DriverSync 屏蔽同约定；return true 是
+  // 放行）。此前误用 return true 导致拦截从未生效，子弹仍到伤害系统（全靠
+  // onTakeDamage 回血兜底）。
   // IPacket 是 samp.on 事件注册（与 PlayerEvent 同构），模块导入期注册即有效。
   // 诊断：首次拦截成功打一条日志——若一直没出现，说明包拦截链路未通。
   try {
@@ -119,7 +122,7 @@ export function initInvincible(): void {
             bulletInterceptLogged = true;
             logger.info(`[invincible] raknet 子弹拦截已生效（累计 ${bulletIntercepts} 次）`);
           }
-          return true; // 丢弃朝无敌玩家飞来的子弹包
+          return false; // 丢弃朝无敌玩家飞来的子弹包
         }
         if (bullet.hitType === BulletHitTypesEnum.VEHICLE) {
           const veh = Vehicle.getInstance(bullet.hitId);
@@ -130,7 +133,7 @@ export function initInvincible(): void {
               bulletInterceptLogged = true;
               logger.info(`[invincible] raknet 子弹拦截已生效（累计 ${bulletIntercepts} 次）`);
             }
-            return true; // 丢弃朝无敌玩家车辆飞来的子弹包（保护车辆不被击毁）
+            return false; // 丢弃朝无敌玩家车辆飞来的子弹包（保护车辆不被击毁）
           }
         }
         return next();
