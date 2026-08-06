@@ -105,12 +105,16 @@ function normAngle180(a: number): number {
   return ((((a + 180) % 360) + 360) % 360) - 180;
 }
 
-/** 无漂移活动：记超时起点；超时归 0（下次重新开始计算） */
+/** 无漂移活动：记超时起点；超时归 0（下次重新开始计算）。
+ *  lastActiveAt 一并清零——否则重新漂移时 elapsed = now - lastActiveAt 会把整个
+ *  空闲期算进连击倍率（idle 每 tick 虽归 1 倍率，但残留的 lastActiveAt 让恢复
+ *  首 tick 白送一次倍率）。 */
 function idleDrift(st: DriftScoreState, now: number): void {
   if (st.inactiveSince === 0) st.inactiveSince = now;
   st.multiplier = 1;
   st.multiplierMs = 0;
   st.status = "none";
+  st.lastActiveAt = 0;
   if (now - st.inactiveSince >= DRIFT_RESET_MS) {
     st.score = 0;
     st.displayScore = 0;
@@ -143,7 +147,14 @@ export function tickDriftScore(player: Player): void {
   }
   const vel = veh.getVelocity();
   const mat = veh.getMatrix();
-  if (!vel.ret || !mat.ret) return; // 读取失败本次跳过
+  if (!vel.ret || !mat.ret) {
+    // 读取失败（罕见）：按无活动处理——推进 inactiveSince 计时 + 归 0 收敛，
+    // 否则连续失败时 3s 归零永不触发、displayScore 不收敛
+    idleDrift(st, now);
+    st.displayScore += Math.round((st.score - st.displayScore) * 0.2);
+    if (Math.abs(st.score - st.displayScore) < 10) st.displayScore = st.score;
+    return;
+  }
   const vx = vel.x * 180;
   const vy = vel.y * 180;
   const vz = vel.z * 180;
@@ -181,11 +192,16 @@ export function tickDriftScore(player: Player): void {
 /**
  * 初始化漂移系统（callbacks init 序列调用）：车身损伤状态变化（碰撞/爆胎/部件
  * 掉落）→ 打断当前漂移积分归 0 重来。正常漂移磨胎不改变 damageStatus，不会误触发。
+ * 归属用 getLastDriver（事件 player 参数是"同步该次损伤变更的玩家"——乘客下车/
+ * 无人车同步时不是司机，且 NPC/无人车时可能为 INVALID_PLAYER_ID，会经
+ * getDriftScore 建孤儿状态）。
  */
 export function initDriftScore(): void {
-  VehicleEvent.onDamageStatusUpdate(({ player, next }) => {
-    if (player.isNpc()) return next();
-    breakDriftScore(player.id);
+  VehicleEvent.onDamageStatusUpdate(({ vehicle, next }) => {
+    const driver = vehicle.getLastDriver();
+    if (driver && !driver.isNpc()) {
+      breakDriftScore(driver.id);
+    }
     return next();
   });
 }

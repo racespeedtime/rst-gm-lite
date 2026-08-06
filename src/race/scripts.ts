@@ -278,7 +278,8 @@ export function execCpScript(
         void (async () => {
           try {
             const { uv } = await getOrCreateUserVehicle(player, model);
-            if (uv.defaultPresetId) {
+            // 换车后玩家可能已再次换车/离开（车实体销毁）：守卫防对失效车应用外观
+            if (uv.defaultPresetId && v.isValid()) {
               await applyVehiclePreset(v, uv.defaultPresetId, player.id);
             }
           } catch (e) {

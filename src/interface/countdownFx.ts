@@ -44,7 +44,12 @@ function playFxForTarget(
   const show = (text: string, ms: number): void => {
     new GameText(text, ms, 3).forPlayer(target);
   };
-  let numIdx = 0;
+  // 首个数字立即显示（对齐原版 pawn /djs：调用即见数字，无 1s 空窗）+ 音效
+  if (numbers.length > 0) {
+    show(`~y~${numbers[0]}`, NUM_MS);
+    if (opts.sounds) target.playSound(1056);
+  }
+  let numIdx = 1;
   const tick = (): void => {
     // 帧守卫：断线即终止链
     if (!target.isConnected()) {
@@ -65,6 +70,13 @@ function playFxForTarget(
     opts.onGo?.();
     countdownTimers.delete(pid);
   };
+  // 首数字后从第 2 个开始逐秒切换（空数组退化为纯 GO）
+  if (numbers.length <= 1) {
+    show("~g~GO!", GO_MS);
+    if (opts.sounds) target.playSound(1057);
+    opts.onGo?.();
+    return;
+  }
   countdownTimers.set(pid, setTimeoutSafe(tick, NUM_INTERVAL_MS));
 }
 
