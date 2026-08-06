@@ -9,6 +9,7 @@ import { sessionManager } from "@/sessions/manager";
 import { isInRace } from "@/race/room";
 import { openReplayActions } from "@/replay/menu";
 import { showPagedDialog } from "@/utils/pagedDialog";
+import { formatDuration, formatShortDate } from "@/utils/format";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
@@ -300,17 +301,7 @@ async function openClickPlayerMenu(player: Player, target: Player): Promise<void
   }
 }
 
-/** 时长格式化（mm:ss 或 ss，回放列表用，与 replay/menu 同口径） */
-function fmtDur(ms: number): string {
-  const s = Math.floor(ms / 1000);
-  if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/** 时间格式化（MM-DD HH:MM，回放列表用，与 replay/menu 同口径） */
-function fmtTime(d: Date): string {
-  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-}
+/** 时长/时间格式化收敛至 utils/format（formatDuration/formatShortDate） */
 
 /** 查看某玩家的比赛回放列表（分页）→ 观看/分身/影子挑战（非本人，公开可看不可删） */
 async function listPlayerReplays(
@@ -333,8 +324,8 @@ async function listPlayerReplays(
     format: (v) => [
       v.raceName || "—",
       v.rank != null ? `No.${v.rank}` : "{FF0000}未完成",
-      fmtDur(v.durationMs),
-      fmtTime(v.createdAt),
+      formatDuration(v.durationMs),
+      formatShortDate(v.createdAt),
     ],
     button1: "操作",
     button2: "关闭",

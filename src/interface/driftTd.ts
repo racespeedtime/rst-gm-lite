@@ -14,6 +14,8 @@ export interface DriftTdState {
   lastText: string;
   lastBadge: string;
   lastVisible: boolean;
+  /** 徽章当前渲染色（状态切换时向目标色平滑过渡，非瞬跳） */
+  color: number;
 }
 
 /** 屏幕中上（小地图下方），大数字 + 徽章上下排列 */
@@ -40,10 +42,17 @@ export function createDriftTd(player: Player): DriftTdState {
     .setSelectable(false);
   scoreTd.show(player);
   badgeTd.show(player);
-  return { scoreTd, badgeTd, lastText: "", lastBadge: "", lastVisible: false };
+  return {
+    scoreTd,
+    badgeTd,
+    lastText: "",
+    lastBadge: "",
+    lastVisible: false,
+    color: 0xffffffff,
+  };
 }
 
-/** 状态 → 徽章文案与颜色（漂移亮色/高速蓝/无活动灰色） */
+/** 状态 → 徽章文案与目标色（漂移亮橙/高速蓝/无活动白） */
 function statusBadge(status: DriftStatus, multiplier: number): { text: string; color: number } {
   if (status === "drift") {
     return { text: `漂移 ×${multiplier}`, color: 0xffaa00ff };
@@ -52,6 +61,16 @@ function statusBadge(status: DriftStatus, multiplier: number): { text: string; c
     return { text: `高速 ×${multiplier}`, color: 0x00aaffff };
   }
   return { text: "", color: 0xffffffff };
+}
+
+/** 当前渲染色向目标色平滑过渡（每 tick 15% 步进，SA 色值 0xRRGGBBAA） */
+function stepColor(from: number, target: number): number {
+  const cur = from & 0xffffff;
+  const dst = target & 0xffffff;
+  const r = cur + Math.round(((dst & 0xff0000) - (cur & 0xff0000)) * 0.15);
+  const g = cur + Math.round(((dst & 0xff00) - (cur & 0xff00)) * 0.15);
+  const b = cur + Math.round(((dst & 0xff) - (cur & 0xff)) * 0.15);
+  return (r & 0xff0000) | (g & 0xff00) | (b & 0xff) | 0xff;
 }
 
 /** 千分位（12345 → 12,345） */
@@ -73,7 +92,7 @@ export function updateDriftTd(state: DriftTdState, player: Player): void {
     }
     if (badge.text !== state.lastBadge) {
       state.lastBadge = badge.text;
-      state.badgeTd.setColor(badge.color);
+      // 颜色不在此处设：由下方渐变步进统一管（避免文本一变化就瞬跳到目标色）
       state.badgeTd.setString(badge.text);
     }
   }
@@ -81,12 +100,24 @@ export function updateDriftTd(state: DriftTdState, player: Player): void {
   if (visible !== state.lastVisible) {
     state.lastVisible = visible;
     if (visible) {
+      // 刚可见：颜色从当前平滑过渡，首帧可能仍呈旧色但无需瞬间跳变
+      state.badgeTd.setColor(state.color);
       state.scoreTd.show(player);
       state.badgeTd.show(player);
     } else {
       state.scoreTd.hide(player);
       state.badgeTd.hide(player);
     }
+  }
+  // 可见状态：颜色持续向目标色过渡（状态切换不瞬跳），收敛到目标后零 native
+  if (visible) {
+    const stepped = stepColor(state.color, badge.color);
+    if (stepped !== state.color) {
+      state.color = stepped;
+      state.badgeTd.setColor(stepped);
+    }
+  } else {
+    state.color = badge.color; // 隐藏时收敛目标，避免下次显示从旧色漂移
   }
 }
 

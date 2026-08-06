@@ -91,6 +91,8 @@ export async function syncWorldClock(): Promise<void> {
     if (!auth) continue;
     const setting = await getSetting(player);
     if (!setting || !setting.syncGameTime) continue;
+    // 同步是最终落点：取消可能进行中的过渡动画，防动画中间值反向覆盖刚同步的时间
+    cancelTimeTransition(player.id);
     player.setTime(now.getHours(), now.getMinutes());
     if (hourChanged) {
       player.sendClientMessage(COLOR_ORANGE, hourMsg);
@@ -380,7 +382,10 @@ function animateTimeTo(player: Player, targetHour: number, targetMinute: number)
       return;
     }
     const now = (((start + (step * i) / TIME_TRANSITION_STEPS) % 1440) + 1440) % 1440;
-    player.setTime(Math.floor(now / 60), Math.round(now % 60) % 60);
+    // 先对总分钟取整再拆小时/分钟：分钟满 60 直接进位到小时
+    //（Math.round(now%60)%60 会让 12:59.5 显示成 12:00 回绕）
+    const total = Math.floor(now);
+    player.setTime(Math.floor(total / 60), total % 60);
     if (i >= TIME_TRANSITION_STEPS) {
       // 收尾：精确落到目标（浮点累计可能差 1 分钟）
       player.setTime(((targetHour % 24) + 24) % 24, ((targetMinute % 60) + 60) % 60);
@@ -430,13 +435,17 @@ export async function applyWorldEnv(player: Player): Promise<void> {
   if (prev) clearIntervalSafe(prev);
   if (!setting.syncGameTime && !setting.timeFlow) {
     const timer = setIntervalSafe(() => {
-      if (player.isConnected()) {
-        player.setTime(setting.timeHour, setting.timeMinute);
-      } else {
+      if (!player.isConnected()) {
         const t = timeFlowTimers.get(player.id);
         if (t) clearIntervalSafe(t);
         timeFlowTimers.delete(player.id);
+        return;
       }
+      // 比赛中/回放挑战世界跳过：房间统一时间由 beginRace 定（CP 脚本也会改），
+      // 冻结定时器把个人时间拉回会覆盖房间统一时间、与回退检查点的 time 回滚冲突
+      //（对齐 syncWorldClock/rotateWeather 的比赛跳过口径）
+      if (isInRace(player.id)) return;
+      player.setTime(setting.timeHour, setting.timeMinute);
     }, 60_000);
     timeFlowTimers.set(player.id, timer);
   }

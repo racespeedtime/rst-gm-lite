@@ -33,10 +33,13 @@ const countdownFxTimers = new Map<number, NodeJS.Timeout>();
 /** 每目标当前 TextDraw（取消时销毁） */
 const countdownFxTds = new Map<number, TextDraw>();
 
-/** 文本 → 颜色（数字黄 / GO 绿） */
+/** 文本 → 颜色（数字黄 / GO 绿）。SA TextDraw 颜色 = 0xRRGGBBAA（alpha 在低字节，
+ *  见 netstat GREEN=0x00ff00ff 先例）——alpha 必须放低字节，否则数字/GO 全程半透明
+ *  且淡出时 alpha 被塞进 R 通道、颜色红分量乱变 */
 function colorFor(isGo: boolean, alpha: number): number {
   const a = Math.max(0, Math.min(255, Math.round(alpha)));
-  return isGo ? (0x55ff55 & 0xffffff) | (a << 24) : (0xffffaa & 0xffffff) | (a << 24);
+  const rgb = isGo ? 0x55ff55 : 0xffffaa; // 0xRRGGBB
+  return ((rgb & 0xffffff) << 8) | a; // → 0xRRGGBBAA
 }
 
 /** 推进一个目标的动画帧；返回是否继续（false = 该数字动画结束） */
@@ -73,89 +76,69 @@ function playFxForTarget(
   const pid = target.id;
   // 重入：先断旧链 + 销毁旧 TD
   cancelCountdownFx(pid);
-  const td = new TextDraw({ player: target, x: 320, y: FALL_START_Y, text: "0" })
-    .create()
-    .setAlignment(2)
-    .setFont(2)
-    .setLetterSize(0.6, 2.6)
-    .setColor(colorFor(false, 255))
-    .setOutline(1)
-    .setShadow(1)
-    .setProportional(true)
-    .setSelectable(false)
-    .show(target);
-  countdownFxTds.set(pid, td);
-  const fx: FxTarget = { player: target, td, text: "", step: 0, isGo: false };
+  const createTd = (text: string, isGo: boolean): TextDraw =>
+    new TextDraw({ player: target, x: 320, y: FALL_START_Y, text })
+      .create()
+      .setAlignment(2)
+      .setFont(2)
+      .setLetterSize(isGo ? 0.9 : 0.6, isGo ? 3.6 : 2.6)
+      .setColor(colorFor(isGo, 255))
+      .setOutline(1)
+      .setShadow(1)
+      .setProportional(true)
+      .setSelectable(false)
+      .show(target);
+  // 首个数字直接显示 numbers[0]（初始 text 用首数字，否则假 "0" 冒充首数字且
+  // numbers[0] 从不显示）
+  const fx: FxTarget = {
+    player: target,
+    td: createTd(String(numbers[0] ?? 1), false),
+    text: String(numbers[0] ?? 1),
+    step: 0,
+    isGo: false,
+  };
+  countdownFxTds.set(pid, fx.td);
   let numIdx = 0;
 
   const tick = (): void => {
-    if (!target.isConnected() || !td.isValid()) {
-      // 掉线/TD 失效：销毁，终止链
-      if (countdownFxTds.get(pid) === td) countdownFxTds.delete(pid);
-      countdownFxTimers.delete(pid);
+    // 帧守卫：当前 TD 掉线/已失效（infernus 掉线自动销毁）→ 终止链
+    if (!target.isConnected() || !fx.td.isValid()) {
+      cancelCountdownFx(pid);
       return;
     }
-    // 推进当前数字动画
     if (!advanceFx(fx)) {
-      // 当前数字完成 → 下一个
+      // 当前数字/GO 动画完成：销毁**当前** TD（必须用 fx.td——外层 td 已随上一
+      // 数字销毁，用 stale 变量会跳过销毁 → TD 泄漏 + 动画停死）
+      const cur = fx.td;
+      try {
+        if (cur.isValid()) cur.destroy();
+      } catch {
+        /* 已销毁 */
+      }
+      if (countdownFxTds.get(pid) === cur) countdownFxTds.delete(pid);
       if (!fx.isGo) {
-        // 销毁当前 TD（数字帧已结束），下一数字或 GO 重建
-        try {
-          if (td.isValid()) td.destroy();
-        } catch {
-          /* 已销毁 */
-        }
-        if (countdownFxTds.get(pid) === td) countdownFxTds.delete(pid);
         numIdx++;
         if (numIdx < numbers.length) {
           // 下一个数字
           const n = numbers[numIdx];
-          const nd = new TextDraw({ player: target, x: 320, y: FALL_START_Y, text: String(n) })
-            .create()
-            .setAlignment(2)
-            .setFont(2)
-            .setLetterSize(0.6, 2.6)
-            .setColor(colorFor(false, 255))
-            .setOutline(1)
-            .setShadow(1)
-            .setProportional(true)
-            .setSelectable(false)
-            .show(target);
-          countdownFxTds.set(pid, nd);
-          fx.td = nd;
+          fx.td = createTd(String(n), false);
           fx.text = String(n);
           fx.isGo = false;
           fx.step = 0;
+          countdownFxTds.set(pid, fx.td);
           if (opts.sounds) target.playSound(1056);
         } else {
           // GO
-          const go = new TextDraw({ player: target, x: 320, y: FALL_START_Y, text: "GO!" })
-            .create()
-            .setAlignment(2)
-            .setFont(2)
-            .setLetterSize(0.9, 3.6)
-            .setColor(colorFor(true, 255))
-            .setOutline(1)
-            .setShadow(1)
-            .setProportional(true)
-            .setSelectable(false)
-            .show(target);
-          countdownFxTds.set(pid, go);
-          fx.td = go;
+          fx.td = createTd("GO!", true);
           fx.text = "GO!";
           fx.isGo = true;
           fx.step = 0;
+          countdownFxTds.set(pid, fx.td);
           if (opts.sounds) target.playSound(1057);
           opts.onGo?.();
         }
       } else {
-        // GO 动画结束：销毁 TD，终止链
-        try {
-          if (td.isValid()) td.destroy();
-        } catch {
-          /* 已销毁 */
-        }
-        if (countdownFxTds.get(pid) === td) countdownFxTds.delete(pid);
+        // GO 动画结束：终止链
         countdownFxTimers.delete(pid);
         return;
       }

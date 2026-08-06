@@ -29,7 +29,7 @@ import {
 } from "./debugInfo";
 import { createTimeTd, destroyTimeTd, updateTimeTd, type TimeGuiState } from "./timeGui";
 import { createDriftTd, destroyDriftTd, updateDriftTd, type DriftTdState } from "./driftTd";
-import { tickDriftScore } from "@/core/driftScore";
+import { resetDriftCombo, tickDriftScore } from "@/core/driftScore";
 import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUserSetting";
 
 /** 刷新频率（原版 updateSpeedometer 定时器为 200ms；提升到 100ms 对齐回放
@@ -176,8 +176,10 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     // 已创建：重新显示（hideAllGui 关闭后）
   }
 
-  // 漂移积分 TD（showDriftScore 控制，纯展示；隐藏时积分数值仍累计）
+  // 漂移积分 TD（showDriftScore 控制，纯展示；关闭期间不 tick 不累计，
+  // 重开保留战果但重置连击——连击是进行时，关了再开重新起连击）
   if (setting.showDriftScore && !gui.driftTd) {
+    resetDriftCombo(player.id);
     gui.driftTd = createDriftTd(player);
   } else if (gui.driftTd && !setting.showDriftScore) {
     destroyDriftTd(gui.driftTd);
@@ -212,7 +214,7 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
   // 右上角时间（文本 diff，时间未变零 native）
   if (gui.timeTd) updateTimeTd(gui.timeTd, player);
   // 漂移积分：先推进计分（100ms tick，仅开关开启时创建了 TD 才累计——开关关
-  // 时不调 tickDriftScore，积分为 0 且不累计，重开从零开始）
+  // 时不调 tickDriftScore，积分不累计；重开保留战果、连击已由 resetDriftCombo 重置）
   if (gui.driftTd) {
     tickDriftScore(player);
     updateDriftTd(gui.driftTd, player);

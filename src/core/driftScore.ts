@@ -60,6 +60,20 @@ export function cleanupDriftScore(playerId: number): void {
 }
 
 /**
+ * 显示开关关闭后再开启：保留已累计的战果（纯展示，关了不清分），只重置连击——
+ * 倍率/累计/状态归零。连击是"进行时"，关了再开等于重新起连击；且不清 lastActiveAt
+ * 的话，重开首 tick 会把整个关闭期算进 multiplierMs（elapsed 陈旧）白送一次倍率。
+ */
+export function resetDriftCombo(playerId: number): void {
+  const st = driftScores.get(playerId);
+  if (!st) return;
+  st.multiplier = 1;
+  st.multiplierMs = 0;
+  st.status = "none";
+  st.lastActiveAt = 0;
+}
+
+/**
  * 每 tick 推进玩家漂移积分（gui 100ms tick 调用）：
  * - 读车辆速度（getVelocity 世界轴 ×180 = km/h）与车头方向（getMatrix.at* 单位向量）
  * - 横向滑移 = 速度向量与车头方向的叉积分量（车头沿 at，速度相对车头的垂直分量）

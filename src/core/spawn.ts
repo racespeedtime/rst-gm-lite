@@ -18,28 +18,38 @@ const SAVE_INTERVAL_MS = 30_000;
 
 let spawnPoints: { x: number; y: number; z: number; angle: number }[] | null = null;
 
+/** 默认出生点（LV 机场跑道，安全平地；出生点表无配置/查询失败时兜底，
+ *  保证玩家总能正常出生——否则 RANDOM 模式出生直接卡死（无 spawnInfo）） */
+const DEFAULT_SPAWN_POINT = { x: 1857.58, y: -1430.13, z: 13.58, angle: 0 };
+
 async function loadSpawnPoints(): Promise<{ x: number; y: number; z: number; angle: number }[]> {
   if (!spawnPoints) {
-    const rows = await prisma.spawnPoint.findMany({ orderBy: { index: "asc" } });
-    spawnPoints = rows.map((r) => ({
-      x: Number(r.x),
-      y: Number(r.y),
-      z: Number(r.z),
-      angle: Number(r.angle),
-    }));
+    try {
+      const rows = await prisma.spawnPoint.findMany({ orderBy: { index: "asc" } });
+      spawnPoints = rows.map((r) => ({
+        x: Number(r.x),
+        y: Number(r.y),
+        z: Number(r.z),
+        angle: Number(r.angle),
+      }));
+    } catch (e) {
+      // DB 故障时缓存空数组并记录（避免每次出生重复查库失败），出生走兜底点
+      spawnPoints = [];
+      logger.error("[spawn] 加载出生点失败，使用默认出生点", e);
+    }
   }
   return spawnPoints;
 }
 
-/** 获取一个随机出生点 */
+/** 获取一个随机出生点（无配置/查询失败返回默认兜底点） */
 export async function getRandomSpawnPoint(): Promise<{
   x: number;
   y: number;
   z: number;
   angle: number;
-} | null> {
+}> {
   const points = await loadSpawnPoints();
-  if (points.length === 0) return null;
+  if (points.length === 0) return DEFAULT_SPAWN_POINT;
   return points[Math.floor(Math.random() * points.length)];
 }
 
@@ -72,7 +82,6 @@ export async function spawnPlayer(player: Player): Promise<void> {
     angle = setting.lastAngle != null ? Number(setting.lastAngle) : 0;
   } else {
     const point = await getRandomSpawnPoint();
-    if (!point) return; // 无出生点配置，跳过（保持默认状态）
     x = point.x;
     y = point.y;
     // 随机出生点用 colandreas 测实际地面高度（防出生卡进建筑/抬到屋檐顶）
@@ -188,7 +197,6 @@ async function computeSpawnPos(
     };
   }
   const point = await getRandomSpawnPoint();
-  if (!point) return null; // 无出生点配置，保持默认
   return {
     x: point.x,
     y: point.y,
