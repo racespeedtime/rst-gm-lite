@@ -116,15 +116,52 @@ export function getObserveTarget(playerId: number): ObserveState | undefined {
 }
 
 /** 当前正在观战指定玩家的观察者 id 列表（供比赛信息同步：观察者看到被观战者的
- *  CP/计时/排名——对齐原版 RaceRunTime/RaceRunRank 对观战者的 TD 同步） */
+ *  CP/计时/排名——对齐原版 RaceRunTime/RaceRunRank 对观战者的 TD 同步）。
+ *  同时按 originPlayerId 匹配：竞速中被观战者几乎总在车里，startObservePlayer
+ *  会转发成 startObserveVehicle（kind="vehicle"），仅 kind=player 匹配会漏掉
+ *  观战车内目标的观察者（现有比赛 TD 同步曾因此失效）。 */
 export function getObserverIdsOf(targetId: number): number[] {
   const ids: number[] = [];
   for (const [pid, st] of observeStates) {
-    if (st.kind === "player" && st.targetId === targetId) {
+    if (st.originPlayerId === targetId || (st.kind === "player" && st.targetId === targetId)) {
       ids.push(pid);
     }
   }
   return ids;
+}
+
+/**
+ * 观战状态变更钩子（观察者开始/停止观战时触发，参数为观察者 playerId）。
+ * 供比赛/回放模块同步"观战者视角的检查点箭头"等 per-observer 实体：
+ * start 时用 getObserveTarget 查当前目标，stop 时清理（无循环依赖——
+ * observe 不 import room/replay，只提供注册口）。
+ */
+type ObserveHook = (observerId: number) => void;
+const observeStartHooks: ObserveHook[] = [];
+const observeStopHooks: ObserveHook[] = [];
+export function onObserveStart(hook: ObserveHook): void {
+  observeStartHooks.push(hook);
+}
+export function onObserveStop(hook: ObserveHook): void {
+  observeStopHooks.push(hook);
+}
+function emitObserveStart(observerId: number): void {
+  for (const h of observeStartHooks) {
+    try {
+      h(observerId);
+    } catch {
+      /* 钩子异常不影响观战主流程 */
+    }
+  }
+}
+function emitObserveStop(observerId: number): void {
+  for (const h of observeStopHooks) {
+    try {
+      h(observerId);
+    } catch {
+      /* 钩子异常不影响观战主流程 */
+    }
+  }
 }
 
 /** 开始观战玩家（自动跟踪其车辆/步行状态） */
@@ -160,6 +197,7 @@ export function startObservePlayer(observer: Player, target: Player): void {
     observer.toggleSpectating(true);
     observer.spectatePlayer(target, SpectateModesEnum.NORMAL);
     observer.sendClientMessage(COLOR_WHITE, `[TV] 正在观看 ${target.getName().name}(${target.id})`);
+    emitObserveStart(observer.id);
   }
 }
 
@@ -182,6 +220,7 @@ export function startObserveVehicle(
   observer.setInterior(target.getInterior());
   observer.toggleSpectating(true);
   observer.spectateVehicle(target, SpectateModesEnum.NORMAL);
+  emitObserveStart(observer.id);
 }
 
 /** 停止观战（回到观战前的世界/室内）。quiet=true 时跳过"已关闭观战"提示
@@ -201,6 +240,7 @@ export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
   if (!opts?.quiet) {
     player.sendClientMessage(COLOR_ORANGE, "[TV] 已关闭观战");
   }
+  emitObserveStop(player.id);
 }
 
 /** 摘除所有正在观战指定车辆实体的观察者（换车/实体销毁前调用，防 onStreamOut 触发
@@ -228,6 +268,7 @@ export function detachObservingVehicle(
 export function cleanupObserve(playerId: number): void {
   observeStates.delete(playerId);
   observePrevLeftRight.delete(playerId);
+  emitObserveStop(playerId); // 断线：清理观察者专属实体（CP 箭头等）
 }
 
 /**
