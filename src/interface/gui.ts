@@ -140,6 +140,9 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   } else if (gui.speedoTd.length > 0 && !want2d) {
     destroySpeed2d(gui.speedoTd);
     gui.speedoTd = [];
+    // 销毁时重置分档缓存：重建后首次刷新必调 updateSpeed2d——否则残留旧值
+    // 恰好等于重建后速度时被去重跳过，刻度永远停在创建时的灰色不变色
+    gui.speedoKmh = -1;
   }
 
   // 3d 速度表（总开关 + showSpeed3d + 需在车内 attach 车辆；换车时重建）
