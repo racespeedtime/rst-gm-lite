@@ -130,6 +130,9 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     gui.hidden = false;
     gui.speedoTd.forEach((t) => t.show(player));
     gui.netstat?.tds.forEach((t) => t.show(player));
+    // 重置速度分档缓存：恢复后首刷强制重绘刻度颜色（隐藏期间可能因引擎/显示
+    // 状态变化丢了颜色状态，而 speedoKmh 残留旧值会跳过 updateSpeed2d）
+    gui.speedoKmh = -1;
   }
 
   // 2d 速度表（总开关 + showSpeed2d）。show 只在创建/从 hideAllGui 恢复时发
