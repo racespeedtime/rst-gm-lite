@@ -32,6 +32,7 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     { name: "速度表 2d", value: toggleText(setting.showSpeed2d) },
     { name: "速度表 3d", value: toggleText(setting.showSpeed3d) },
     { name: "特技显示", value: toggleText(setting.showStunt) },
+    { name: "右上角时间显示", value: toggleText(setting.showTimeGui) },
     { name: "调试信息（位置/朝向/按键等）", value: toggleText(setting.showDebugInfo) },
   ];
   const index = await pickOption(
@@ -98,6 +99,11 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     return again();
   }
   if (index === 6) {
+    // 右上角时间：全局开关（DB 持久化），GUI 100ms tick 检测后自动创建/销毁
+    await toggleSetting(player, "showTimeGui", "右上角时间显示");
+    return again();
+  }
+  if (index === 7) {
     // 调试信息：全局开关（DB 持久化），GUI 200ms tick 检测后自动创建/销毁
     await toggleSetting(player, "showDebugInfo", "调试信息");
     return again();

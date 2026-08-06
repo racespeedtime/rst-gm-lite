@@ -27,6 +27,7 @@ import {
   destroyBuildVersionTd,
   type DebugInfoState,
 } from "./debugInfo";
+import { createTimeTd, destroyTimeTd, updateTimeTd, type TimeGuiState } from "./timeGui";
 import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUserSetting";
 
 /** 刷新频率（原版 updateSpeedometer 定时器为 200ms；提升到 100ms 对齐回放
@@ -49,6 +50,8 @@ interface PlayerGui {
   debugInfo: DebugInfoState | null;
   /** 构建版本 TD（与 debug 联动：showDebugInfo 开关一并创建/销毁） */
   buildTd: TextDraw | null;
+  /** 右上角时间 TD（showTimeGui 控制） */
+  timeTd: TimeGuiState | null;
   /** 上次更新网络面板的时间戳（网络面板每秒更新，与 100ms 速度表 tick 分离） */
   netstatAt: number;
 }
@@ -78,6 +81,7 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     netstat: null,
     debugInfo: null,
     buildTd: null,
+    timeTd: null,
     netstatAt: 0,
   };
   guis.set(player.id, gui);
@@ -96,6 +100,10 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     if (gui.buildTd) {
       destroyBuildVersionTd(gui.buildTd);
       gui.buildTd = null;
+    }
+    if (gui.timeTd) {
+      destroyTimeTd(gui.timeTd);
+      gui.timeTd = null;
     }
     return;
   }
@@ -148,6 +156,16 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   } else if (gui.debugInfo) {
     // 已创建：隐藏所有 GUI 关闭后重新显示
   }
+
+  // 右上角时间 TD（showTimeGui 控制）
+  if (setting.showTimeGui && !gui.timeTd) {
+    gui.timeTd = createTimeTd(player);
+  } else if (gui.timeTd && !setting.showTimeGui) {
+    destroyTimeTd(gui.timeTd);
+    gui.timeTd = null;
+  } else if (gui.timeTd) {
+    // 已创建：重新显示（hideAllGui 关闭后）
+  }
 }
 
 /** 刷新单个玩家 GUI 的文本 */
@@ -172,6 +190,8 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
     }
   }
   if (gui.debugInfo) updateDebugInfo(player, gui.debugInfo, kmh);
+  // 右上角时间（文本 diff，时间未变零 native）
+  if (gui.timeTd) updateTimeTd(gui.timeTd, player);
   // 网络面板速率是每秒增量（KB/s），须每秒更新（对齐原版 network GUI）；
   // 不跟 100ms 速度表 tick 一起刷，否则速率数值偏小且刷新过快看不清
   if (gui.netstat && Date.now() - gui.netstatAt >= 1000) {
@@ -253,6 +273,7 @@ export function cleanupGui(playerId: number): void {
     if (gui.netstat) destroyNetstat(gui.netstat);
     destroyDebugInfo(gui.debugInfo);
     destroyBuildVersionTd(gui.buildTd);
+    destroyTimeTd(gui.timeTd);
   } catch (e) {
     logger.error(`[gui] 清理 ${playerId} 的 GUI 失败`, e);
   }

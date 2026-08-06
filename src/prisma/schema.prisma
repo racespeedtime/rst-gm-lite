@@ -295,6 +295,8 @@ model SysUserSetting {
   timeFlow           Boolean  @default(true) @map("time_flow")
   playerColor        String   @default("#ffffff") @map("player_color") @db.VarChar(9)
   acceptTeleport     Boolean  @default(true) @map("accept_teleport")
+  /** 右上角时间 TextDraw 显示（按 syncGameTime/自定义时间推算） */
+  showTimeGui        Boolean  @default(true) @map("show_time_gui")
   showPlayerAttire   Boolean  @default(true) @map("show_player_attire")
   sessionType        String   @default("PRIVATE") @map("session_type") @db.VarChar(10)
   sessionPassword    String?  @map("session_password") @db.VarChar(32)

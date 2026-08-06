@@ -62,10 +62,20 @@ function weatherByTime(hour: number): number {
   return 3; // 夜晚
 }
 
+/** 上次整点提醒的小时（防启动首轮误报；跨整点才提醒一次） */
+let lastNotifiedHour = new Date().getHours();
+
 /** 同步大世界时间（现实时间）与天气，并同步给跟随的玩家 */
 export async function syncWorldClock(): Promise<void> {
   const now = new Date();
   GameMode.setWorldTime(now.getHours());
+  // 整点提醒（跨整点触发，仅跟随服务器时间的玩家——自定义时间玩家不被提醒错乱）：
+  // 与同步循环同一次遍历，先收集再广播
+  const hourChanged = now.getHours() !== lastNotifiedHour;
+  if (hourChanged) {
+    lastNotifiedHour = now.getHours();
+  }
+  const hourMsg = `[天气] 现在 ${String(now.getHours()).padStart(2, "0")}:00`;
   // 同步 syncGameTime=true 的在线玩家（现实 1 分钟 = 游戏 1 分钟）
   for (const player of Player.getInstances()) {
     if (player.isNpc() || !player.isConnected()) continue;
@@ -77,6 +87,9 @@ export async function syncWorldClock(): Promise<void> {
     const setting = await getSetting(player);
     if (!setting || !setting.syncGameTime) continue;
     player.setTime(now.getHours(), now.getMinutes());
+    if (hourChanged) {
+      player.sendClientMessage(COLOR_ORANGE, hourMsg);
+    }
   }
 }
 

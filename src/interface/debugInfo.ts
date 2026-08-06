@@ -125,6 +125,27 @@ function fmtMs(ms: number): string {
 const p2 = (n: number): string => String(n).padStart(2, "0");
 
 /**
+ * 玩家当前应显示的时间（按个性化设置推算实际值，与 applyWorldEnv 同口径）：
+ * - syncGameTime=true → 服务器现实时间（new Date 时分）；false → 设置 timeHour:timeMinute
+ * 设置缓存未命中（未登录/尚未缓存）→ 回退玩家实际 getTime（服务器按设置 setTime 后的结果）。
+ * 5Hz 刷新读内存缓存不查库。右上角时间 TD 与 debugInfo 共用。
+ */
+export function getDisplayTime(player: Player): string {
+  const setting = getCachedSetting(player);
+  let hour: number;
+  let minute: number;
+  if (setting) {
+    hour = setting.syncGameTime ? new Date().getHours() : setting.timeHour;
+    minute = setting.syncGameTime ? new Date().getMinutes() : setting.timeMinute;
+  } else {
+    const tm = player.getTime();
+    hour = tm.ret ? tm.hour : 12;
+    minute = tm.ret ? tm.minute : 0;
+  }
+  return `${p2(hour)}:${p2(minute)}`;
+}
+
+/**
  * 玩家当前应显示的时间/天气（按个性化设置推算实际值，与 applyWorldEnv 同口径）：
  * - syncGameTime=true → 服务器现实时间（new Date 时分）；false → 设置 timeHour:timeMinute
  * - syncWorldWeather=true → 服务器当前天气（getWorldWeather）；false → 设置 weather
