@@ -82,7 +82,9 @@ export function updateDriftTd(state: DriftTdState, player: Player): void {
   const visible = st.status !== "none" || st.score > 0;
   const scoreText = fmtScore(st.displayScore);
   const badge = statusBadge(st.status, st.multiplier);
-  // 文本变化才 setString（100ms tick 大多不变）
+  // 文本变化才 setString（100ms tick 大多不变）。
+  // 注意：infernus setString 对空字符串抛 "Invalid text length"——无文案（非漂移
+  // 宽限期的徽章）不能 setString("")，改为隐藏徽章；转有文案时 setString + 显示
   if (visible) {
     if (scoreText !== state.lastText) {
       state.lastText = scoreText;
@@ -90,8 +92,12 @@ export function updateDriftTd(state: DriftTdState, player: Player): void {
     }
     if (badge.text !== state.lastBadge) {
       state.lastBadge = badge.text;
-      // 颜色不在此处设：由下方渐变步进统一管（避免文本一变化就瞬跳到目标色）
-      state.badgeTd.setString(badge.text);
+      if (badge.text.length > 0) {
+        state.badgeTd.setString(badge.text);
+        state.badgeTd.show(player);
+      } else {
+        state.badgeTd.hide(player);
+      }
     }
   }
   // 显隐切换才 show/hide（活动状态翻转时）
