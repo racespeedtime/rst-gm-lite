@@ -39,8 +39,12 @@ const MAGIC = "RSTREP01";
  *   落盘的 frameIntervalMs 是"平均间隔"，把静止段频率摊到全片会让驾驶段
  *   回放被放慢（长赛道掉线回放明显像 0.5 倍速）。v7 起播放按每帧时间戳
  *   精确定位（二分），旧 v6 及以下文件照读（relTimeMs=0，回退均匀间隔）
+ * - v8 再追加 rank(u8)——该帧玩家的实时名次（tickRooms 200ms 排名，1-based；
+ *   0=未排名/非比赛）。回放 RANK TD 按播放进度实时显示（TIME/CP/RANK 全部
+ *   从帧状态渲染，seek/倍速天然同步）。旧 v7 及以下文件照读（rank=0，回放
+ *   回退用 DB 名次快照）
  */
-export const FORMAT_VERSION = 7;
+export const FORMAT_VERSION = 8;
 
 /** 录制类型（recorder 写 header 用） */
 export const REPLAY_TYPE_GHOST = 0;
@@ -56,15 +60,19 @@ const FRAME_BYTES_V5 = FRAME_BYTES_V4 + 11;
 const FRAME_BYTES_V6 = FRAME_BYTES_V5 + 1;
 /** v7：帧 73B = v6 帧 + relTimeMs4（该帧相对录制开始的时间戳，毫秒） */
 const FRAME_BYTES_V7 = FRAME_BYTES_V6 + 4;
+/** v8：帧 74B = v7 帧 + rank1（该帧实时名次，1-based；0=未排名） */
+const FRAME_BYTES_V8 = FRAME_BYTES_V7 + 1;
 /** v2：头 72B = magic8 + ver1 + type1 + interval2 + model4 + pos12 + quat16 + vel12 + count4 + dur4 + totalCp4 + bestMs4 */
 const HEADER_BYTES_V2 = 72;
 /** v3+：头 76B = v2 头 + frameBytes4（自描述，未来帧字段追加零破坏） */
 const HEADER_BYTES_V3 = HEADER_BYTES_V2 + 4;
 
-/** 当前帧字节数（v7） */
-export const FRAME_BYTES = FRAME_BYTES_V7;
+/** 当前帧字节数（v8） */
+export const FRAME_BYTES = FRAME_BYTES_V8;
 /** v7 帧字节数（播放端判断文件是否带时间戳——判定用 header.frameBytes 比较） */
 export { FRAME_BYTES_V7 };
+/** v8 帧字节数（播放端判断文件是否带帧内名次——判定用 header.frameBytes 比较） */
+export { FRAME_BYTES_V8 };
 /** 当前头字节数（v3+ 头布局不变） */
 export const HEADER_BYTES = HEADER_BYTES_V3;
 
@@ -106,6 +114,8 @@ export interface ReplayFrame {
   online: boolean;
   /** 该帧相对录制开始的时间戳（毫秒，v7 起写入；sample 统一注入；旧文件默认 0） */
   relTimeMs?: number;
+  /** 该帧玩家的实时名次（v8 起写入：tickRooms 200ms 排名 1-based；0=未排名/非比赛；旧文件默认 0） */
+  rank?: number;
 }
 
 export interface ReplayHeader {
@@ -220,6 +230,7 @@ export function encodeFrame(f: ReplayFrame): Buffer {
   buf.writeFloatLE(V(f.trainSpeed), 64); // v5：火车速度
   buf.writeUInt8(f.online ? 1 : 0, 68); // v6：在线标记（掉线静止帧 false）
   buf.writeUInt32LE(f.relTimeMs ?? 0, 69); // v7：相对录制开始的时间戳（毫秒）
+  buf.writeUInt8(U8(f.rank ?? 0), 73); // v8：实时名次（1-based；0=未排名）
   return buf;
 }
 
@@ -337,6 +348,8 @@ export function decodeFrame(buf: Buffer, index: number, frameBytes: number): Rep
     online: frameBytes >= FRAME_BYTES_V6 ? buf.readUInt8(o + 68) === 1 : true,
     // v7 起读时间戳；旧文件（frameBytes<73）默认 0（播放回退均匀间隔）
     relTimeMs: frameBytes >= FRAME_BYTES_V7 ? buf.readUInt32LE(o + 69) : 0,
+    // v8 起读实时名次；旧文件（frameBytes<74）默认 0（回放回退 DB 名次快照）
+    rank: frameBytes >= FRAME_BYTES_V8 ? buf.readUInt8(o + 73) : 0,
   };
 }
 
@@ -390,5 +403,6 @@ export function lerpFrame(a: ReplayFrame, b: ReplayFrame, t: number): ReplayFram
     trailerId: t < 0.5 ? a.trailerId : b.trailerId,
     trainSpeed: t < 0.5 ? a.trainSpeed : b.trainSpeed,
     online: t < 0.5 ? a.online : b.online, // 在线标记离散取最近帧
+    rank: t < 0.5 ? a.rank : b.rank, // 名次离散取最近帧（200ms 粒度跳变不插值）
   };
 }

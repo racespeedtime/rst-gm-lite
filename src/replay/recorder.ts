@@ -63,6 +63,8 @@ export interface RecordingSession {
   cpProgress: number;
   /** 赛道 CP 总数（回放 C P TD 分母；非比赛录制 0） */
   totalCp: number;
+  /** 当前实时名次（room tickRooms 排名时 noteRank 更新，采样写帧；0=未排名/非比赛） */
+  rank: number;
   /** 录制者该赛道个人最佳毫秒（回放 BEST TD；无 -1） */
   bestMs: number;
   /** 离散状态缓存（车型/时间/天气/血量）——必须 per-session：
@@ -138,6 +140,14 @@ export function noteCpProgress(playerId: number, cpDone: number, totalCp: number
   if (!s) return;
   s.cpProgress = cpDone;
   s.totalCp = totalCp;
+}
+
+/** 记录实时名次（room tickRooms 200ms 排名时调用，采样写帧——回放 RANK TD
+ *  按播放进度实时显示；与 CP 进度同为事件驱动字段，帧采样时读取） */
+export function noteRank(playerId: number, rank: number): void {
+  const s = sessions.get(playerId);
+  if (!s) return;
+  s.rank = rank;
 }
 
 /** 自定义（ghost）录制时长硬上限（1 小时）：防玩家挂机无限录制拖垮内存/磁盘
@@ -245,6 +255,7 @@ function captureVehicleFrame(player: Player, session?: RecordingSession): Replay
     vz: vel.z,
     vehicleModel: veh.getModel(),
     cpProgress: session?.cpProgress ?? 0,
+    rank: session?.rank ?? 0,
     hour,
     minute,
     weather: player.getWeather(),
@@ -352,6 +363,7 @@ export async function startRecording(
     lastSampleAt: 0,
     cpProgress: 0,
     totalCp: 0,
+    rank: 0,
     bestMs: -1,
     // 离散缓存初始化为空态（cacheAt=0 使首次采样立即刷新），
     // 避免首帧用默认值（车型/血量等与实际不符）
@@ -684,6 +696,7 @@ export function initRecorder(): void {
                 vz: v[2],
                 vehicleModel: session.cacheModel,
                 cpProgress: session.cpProgress,
+                rank: session.rank,
                 hour: session.cacheHour,
                 minute: session.cacheMinute,
                 weather: session.cacheWeather,
