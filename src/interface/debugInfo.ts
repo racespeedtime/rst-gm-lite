@@ -1,6 +1,8 @@
 import { Player, TextDraw } from "@infernus/core";
 import { getObserveTarget } from "@/core/observe";
 import { getReplayDebugState } from "@/replay/playback";
+import { getCachedSetting } from "@/personalize/settings";
+import { getWorldWeather } from "@/core/worldenv";
 
 /**
  * 调试信息 GUI：屏幕底部居中、尽可能小字号的诊断文本，短标签格式：
@@ -92,7 +94,7 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
   const lines: string[] = [
     `x ${r2(displayPos.x)} ${r2(displayPos.y)} ${r2(displayPos.z)}  a ${r2(displayAngle)}  w ${player.getVirtualWorld()}  i ${player.getInterior()}`,
     `${qText}  h ${Math.ceil(health.health)}  ar ${Math.ceil(armour.armour)}  sk ${player.getSkin()}`,
-    `v ${veh ? veh.id : "-"}  sp ${Math.floor(kmh)}  k 0x${(keys.keys & 0xffff).toString(16)}`,
+    `${displayTimeWeather(player)}  v ${veh ? veh.id : "-"}  sp ${Math.floor(kmh)}  k 0x${(keys.keys & 0xffff).toString(16)}`,
   ];
   // 观战中：显示被观战对象（p 玩家 / v 车辆）
   const st = getObserveTarget(player.id);
@@ -118,4 +120,33 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
 function fmtMs(ms: number): string {
   const s = Math.floor(ms / 1000);
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+const p2 = (n: number): string => String(n).padStart(2, "0");
+
+/**
+ * 玩家当前应显示的时间/天气（按个性化设置推算实际值，与 applyWorldEnv 同口径）：
+ * - syncGameTime=true → 服务器现实时间（new Date 时分）；false → 设置 timeHour:timeMinute
+ * - syncWorldWeather=true → 服务器当前天气（getWorldWeather）；false → 设置 weather
+ * 设置缓存未命中（未登录/尚未缓存）→ 回退玩家实际 getTime/getWeather（服务器
+ * 按设置 setTime 后的结果）。5Hz 刷新读内存缓存不查库。
+ */
+function displayTimeWeather(player: Player): string {
+  const setting = getCachedSetting(player);
+  const tm = player.getTime();
+  const actualHour = tm.ret ? tm.hour : 12;
+  const actualMinute = tm.ret ? tm.minute : 0;
+  let hour: number;
+  let minute: number;
+  let weather: number;
+  if (setting) {
+    hour = setting.syncGameTime ? new Date().getHours() : setting.timeHour;
+    minute = setting.syncGameTime ? new Date().getMinutes() : setting.timeMinute;
+    weather = setting.syncWorldWeather ? getWorldWeather() : setting.weather;
+  } else {
+    hour = actualHour;
+    minute = actualMinute;
+    weather = player.getWeather();
+  }
+  return `t ${p2(hour)}:${p2(minute)}  w ${weather}`;
 }
