@@ -9,6 +9,7 @@ import {
   PlayerEvent,
   PlayerStateEnum,
   Vehicle,
+  VehicleEvent,
 } from "@infernus/core";
 import { getAuthState } from "@/auth/auth";
 import { addVehicleComponentIfPossible } from "@/vehicles";
@@ -264,6 +265,66 @@ function createDrifter(def: DrifterDef): void {
   }
 }
 
+/** 车辆被毁（玩家火箭/C4 可炸毁漂移车——setInvulnerable 只保护 NPC 本体）：
+ *  重建车辆 + NPC 归位 + 重播路线。否则 NPC 原地站桩、车毁后 /drift 永久
+ *  未就绪、3D 标签悬空，直到服务器重启 */
+function rebuildDrifterVehicle(ent: DrifterEntity): void {
+  const def = ent.def;
+  try {
+    // 清旧实体：标签/旧车（玩家车上乘客已被爆炸弹出，座位释放由 onStateChange 处理）
+    try {
+      ent.label?.destroy();
+    } catch {
+      /* 忽略 */
+    }
+    try {
+      ent.vehicle?.destroy();
+    } catch {
+      /* 忽略 */
+    }
+    const vehicle = new Vehicle({
+      modelId: def.model,
+      x: def.pos[0],
+      y: def.pos[1],
+      z: def.pos[2],
+      zAngle: def.rot,
+      color: [def.color[0], def.color[1]],
+      respawnDelay: -1,
+    });
+    vehicle.create();
+    vehicle.setVirtualWorld(PUBLIC_WORLD_ID);
+    vehicle.linkToInterior(0);
+    addVehicleComponentIfPossible(vehicle, 1010); // 氮气
+    vehicle.setParamsEx(true, false, false, true, false, false, false); // 锁门防抢司机位
+    ent.vehicle = vehicle;
+    if (ent.npc?.isValid()) {
+      ent.npc.putInVehicle(vehicle, 0); // 司机位
+      // 归位后重新沿路线播放（放乘客回原座位由玩家自行 /drift 上车）
+      if (!ent.npc.startPlayback(def.rec)) {
+        logger.warn(`[npcs] ${def.id} 重建后播放 ${def.rec}.rec 失败`);
+      }
+    }
+    // 重建 3D 标签（原标签随旧车销毁）
+    const label = new Dynamic3DTextLabel({
+      text: `{33FF33}漂移车手 ${def.rec}\n{FFFFFF}路线：${def.route}`,
+      color: 0x33aa33aa,
+      x: 0,
+      y: 0,
+      z: 1.5,
+      drawDistance: 15,
+      testLOS: false,
+      attachedVehicle: vehicle.id,
+      worldId: PUBLIC_WORLD_ID,
+      charset: DEFAULT_CHARSET,
+    });
+    label.create();
+    ent.label = label;
+    logger.info(`[npcs] ${def.id} 车辆被毁，已重建并重播`);
+  } catch (e) {
+    logger.error(`[npcs] 重建 ${def.id} 车辆失败`, e);
+  }
+}
+
 function destroyAll(): void {
   for (const t of loadTimers) clearTimeoutSafe(t);
   loadTimers.length = 0;
@@ -391,6 +452,13 @@ export function initDrifterNpcs(): void {
     } catch (e) {
       logger.warn(`[npcs] 播放结束处理异常`, e);
     }
+    return next();
+  });
+
+  // 车辆被毁 → 重建（漂移车无 respawnDelay 兜底，炸了不重建会永久失效）
+  VehicleEvent.onDeath(({ vehicle, next }) => {
+    const ent = [...entities.values()].find((e) => e.vehicle === vehicle);
+    if (ent) rebuildDrifterVehicle(ent);
     return next();
   });
 

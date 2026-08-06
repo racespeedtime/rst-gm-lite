@@ -243,10 +243,17 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
 
   rows.push({
     label: "范围倒计时",
-    // 发火式：触发后立即返回菜单（不阻塞面板锁 10 秒）——倒计时 GameText/音效
-    // 在后台定时器继续跑，玩家可继续操作/关闭面板
+    // 复用 /djs 的统一实现（runDjsCountdown）：冷却检查 + 5 秒倒计时。
+    // 面板直接调 sessionCountdown 会绕过冷却——可连点无限叠加多个并行
+    // GameText/音效 1056 循环轰炸附近玩家（且 10 秒版与 /djs 行为不一致）
     run: () => {
-      void sessionCountdown(player, 10);
+      const now = Date.now();
+      if ((djsCooldownUntil.get(player.id) ?? 0) > now) {
+        player.sendClientMessage(COLOR_ERROR, "[倒计时] 请稍后再发起（每 5 秒一次）");
+        return;
+      }
+      djsCooldownUntil.set(player.id, now + DJS_COOLDOWN_MS);
+      runDjsCountdown(player);
     },
   });
 
@@ -296,50 +303,6 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
   await rows[index].run();
   // 操作完成后回到快捷操作菜单（可连续做多个操作），点"取消"才退出
   return openQuickActionsMenu(player, back);
-}
-
-/**
- * 范围倒计时（对齐原版 /djs）：
- * - 倒计时开始时给 20 米内同世界玩家发一条 sendClientMessage 提示
- * - 每秒给范围内玩家 GameText 显示数字（~w~N）+ 音效 1056
- * - 结束时 GameText "GO!" + 音效 1057
- */
-async function sessionCountdown(player: Player, seconds: number): Promise<void> {
-  const pos = player.getPos();
-  const world = player.getVirtualWorld();
-  // 倒计时开始时：范围内玩家收到一条提示
-  const near = Player.getInstances().filter(
-    (p) =>
-      !p.isNpc() &&
-      p.isConnected() &&
-      p.getVirtualWorld() === world &&
-      Math.hypot(p.getPos().x - pos.x, p.getPos().y - pos.y, p.getPos().z - pos.z) <= 20,
-  );
-  for (const p of near) {
-    p.sendClientMessage("#ffffff", `[倒计时] ${player.getName().name} 发起了 ${seconds} 秒倒计时`);
-  }
-  for (let i = seconds; i >= 1; i--) {
-    if (!player.isConnected()) return;
-    const countdown = new GameText(`~w~${i}`, 1000, 3);
-    for (const p of near) {
-      if (!p.isConnected()) continue;
-      countdown.forPlayer(p);
-      p.playSound(1056);
-    }
-    await sleep(1000);
-  }
-  // 结束：GO!
-  if (!player.isConnected()) return;
-  const go = new GameText("~g~GO~r~!~n~~g~GO~r~!~n~~g~GO~r~!", 3000, 3);
-  for (const p of near) {
-    if (!p.isConnected()) continue;
-    go.forPlayer(p);
-    p.playSound(1057);
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeoutSafe(resolve, ms));
 }
 
 /**

@@ -15,7 +15,7 @@ import { isInRace } from "@/race/room";
 import { isInChallenge } from "@/replay/challenge";
 import { REPLAY_WORLD_BASE } from "@/replay/playback";
 import { sysMsg } from "@/utils/msg";
-import { filterSensitiveWords } from "@/utils/sensitive";
+import { containsSensitiveWord, filterSensitiveWords } from "@/utils/sensitive";
 import { isPlayerLocked } from "@/core/interaction";
 import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
 import { syncVehicleAutoState } from "@/core/vehicleAuto";
@@ -360,8 +360,13 @@ export function changeMyVehicleColor(player: Player, c1: number, c2: number): vo
   })();
 }
 
-/** 更换当前爱车车牌（/c chepai · /cars chepai 共用；落库） */
+/** 更换当前爱车车牌（/c chepai · /cars chepai 共用；落库）。
+ *  车牌对所有玩家可见渲染——与昵称前后缀/传送点名同防线，含敏感词拒绝设置 */
 export async function setMyVehiclePlate(player: Player, plate: string): Promise<void> {
+  if (containsSensitiveWord(plate)) {
+    player.sendClientMessage(COLOR_ERROR, "车牌包含敏感内容，请更换");
+    return;
+  }
   const veh = playerVehs.get(player.id);
   if (!veh || !veh.isValid()) {
     player.sendClientMessage(COLOR_ERROR, "你还没有车（或已损毁）");
