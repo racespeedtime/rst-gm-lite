@@ -2,10 +2,11 @@ import { Player, TextDraw } from "@infernus/core";
 import { getDriftScore, type DriftStatus } from "@/core/driftScore";
 
 /**
- * 漂移积分 TextDraw（屏幕中上，纯展示）：
+ * 漂移积分 TextDraw（屏幕上方居中、纯展示、不常驻）：
  * - 大数字：当前显示分数（滚动动画值，千分位）
- * - 小字徽章：状态（漂移/高速）+ 连击倍率 ×N
- * - 无活动（none 且分数 0）时隐藏；刷新走文本 diff（100ms tick 零变化零 native）
+ * - 小字徽章：DRIFT xN（ASCII 全兼容——TextDraw 不支持中文，曾写中文乱码）
+ * - 不常驻：漂移中 / 分数 >0 时显示；无活动超时归 0 后自动隐藏（地平线式出现/消失）
+ * - 刷新走文本 diff（100ms tick 零变化零 native）；状态切换颜色平滑渐变
  */
 
 export interface DriftTdState {
@@ -18,23 +19,23 @@ export interface DriftTdState {
   color: number;
 }
 
-/** 屏幕中上（小地图下方），大数字 + 徽章上下排列 */
+/** 屏幕上方居中（网络信息 y0-3 下方一点），大数字 + 徽章上下排列 */
 export function createDriftTd(player: Player): DriftTdState {
-  const scoreTd = new TextDraw({ player, x: 320, y: 296, text: "0" })
+  const scoreTd = new TextDraw({ player, x: 320, y: 8, text: "0" })
     .create()
     .setAlignment(2) // CENTER
     .setFont(2)
-    .setLetterSize(0.45, 2.0)
+    .setLetterSize(0.3, 1.3)
     .setColor(0xffffffff)
     .setOutline(1)
     .setShadow(1)
     .setProportional(true)
     .setSelectable(false);
-  const badgeTd = new TextDraw({ player, x: 320, y: 330, text: "" })
+  const badgeTd = new TextDraw({ player, x: 320, y: 18, text: "" })
     .create()
     .setAlignment(2)
     .setFont(1)
-    .setLetterSize(0.2, 1.0)
+    .setLetterSize(0.18, 0.9)
     .setColor(0xffffffff)
     .setOutline(1)
     .setShadow(1)
@@ -52,13 +53,10 @@ export function createDriftTd(player: Player): DriftTdState {
   };
 }
 
-/** 状态 → 徽章文案与目标色（漂移亮橙/高速蓝/无活动白） */
+/** 状态 → 徽章文案与目标色（漂移亮橙/无活动白；ASCII 兼容，TextDraw 不支持中文） */
 function statusBadge(status: DriftStatus, multiplier: number): { text: string; color: number } {
   if (status === "drift") {
-    return { text: `漂移 ×${multiplier}`, color: 0xffaa00ff };
-  }
-  if (status === "speed") {
-    return { text: `高速 ×${multiplier}`, color: 0x00aaffff };
+    return { text: `DRIFT x${multiplier}`, color: 0xffaa00ff };
   }
   return { text: "", color: 0xffffffff };
 }

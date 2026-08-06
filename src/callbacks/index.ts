@@ -41,7 +41,7 @@ import {
   syncStuntState,
   syncNoCollisionState,
 } from "@/core/vehicleAuto";
-import { cleanupDriftScore } from "@/core/driftScore";
+import { cleanupDriftScore, initDriftScore } from "@/core/driftScore";
 import { cancelCountdownFx, disposeCountdownFxAll } from "@/interface/countdownFx";
 import { applyPlayerStyle, applyStyleToNewPlayer, cleanupPlayerStyle } from "@/core/playerStyle";
 import { initSkinCommands } from "@/personalize/skinPicker";
@@ -399,6 +399,9 @@ initArmor();
 
 // 车辆自动系统：翻车自动翻正/自动修复/定时换色/氮气补充
 initVehicleAuto();
+
+// 漂移积分系统：车身损伤状态变化（碰撞等）→ 打断当前积分归 0（检测/计分由 gui tick 驱动）
+initDriftScore();
 
 // 装扮实时编辑器（人物 EditAttachedObject / 车辆 DynamicObject 拖拽编辑保存）
 initAttireEditor();
