@@ -507,12 +507,17 @@ model Replay {
   fileSize       Int      @map("file_size")
   rank           Int? // 比赛回放：名次快照（未完成/中途退出为 null）
   finished       Boolean? // 比赛回放：是否完成
+  // 比赛房间 id（比赛服务端递增不复用，本场唯一）：无人完成作废精确匹配本场，
+  // 防误删"有人完成的比赛里掉线玩家的保留段"（那部分 rank 同样为 null）。
+  // 非比赛录制（ghost）为 null。
+  raceRoomId     Int?    @map("race_room_id")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   deletedAt      DateTime? @map("deleted_at") @db.Timestamptz(6)
 
   sysUser        SysUser  @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([userId])
+  @@index([raceRoomId])
   @@index([deletedAt])
   @@map("replay")
 }

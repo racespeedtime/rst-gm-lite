@@ -35,6 +35,7 @@ import {
 } from "./format";
 import { join } from "node:path";
 import { RECORDING_DIR } from "./storage";
+import { applyWorldEnv } from "@/core/worldenv";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
 
@@ -296,12 +297,25 @@ export function npcSlotsLeft(): number {
  * 失败返回 null（槽位不足/创建失败），不抛异常。
  */
 export function allocReplayNpc(name: string): Npc | null {
+  let npc: Npc | undefined;
   try {
-    const npc = new Npc(name).create();
-    if (!npc.isValid()) return null;
+    npc = new Npc(name).create();
+    if (!npc.isValid()) {
+      // 创建"成功"但槽位未占（open.mp 失败静默）：实体无效，无泄漏
+      return null;
+    }
     npc.getPlayer(); // 触发 NpcException 校验（invalid NPC 的 getPlayer 会抛）
     return npc;
   } catch {
+    // create 已占槽但 getPlayer 抛错（库行为）：必须销毁，否则 NPC 槽位泄漏——
+    // 反复触发会耗尽 MAX_REPLAY_NPC，全服回放/挑战永久创建失败
+    if (npc && npc.isValid()) {
+      try {
+        npc.destroy();
+      } catch {
+        /* 已销毁/失效 */
+      }
+    }
     return null;
   }
 }
@@ -1294,6 +1308,17 @@ export function stopReplaySession(playerId: number): void {
   }
   // 独立世界（比赛回放）的会话：会话销毁后世界无人使用 → 回收世界 id 供复用
   if (session.replayType === "race") freeReplayWorld(session.worldId);
+  // 恢复观察者视角时间/天气：syncObserverTds 随帧给 TD 持有者 setTime/setWeather，
+  // 停止后不恢复会停留在最后一帧的值，直到下次重生/登录才被 worldenv 重刷。
+  // 按玩家设置重放世界时间/天气（applyWorldEnv 读个性化设置，异步无感）
+  for (const pid of session.tds.keys()) {
+    const p = Player.getInstance(pid);
+    if (p && p.isConnected()) {
+      void applyWorldEnv(p).catch(() => {
+        /* 恢复失败：下次 spawn/登录 worldenv 兜底 */
+      });
+    }
+  }
   // 比赛回放（独立世界）：玩家可能在其中刷过车 → 恢复玩家世界 + 爱车世界，
   // 防爱车留在独立世界成幽灵车（worldId 已被回收，下次复用会串进别的回放）。
   // 无条件检查爱车所在世界 == 回放世界（不依赖 owner 是否仍在该世界——owner

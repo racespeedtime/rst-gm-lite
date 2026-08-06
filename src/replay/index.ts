@@ -140,36 +140,43 @@ export function raceRecordingStop(
  * 作废一次已落盘的比赛回放（整场无人完成）：删录像文件 + 软删 DB 记录。
  * 用于"房间销毁且无人完成"和"掉线重连成功删掉线段"——删除前留 800ms
  * 让刚触发的 stopRecording 落盘完成（断线走 forceStopRecording 是异步的，
- * 立即查可能查到旧记录）。raceId 限定该场比赛，防误删同用户其他比赛记录。
+ * 立即查可能查到旧记录）。raceRoomId 精确匹配本场房间（比赛房间 id 服务端
+ * 递增不复用）：防误删"有人完成的比赛里掉线玩家的保留段"（那部分 rank 同样
+ * 为 null，若按 userId+raceId+rank=null 最近一条会删错）。旧录像无
+ * raceRoomId → 无法精确匹配，回退按 userId+raceId 取最近一条（rank=null）。
  * userId 为可选快照（room.raceMembersLast 存）：掉线/重连超时玩家 auth 已清，
  * 必须靠快照才能离线作废其未完成录像，否则文件 + DB 记录永久泄漏。
  */
-export function discardRaceReplay(playerId: number, raceId?: string | null, userId?: string): void {
+export function discardRaceReplay(
+  playerId: number,
+  raceId?: string | null,
+  userId?: string,
+  raceRoomId?: number | null,
+): void {
   setTimeoutSafe(async () => {
     // 优先用快照 userId；无快照（历史调用）回退在线 auth
     const uid = userId ?? getAuthState(playerId)?.userId;
     if (!uid) return;
     try {
+      // 精确匹配本场房间（raceRoomId 递增不复用，本场唯一）。旧录像（无
+      // raceRoomId）回退 userId+raceId+rank=null 最近一条——历史数据作废
       const row = await prisma.replay.findFirst({
         where: {
           userId: uid,
           type: "race",
           deletedAt: null,
           ...(raceId ? { raceId } : {}),
+          ...(raceRoomId != null ? { raceRoomId } : {}),
         },
         orderBy: { createdAt: "desc" },
       });
       // 只作废"未完成"段（rank==null）；有 rank 说明该段有人冲线，保留
       if (!row || row.rank != null) return;
-      // 本路径只在"房间销毁且无人完成"时调用（checkRoomState），查询本身已按
-      // userId+raceId+rank=null 定位，命中的就是未完成录像——删它即语义正确：
-      // 哪怕命中并发/连续另一场的未完成段，它同样该作废；rank 非空（有人完成）
-      // 的录像不会命中，不会被误删。因此不设时间窗口——重连/退赛场景录像落盘
-      // 远早于房间销毁（落盘在重连成功/离开世界时，作废要等窗口过期），30 秒
-      // 硬窗口会让这类录像永久残留（曾有 WorldRallyChampion 未完成录像因此漏删）
       deleteRecordingFile(row.fileName);
       await prisma.replay.update({ where: { id: row.id }, data: { deletedAt: new Date() } });
-      logger.info(`[replay] 作废无人完成的比赛回放 ${row.fileName}（playerId=${playerId}）`);
+      logger.info(
+        `[replay] 作废无人完成的比赛回放 ${row.fileName}（playerId=${playerId} room=${raceRoomId ?? "?"}）`,
+      );
     } catch (e) {
       logger.error(`[replay] 作废比赛回放失败 playerId=${playerId}`, e);
     }

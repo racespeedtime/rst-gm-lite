@@ -694,6 +694,10 @@ export async function restartRace(player: Player): Promise<void> {
   if (room.endTimer) clearTimeoutSafe(room.endTimer);
   const wasRunning = room.state === "RACING" || room.state === "COUNTDOWN";
   room.state = "WAITING";
+  // 本场是否已有完成者：有人冲线（results 非空）→ 未完成成员的录像应按"有人
+  // 完成保留未完成段"落盘保留，不能 discard（与 checkRoomState 的 someoneFinished
+  // 分支一致）；无人完成才作废（重开是新一场，旧段无成绩价值）
+  const someoneFinished = room.results.length > 0;
   // 重置 WAITING 超时基准：createdAt 是建房时刻，重开不清会被 tickRooms 的
   // "等待超时 10 分钟解散"立即命中（建房到重开累计超过 10 分钟的长赛道常见）
   room.createdAt = Date.now();
@@ -716,19 +720,28 @@ export async function restartRace(player: Player): Promise<void> {
     mp.startTime = 0;
     mp.finished = false;
     mp.cpSnapshots = []; // 重开比赛：清空上一场的回退快照（防按旧场车型/time/weather 回撤）
-    // 比赛中止重开：停止上一段的比赛自动录制并作废（整场无人完成，无成绩
-    // 保留价值；discard 原子落盘即删文件不建 DB 记录），下一场开赛（beginRace）
-    // 重新开始录制，两场成绩互不混入
-    void stopRecording(m.id, { quiet: true, discard: true });
+    if (someoneFinished) {
+      // 本场已有人完成：成员段落盘保留（含掉线静止段），下一场重新开录
+      void stopRecording(m.id, { quiet: true });
+    } else {
+      // 无人完成：作废本段（discard 原子落盘即删文件不建 DB 记录），下一场
+      // 开赛（beginRace）重新开始录制，两场成绩互不混入
+      void stopRecording(m.id, { quiet: true, discard: true });
+    }
     await positionPlayerAtStart(m, room);
   }
-  // 挂起中的掉线会话（掉线未重连）跨场丢弃：上一场已中止，静止段无续录意义。
-  // 归属校验：断线玩家 playerId 可能被复用开了别的房间录制，不能误丢
+  // 挂起中的掉线会话（掉线未重连）跨场处理：无人完成则丢弃（静止段无续录意义）；
+  // 已有人完成则落盘保留。归属校验：断线玩家 playerId 可能被复用开了别的房间
+  // 录制，不能误停/误丢
   for (const pid of room.raceMembersLast.keys()) {
     if (!playerRaces.has(pid) && isRecording(pid)) {
       const rec = getRecording(pid);
       if (!rec || !rec.raceRoomId || rec.raceRoomId === room.id) {
-        dropRecording(pid);
+        if (someoneFinished) {
+          void stopRecording(pid, { quiet: true });
+        } else {
+          dropRecording(pid);
+        }
       }
     }
   }
@@ -1578,9 +1591,10 @@ function checkRoomState(room: RaceRoom): void {
           dropRecording(pid); // 挂起会话：丢弃（静止段无成绩价值）
         }
       } else if (!someoneFinished) {
-        // 已落盘未完成段：作废（限定本场比赛；用 userId 快照——掉线/重连超时
-        // 者 auth 已清，传参兜底离线作废）
-        discardRaceReplay(pid, room.raceId, room.raceMembersLast.get(pid));
+        // 已落盘未完成段：作废（raceRoomId 精确匹配本场——防误删"有人完成的
+        // 比赛里掉线玩家的保留段"；用 userId 快照——掉线/重连超时者 auth 已清，
+        // 传参兜底离线作废）
+        discardRaceReplay(pid, room.raceId, room.raceMembersLast.get(pid), room.id);
       }
     }
     room.raceMembersLast.clear();

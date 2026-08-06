@@ -123,6 +123,10 @@ export function rebindRecording(
   if (raceRoomId != null && session.raceRoomId != null && session.raceRoomId !== raceRoomId) {
     return;
   }
+  // 目标键已被占（断线期间 newPlayerId 被复用并开了别人的挂起会话）→ 不覆盖：
+  // 迁移会静默丢掉别人那段录像。跳过迁移，调用方 resume 找不到会话会走新开
+  // 录制；别人的会话留在原键由其所属房间收尾
+  if (sessions.has(newPlayerId)) return;
   sessions.delete(oldPlayerId);
   session.playerId = newPlayerId;
   sessions.set(newPlayerId, session);
@@ -186,7 +190,11 @@ function checkRecordingBoundary(session: RecordingSession, player: Player): bool
  *  帧间真实间隔不等（RakNet ~33ms / 掉线静止帧 100ms / 兜底采样），播放端
  *  按此时间戳精确定位，避免"平均间隔"把掉线段频率摊到全片导致驾驶段放慢。 */
 function sample(session: RecordingSession, frame: ReplayFrame): void {
-  frame.relTimeMs = Date.now() - session.startAt; // 帧每次采样都是新对象，直接赋值零复制
+  // 时间戳取 max 保单调：播放端二分依赖单调不减，系统时钟回退（NTP/校时）时
+  // 后续帧时间不能小于前帧，否则插值系数异常位置抖动
+  const ts = Date.now() - session.startAt;
+  const prev = session.frames[session.frames.length - 1];
+  frame.relTimeMs = prev && prev.relTimeMs ? Math.max(prev.relTimeMs, ts) : ts;
   session.frames.push(frame);
   session.last = frame;
   session.lastSampleAt = Date.now();
@@ -285,11 +293,18 @@ export async function startRecording(
   }
   if (sessions.has(player.id)) {
     const old = sessions.get(player.id);
-    // 挂起的旧会话（掉线/中途退出的比赛录制）不能跨比赛残留：新录制直接
-    // 丢弃旧挂起会话再开（挂起语义只用于"同一场比赛重连续录"，玩家开新比赛
-    // 意味着旧场已结束/放弃）
     if (old?.suspended) {
-      dropRecording(player.id);
+      if (old.userId === auth.userId) {
+        // 同一玩家的挂起旧会话（掉线/中途退出的比赛录制）不能跨比赛残留：新录制
+        // 直接丢弃旧挂起会话再开（挂起语义只用于"同一场比赛重连续录"，玩家开
+        // 新比赛意味着旧场已结束/放弃）
+        dropRecording(player.id);
+      } else {
+        // playerId 已被新玩家复用，挂起段属于别人（掉线玩家 A 的录像）：不能
+        // 静默丢弃——落盘保存（stopRecording 的身份校验会跳过错误尾帧补帧），
+        // 否则 A 的整场录像无声丢失
+        void stopRecording(player.id, { quiet: true });
+      }
     } else {
       player.sendClientMessage(COLOR_ERROR, "你已在录制中");
       return false;
@@ -494,6 +509,7 @@ export async function stopRecording(
         fileSize: buf.length,
         rank: opts?.rank ?? null,
         finished: opts?.finished ?? null,
+        raceRoomId: session.raceRoomId ?? null, // 比赛房间 id（作废精确匹配本场；ghost 为 null）
       },
     });
     if (player && player.isConnected() && !opts?.quiet) {
