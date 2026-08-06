@@ -38,6 +38,7 @@ import {
 } from "@/replay";
 import {
   noteCpProgress,
+  noteRank,
   stopRecording,
   isRecording,
   getRecording,
@@ -53,6 +54,8 @@ import {
   cleanupObserve,
   getObserverIdsOf,
   getObserveTarget,
+  onObserveStart,
+  onObserveStop,
 } from "@/core/observe";
 import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
@@ -337,6 +340,10 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
         room.raceTextTds.delete(playerId);
       }
       room.tdTextCache.delete(playerId);
+      // 掉线成员下线：清理指向该成员的观察者 CP 箭头（车停原地无人可跟）
+      for (const [oid, mid] of [...spectatorCpMap]) {
+        if (mid === playerId) clearSpectatorCp(oid);
+      }
       // 比赛中且比赛支持重连 → 进入重连窗口（已完成玩家不开窗口：成绩已纪录，防重连后重复完成）
       const estMs = estimateRaceDurationMs(room);
       if (room.state === "RACING" && !pr.finished && estMs >= RECONNECT_SUPPORT_MIN_MS) {
@@ -885,6 +892,8 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
   // 显示第一个 CP（红色箭头指向第二个；open.mp 切换世界不改变坐标，
   // 开赛切到比赛世界后仍站在同一位置，beginRace 的 setPos 幂等保留）
   showNextCheckpoint(player, room.cps, -1);
+  // 加入/换赛道时同步观战者的起点 CP 箭头（观察者跟着看到起点）
+  syncCpToObservers(room, player, -1);
 }
 
 /** 房主开始比赛：倒计时 5s */
@@ -1038,6 +1047,8 @@ function beginRace(room: RaceRoom): void {
       }
       // 显示起点 CP 箭头（红圈在起点、箭头指向第一个 CP；小地图图标在下一个 CP，对齐原版）
       showNextCheckpoint(m, room.cps, -1);
+      // 开赛同步观战者的起点 CP 箭头
+      syncCpToObservers(room, m, -1);
       // 比赛信息 UI（C P/TIME/BEST/RANK）已在加入房间时创建（joinRoom），
       // 开赛重置 TIME 显示为 0（tickRooms 开始计时刷新）。TD 文本缓存一并清——
       // 60fps syncRaceTds 以缓存去重，不清会让开赛首帧拿到上一场的旧文本
@@ -1166,6 +1177,67 @@ function clearRaceMapIcons(player: Player): void {
   player.removeMapIcon(RACE_MAP_ICON_NEXT);
 }
 
+/**
+ * 观战者 → 被观战比赛成员 的 CP 同步映射（观察者 playerId → 成员 playerId）。
+ * 仅"观察者当前正在观战本房间成员"时维护；成员 CP 变化时经 syncCpToObservers
+ * 更新观察者的箭头/图标，stopObserve/切换目标/断线/房间销毁时清除。观察者本身
+ * 不是房间成员（/tv 外部玩家观战比赛）或完赛自动观战者（仍在 members）都可能。
+ */
+const spectatorCpMap = new Map<number, number>();
+
+/** 为观察者同步其当前观战成员的下一 CP 箭头/图标（成员 CP 变化各同步点调用）。
+ *  仅当观察者确实在看该成员（originPlayerId 匹配，覆盖车内目标）且世界在房间
+ *  世界时才更新——观察者切走/离开房间世界后不干扰。 */
+function syncCpToObservers(room: RaceRoom, member: Player, cpIndex: number): void {
+  for (const oid of getObserverIdsOf(member.id)) {
+    const ob = Player.getInstance(oid);
+    if (!ob || !ob.isConnected()) continue;
+    if (ob.getVirtualWorld() !== room.worldId) continue; // 未在比赛世界（换世界中）
+    const st = getObserveTarget(oid);
+    if (!st || st.originPlayerId !== member.id) continue; // 当前目标不是该成员
+    spectatorCpMap.set(oid, member.id);
+    showNextCheckpoint(ob, room.cps, cpIndex);
+  }
+}
+
+/** 清除观察者的比赛 CP 箭头/图标（退出观战/切换目标/断线/房间销毁时），并删映射 */
+function clearSpectatorCp(observerId: number): void {
+  if (!spectatorCpMap.delete(observerId)) return; // 未为任何成员同步过 → 无操作
+  const ob = Player.getInstance(observerId);
+  if (!ob || !ob.isConnected()) return;
+  try {
+    RaceCheckpoint.disable(ob);
+  } catch {
+    /* 已失效 */
+  }
+  ob.removeMapIcon(RACE_MAP_ICON_NEXT);
+}
+
+/** 房间销毁/成员离开时清理指向该房间成员的观察者 CP 同步 */
+function cleanupSpectatorCpForRoom(room: RaceRoom): void {
+  for (const [oid, mid] of [...spectatorCpMap]) {
+    const pr = playerRaces.get(mid);
+    if (pr && pr.roomId === room.id) {
+      clearSpectatorCp(oid);
+    }
+  }
+}
+
+/** 观察者开始观战时：若是房间成员 → 立即同步其当前 CP（含从看别人切到看该成员） */
+function onSpectatorStart(observerId: number): void {
+  clearSpectatorCp(observerId); // 先清旧（若之前在看另一房间成员）
+  const st = getObserveTarget(observerId);
+  if (!st || st.originPlayerId == null) return;
+  const member = Player.getInstance(st.originPlayerId);
+  if (!member || !member.isConnected()) return;
+  const pr = playerRaces.get(member.id);
+  if (!pr) return;
+  const room = rooms.get(pr.roomId);
+  if (room && room.state === "RACING") {
+    syncCpToObservers(room, member, pr.cpIndex);
+  }
+}
+
 /** 销毁房间所有比赛信息 TD（防未创建/已失效的 TD destroy 抛异常） */
 function destroyRaceTds(room: RaceRoom): void {
   for (const tds of room.raceTextTds.values()) {
@@ -1264,10 +1336,20 @@ async function onPlayerReachCp(player: Player): Promise<void> {
   // 若放在循环后，CP 箭头/红圈会残留错位一整段（cpIndex 已推进但视觉停在旧 CP）。
   const isFirstCp = nextCp.index === room.cps[0].index;
   showNextCheckpoint(player, room.cps, pr.cpIndex);
+  // 同步观战者的 CP 箭头/图标（观察者看到被观战者下一步要过的 CP）
+  syncCpToObservers(room, player, pr.cpIndex);
   // 有显著动作脚本的 CP（换车/变速/转向/传送/修车/破坏）播特殊音效 1133，提示
   // "这个 CP 有特殊效果"；普通 CP（含仅 time/weather/msg）用 1056。
   // 第一 CP 的 cveh 是赛道标准车（skipCveh 跳过、进赛道已换好）——不算显著动作。
-  player.playSound(hasSignificantScript(nextCp.scripts, isFirstCp) ? 1133 : 1056);
+  const cpSound = hasSignificantScript(nextCp.scripts, isFirstCp) ? 1133 : 1056;
+  player.playSound(cpSound);
+  // 过 CP 音效同步给观战者（与被观战者一致——观察者同样能听到"当前过了个特殊 CP"）
+  for (const oid of getObserverIdsOf(player.id)) {
+    const ob = Player.getInstance(oid);
+    if (ob && ob.isConnected() && ob.getVirtualWorld() === room.worldId) {
+      ob.playSound(cpSound);
+    }
+  }
   const scriptCtx: CpScriptContext = {
     raceId: room.raceId,
     cpid: nextCp.index,
@@ -1312,6 +1394,10 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   pr.finished = true;
   RaceCheckpoint.disable(player);
   clearRaceMapIcons(player); // 完成：清比赛小地图图标
+  // 完成者不再跑：清理指向该成员的观察者 CP 箭头（观察者跟随完赛自动观战切走）
+  for (const [oid, mid] of [...spectatorCpMap]) {
+    if (mid === player.id) clearSpectatorCp(oid);
+  }
   const time = Date.now() - pr.startTime;
   // name 快照：完成后玩家可能掉线/离开，endRoom 补计排名时 getName 已取不到
   room.results.push({ playerId: player.id, time, name: player.getName().name });
@@ -1559,6 +1645,7 @@ function endRoom(room: RaceRoom): void {
     }
   }
   destroyRaceTds(room);
+  cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
   room.members.clear();
   freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id（供后续房间复用）
   rooms.delete(room.id);
@@ -1575,6 +1662,7 @@ function checkRoomState(room: RaceRoom): void {
     if (room.countdownTimer) clearTimeoutSafe(room.countdownTimer);
     if (room.endTimer) clearTimeoutSafe(room.endTimer);
     destroyRaceTds(room);
+    cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
     // 有人完成（room.results 非空）→ 比赛有成绩，录像保留：挂起会话落盘、
     // 已落盘段不作废。仅"无人完成"才作废删除（挂起丢弃 + 已落盘段删除）。
     const someoneFinished = room.results.length > 0;
@@ -1616,6 +1704,10 @@ export function leaveRace(player: Player): void {
     room.members.delete(player.id);
     room.lastPositions.delete(player.id); // 掉线快照缓存随成员离开清理
     room.afk.delete(player.id); // 挂机累计随离开清理（防 Map 残留）
+    // 离开者不再被观战：清理指向该成员的观察者 CP 箭头（观察者切走/继续看别人）
+    for (const [oid, mid] of [...spectatorCpMap]) {
+      if (mid === player.id) clearSpectatorCp(oid);
+    }
     broadcastToRoom(room, `[赛车] ${player.getName().name} 离开了比赛`);
     const tds = room.raceTextTds.get(player.id);
     if (tds) {
@@ -1693,6 +1785,7 @@ function tickRooms(): void {
         cleanupScriptVehicle(m.id); // 等待期玩家可能在起点的比赛车上，解散一并清
       }
       destroyRaceTds(room);
+      cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
       room.members.clear();
       freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id
       rooms.delete(room.id);
@@ -1804,6 +1897,9 @@ function tickRooms(): void {
       // 名次写入缓存：60fps syncRaceTds 只读 mp.rank / tdTextCache 重放文本，
       // 不重算排名（距离采样 + 排序保持 200ms 粒度，高频刷新零重计算）
       mp.rank = rank;
+      // 实时名次写入录制帧（回放 RANK TD 按播放进度实时显示；与 CP 进度同为
+      // 事件驱动——无录制会话时零开销）
+      noteRank(r.playerId, rank + 1);
       const time = mp.finished ? r.time : now - mp.startTime;
       const timeText = `TIME / ${formatRaceTime(time)}`;
       const rankText = `RANK / ${rank + 1} ${rankSuffix(rank)}`;
@@ -1902,6 +1998,12 @@ function syncRaceTds(): void {
 export function initRaceSystem(): void {
   // /r(race) 命令入口（/r s|j|l|info|create|edit|page + 赛道列表）已拆到 roomUi.ts 的
   // initRaceUi()，callbacks 里在 initRaceSystem() 后调用——本函数只管比赛核心事件。
+
+  // 观战者 CP 箭头同步：观察者开始观战（/tv / 切换目标 / 完赛自动观战）时若目标是
+  // 房间成员 → 立即摆上其当前 CP；停止观战/断线/切换时清除。清理集中在钩子 +
+  // 房间销毁（cleanupSpectatorCpForRoom），无独立实体残留
+  onObserveStart(onSpectatorStart);
+  onObserveStop(clearSpectatorCp);
 
   // 到达检查点事件
   RaceCpEvent.onPlayerEnter(({ player, next }) => {
@@ -2152,6 +2254,8 @@ function respawnToCpCore(
   }
   // 重新显示当前 CP（红箭头指向下一个）
   showNextCheckpoint(player, room.cps, prevIdx);
+  // 重生/回退同步观战者的 CP 箭头（观察者看到与成员一致的当前目标）
+  syncCpToObservers(room, player, prevIdx);
   // 重生重执行该 CP 脚本（弹射/换车等必需效果恢复，跳过 spawnpos/vgoto/damage——
   // 见 replayCpScriptsOnRespawn 注释）。放在 applyRollbackState 之前：重执行 cveh
   // 已把车型换对，快照回撤的车型判断自然跳过（不重复刷车），time/weather 同值幂等。
@@ -2361,6 +2465,8 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       const cpDone = Math.min((slot?.cpIndex ?? -1) + 1, room.cps.length);
       tds.cp.setString(`C  P / ~p~${cpDone}~w~/~y~${room.cps.length}`);
       showNextCheckpoint(player, room.cps, slot?.cpIndex ?? -1);
+      // 重连恢复同步观战者的 CP 箭头（观察者跟着看到重连后的当前目标）
+      syncCpToObservers(room, player, slot?.cpIndex ?? -1);
       // 重新强制无碰撞（重连是全新连接，碰撞状态已重置）
       applyRaceNoCollision(player, true);
       // 恢复房间统一时间天气（重连是新连接，默认回服务器时间天气——不恢复会

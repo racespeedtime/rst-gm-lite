@@ -4,6 +4,7 @@ import {
   KeysEnum,
   Npc,
   Player,
+  RaceCheckpoint,
   Streamer,
   StreamerItemTypes,
   TextDraw,
@@ -30,6 +31,7 @@ import {
   decodeFrame,
   lerpFrame,
   FRAME_BYTES_V7,
+  FRAME_BYTES_V8,
   type ReplayData,
   type ReplayFrame,
 } from "./format";
@@ -243,10 +245,17 @@ export interface ReplaySession {
   /** 上次渲染的 TD 内容（去重，防每帧 setString 重绘） */
   lastCpText: string;
   lastTimeText: string;
+  /** 上次渲染的 RANK 文本（v8 帧内实时名次动态刷新去重；旧文件静态不刷） */
+  lastRankText: string;
   /** 观察者视角时间/天气（随帧状态应用；变化检测防每帧调用） */
   lastHour: number;
   lastMinute: number;
   lastWeather: number;
+  /** 比赛赛道 CP 坐标（race 回放从 raceCp 表加载；观战者 3D 箭头/图标渲染用；
+   *  ghost 回放无赛道为 undefined） */
+  cps?: { x: number; y: number; z: number; size: number }[];
+  /** 上次渲染的 ghost CP 进度（过 CP 检测：cpProgress 前进 → 观战者音效 + 箭头推进） */
+  cpProgressLast?: number;
 }
 
 const sessions = new Map<number, ReplaySession>(); // playerId -> 该玩家自己的回放会话（各看各的）
@@ -377,7 +386,14 @@ function ensureObserverTds(session: ReplaySession, player: Player): void {
   if (session.tds.has(player.id)) return;
   const header = session.data.header;
   const best = header.bestMs >= 0 ? `BEST / ${fmtRaceTime(header.bestMs)}` : "BEST / --:--:--";
-  const rank = session.rank != null ? `RANK / No.${session.rank}` : "RANK / --";
+  // 初始 RANK：v8 文件用帧内实时名次（首帧 syncObserverTds 立即刷入，初始 -- 防
+  // DB 快照闪变）；旧 v7 及以下无帧内名次 → 用 DB 名次快照
+  const rank =
+    header.frameBytes >= FRAME_BYTES_V8
+      ? "RANK / --"
+      : session.rank != null
+        ? `RANK / No.${session.rank}`
+        : "RANK / --";
   const tds = {
     cp: replayTdBase(player, 118, `C  P / ~p~1~w~/~y~${header.totalCp || 1}`),
     time: replayTdBase(player, 136, "TIME / 00:00:00"),
@@ -388,7 +404,7 @@ function ensureObserverTds(session: ReplaySession, player: Player): void {
   session.tds.set(player.id, tds);
 }
 
-/** 销毁观战者 TD（会话销毁/退出回放） */
+/** 销毁观战者 TD（会话销毁/退出回放），并清其回放 CP 箭头/小地图图标（防残留屏幕） */
 function destroyObserverTds(session: ReplaySession, playerId: number): void {
   const tds = session.tds.get(playerId);
   if (!tds) return;
@@ -400,6 +416,18 @@ function destroyObserverTds(session: ReplaySession, playerId: number): void {
     }
   }
   session.tds.delete(playerId);
+  const p = Player.getInstance(playerId);
+  if (!p || !p.isConnected()) return;
+  try {
+    RaceCheckpoint.disable(p); // 回放 3D CP 箭头
+  } catch {
+    /* 已失效 */
+  }
+  try {
+    p.removeMapIcon(70); // 回放 CP 小地图图标
+  } catch {
+    /* 已失效 */
+  }
 }
 
 /** 采样帧解出的可渲染状态（位置/四元数/速度 + 完整离散状态）。
@@ -432,6 +460,8 @@ export interface SampledState {
   trainSpeed: number;
   /** 该帧玩家是否在线（掉线重连的静止帧 false） */
   online: boolean;
+  /** 该帧玩家的实时名次（v8 帧内；0=未排名/旧文件无此数据） */
+  rank: number;
 }
 
 /** 播放时长（毫秒）：v7 起用帧时间戳精确（末帧-首帧）；旧文件回退帧数×间隔。
@@ -531,6 +561,7 @@ export function sampleAt(data: ReplayData, playTime: number): SampledState | nul
       trailerId: f.trailerId,
       trainSpeed: f.trainSpeed,
       online: f.online,
+      rank: f.rank ?? 0,
     };
   };
   if (idx >= lastIdx) {
@@ -868,6 +899,53 @@ function syncObserverTds(session: ReplaySession): void {
       tds.time.setString(timeText);
     }
   }
+  // 动态 RANK：v8 文件帧内带实时名次（tickRooms 200ms 排名），按播放进度
+  // 刷新——掉线重连录像的名次变化（被超越/恢复）随播放还原；旧 v7 及以下
+  // 文件无帧内名次 → 保持 ensureObserverTds 写死的 DB 快照，不刷
+  if (session.data.header.frameBytes >= FRAME_BYTES_V8) {
+    const rankText = s.rank > 0 ? `RANK / No.${s.rank}` : "RANK / --";
+    if (rankText !== session.lastRankText) {
+      session.lastRankText = rankText;
+      for (const tds of session.tds.values()) {
+        tds.rank.setString(rankText);
+      }
+    }
+  }
+  // 3D CP 箭头 + 小地图图标（比赛回放，观战者视角）：按当前帧 cpProgress 在
+  // 观战者屏幕显示 ghost 当前要过的 CP（对齐局内观战同步）。帧没存 CP 坐标，
+  // 用 spawnReplay 加载的赛道 cps；无 cps（ghost 回放/加载失败）跳过。
+  // 进度变化才调 native（60fps 下大多 tick 不变）。
+  const cps = session.cps;
+  if (cps && cps.length >= 2) {
+    const prog = Math.max(0, s.cpProgress); // 已完成 CP 数（1-based 触达计数）
+    // 当前要过的 CP 索引：已完成 count 个 → 下一个是 count（0-based），圈满回绕
+    const total = cps.length;
+    const nextIdx = prog % total; // 跨圈回绕（cpProgress 续增，%total 落到圈内）
+    if (nextIdx !== session.cpProgressLast) {
+      const changed = session.cpProgressLast != null;
+      session.cpProgressLast = nextIdx;
+      const nxt = cps[nextIdx];
+      const nxt2 = cps[(nextIdx + 1) % total];
+      // 过 CP 音效（1056 普通）：进度推进（回放中 ghost 过了个 CP）
+      if (changed) {
+        for (const pid of session.tds.keys()) {
+          const p = Player.getInstance(pid);
+          if (p && p.isConnected()) p.playSound(1056);
+        }
+      }
+      // 更新观战者的箭头 + 图标（含起点首次显示）
+      for (const pid of session.tds.keys()) {
+        const p = Player.getInstance(pid);
+        if (!p || !p.isConnected()) continue;
+        try {
+          RaceCheckpoint.set(p, 0, nxt.x, nxt.y, nxt.z, nxt2.x, nxt2.y, nxt2.z, nxt.size);
+        } catch {
+          /* 已失效 */
+        }
+        p.setMapIcon(70, nxt2.x, nxt2.y, nxt2.z, 56, 0, 1);
+      }
+    }
+  }
   // 观察者视角时间/天气随帧应用（CP 脚本 time/weather 的效果"状态化"重放；
   // NPC 玩家无 setTime/setWeather，作用于观察者视角）
   if (
@@ -925,6 +1003,29 @@ export async function spawnReplay(
     logger.error(`[replay] 回放文件读取失败 ${replay.fileName}`, e);
     player.sendClientMessage(COLOR_ERROR, "回放文件损坏或不存在");
     return false;
+  }
+
+  // 比赛回放：加载赛道 CP 坐标（观战者 3D 箭头/图标渲染用；ghost 回放无赛道跳过）。
+  // 回放文件 header 只存了 totalCp 数量、未存坐标，须查 raceCp 表（与挑战同源）
+  let raceCps: { x: number; y: number; z: number; size: number }[] | undefined;
+  if (replay.type === "race" && replay.raceId) {
+    try {
+      const rows = await prisma.raceCp.findMany({
+        where: { raceId: replay.raceId },
+        orderBy: { index: "asc" },
+      });
+      if (rows.length >= 2) {
+        raceCps = rows.map((c) => ({
+          x: Number(c.x),
+          y: Number(c.y),
+          z: Number(c.z),
+          size: Number(c.size),
+        }));
+      }
+    } catch (e) {
+      // 加载失败：退化为只有 C P 文本 TD，不影响回放本身
+      logger.warn(`[replay] 赛道 CP 加载失败（回放无 3D 箭头）${replay.raceId}`, e);
+    }
   }
 
   const count = Math.min(5, Math.max(1, opts?.npcCount ?? 1));
@@ -1104,7 +1205,9 @@ export async function spawnReplay(
     watchers: new Set(),
     lastCpText: "",
     lastTimeText: "",
+    lastRankText: "", // 首帧 syncObserverTds 即写入实时名次（v8 文件）
     lastHour: -1,
+    cps: raceCps, // 赛道 CP 坐标（ghost 回放 undefined）
     lastMinute: -1,
     lastWeather: -128,
   };
