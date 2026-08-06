@@ -198,67 +198,85 @@ PlayerEvent.onDisconnect(({ player, reason, next }) => {
   if (isNpc(player)) {
     return next();
   }
-  // 注意顺序：战局处理需要认证状态（房主判断），须在清理 auth 之前执行。
-  // reason：SA-MP disconnect reason（0=掉线/超时崩溃 1=正常退出 2=Kick/Ban），
-  // 战局广播按下线理由展示（对齐原版 disconnectReasons 文案）
-  // 掉线玩家原战局 id 快照：必须在 handlePlayerDisconnect（内部删 playerSessions）
-  // 之前取，否则 cleanupRacePlayer 里再取 getPlayerSession 命中公共大世界、快照
-  // 恒为 0——重连时按 sessionId 匹配失效（见 room.ts reconnect slot sessionId）
-  const leavingSessionId = sessionManager.getPlayerSession(player).id;
-  sessionManager.handlePlayerDisconnect(player, reason);
-  // 断开前最后保存一次在线位置（失败由定时保存兜底）。
-  // 必须在 cleanupRacePlayer 之前：此时玩家还在比赛中（比赛世界），
-  // savePlayerPosition 内部按 isInRace 跳过比赛污染；若先清比赛状态，
-  // 会误把比赛世界坐标存成 LAST_POSITION
-  void savePlayerPosition(player).catch((e) =>
-    logger.error(`[spawn] 断线保存位置失败 ${player.getName().name}`, e),
-  );
-  // 爱车：保存车辆位置 + 销毁车辆
-  onPlayerDisconnectVehicle(player);
-  // 传送：清理 tpa 状态
-  cleanupTeleport(player.id);
-  // 清理登录首次出生标记（防 playerId 复用残留跳过重生定位）
-  cleanupLoginSpawned(player.id);
-  // 装扮：清理挂载对象
-  cleanupAttire(player.id);
-  // 比赛：退出比赛房间/编辑模式（传原战局 id 快照：重连窗口按 sessionId 恢复归属）
-  cleanupRacePlayer(player.id, { sessionId: leavingSessionId });
-  exitEdit(player.id);
-  // 观察：清理观战状态
-  cleanupObserve(player.id);
-  // 世界环境：清理 timeFlow 定时器
-  clearWorldEnvForPlayer(player.id);
-  // 回放：录制强制落盘 + 销毁该玩家发起的回放会话（NPC/车辆）
-  cleanupReplay(player.id);
-  // 断线清理：空白预设（在清 auth 前取 userId）
-  const leavingUserId = getAuthState(player.id)?.userId;
-  if (leavingUserId) {
-    void cleanupOrphanPresets(leavingUserId);
+  // 清理链全程异常防护：环节间串行、任一步抛错会中断后续清理（录制不落盘、
+  // 回放/GUI/会话不销毁 → 残留与内存泄漏）。包一层 try 保证事件链不崩、
+  // 后续环节尽力执行；catch 里对最关键的资源兜底再清一次。
+  try {
+    // 注意顺序：战局处理需要认证状态（房主判断），须在清理 auth 之前执行。
+    // reason：SA-MP disconnect reason（0=掉线/超时崩溃 1=正常退出 2=Kick/Ban），
+    // 战局广播按下线理由展示（对齐原版 disconnectReasons 文案）
+    // 掉线玩家原战局 id 快照：必须在 handlePlayerDisconnect（内部删 playerSessions）
+    // 之前取，否则 cleanupRacePlayer 里再取 getPlayerSession 命中公共大世界、快照
+    // 恒为 0——重连时按 sessionId 匹配失效（见 room.ts reconnect slot sessionId）
+    const leavingSessionId = sessionManager.getPlayerSession(player).id;
+    sessionManager.handlePlayerDisconnect(player, reason);
+    // 断开前最后保存一次在线位置（失败由定时保存兜底）。
+    // 必须在 cleanupRacePlayer 之前：此时玩家还在比赛中（比赛世界），
+    // savePlayerPosition 内部按 isInRace 跳过比赛污染；若先清比赛状态，
+    // 会误把比赛世界坐标存成 LAST_POSITION
+    void savePlayerPosition(player).catch((e) =>
+      logger.error(`[spawn] 断线保存位置失败 ${player.getName().name}`, e),
+    );
+    // 爱车：保存车辆位置 + 销毁车辆
+    onPlayerDisconnectVehicle(player);
+    // 传送：清理 tpa 状态
+    cleanupTeleport(player.id);
+    // 清理登录首次出生标记（防 playerId 复用残留跳过重生定位）
+    cleanupLoginSpawned(player.id);
+    // 装扮：清理挂载对象
+    cleanupAttire(player.id);
+    // 比赛：退出比赛房间/编辑模式（传原战局 id 快照：重连窗口按 sessionId 恢复归属）
+    cleanupRacePlayer(player.id, { sessionId: leavingSessionId });
+    exitEdit(player.id);
+    // 观察：清理观战状态
+    cleanupObserve(player.id);
+    // 世界环境：清理 timeFlow 定时器
+    clearWorldEnvForPlayer(player.id);
+    // 回放：录制强制落盘 + 销毁该玩家发起的回放会话（NPC/车辆）
+    cleanupReplay(player.id);
+    // 断线清理：空白预设（在清 auth 前取 userId）
+    const leavingUserId = getAuthState(player.id)?.userId;
+    if (leavingUserId) {
+      void cleanupOrphanPresets(leavingUserId);
+    }
+    unlockPlayer(player.id);
+    cleanupChat(player.id);
+    cleanupRateLimit(player.id);
+    cleanupGui(player.id);
+    // 无敌模式：清理进程内状态
+    cleanupInvincible(player.id);
+    // 车辆自动：清理换色/氮气计时
+    cleanupVehicleAuto(player.id);
+    // 漂移积分：清理状态 Map（TD 已由 cleanupGui 销毁）
+    cleanupDriftScore(player.id);
+    // 倒计时动画：断线清进行中的 TextDraw 动画链（TD 掉线时 infernus 已自动销毁）
+    cancelCountdownFx(player.id);
+    // 玩家标识：清理 NameTag/聊天名缓存
+    cleanupPlayerStyle(player.id);
+    // 万能面板：清理层级记忆（断线后重新登录从主面板开始）
+    cleanupPanel(player.id);
+    // 动作：清理播放记录（实体动作在断线时随客户端重置，无需发包清除）
+    cleanupAction(player.id);
+    // 设置缓存：按 userId 失效（防长期运行内存累积）
+    if (leavingUserId) {
+      invalidateSettingCache(leavingUserId);
+    }
+    // 关闭游戏会话 + 清理内存态（内部含 clearAuthState）
+    void closePlayerSession(player.id);
+  } catch (e) {
+    logger.error(`[callbacks] 断线清理异常 ${player.getName().name}(${player.id})`, e);
+    // 兜底：录制强制落盘 + 会话关闭是资源安全最关键的两环，链中断也要尽力完成
+    try {
+      cleanupReplay(player.id);
+    } catch (e2) {
+      logger.error(`[callbacks] 断线兜底清理回放失败 ${player.id}`, e2);
+    }
+    try {
+      void closePlayerSession(player.id);
+    } catch (e2) {
+      logger.error(`[callbacks] 断线兜底关闭会话失败 ${player.id}`, e2);
+    }
   }
-  unlockPlayer(player.id);
-  cleanupChat(player.id);
-  cleanupRateLimit(player.id);
-  cleanupGui(player.id);
-  // 无敌模式：清理进程内状态
-  cleanupInvincible(player.id);
-  // 车辆自动：清理换色/氮气计时
-  cleanupVehicleAuto(player.id);
-  // 漂移积分：清理状态 Map（TD 已由 cleanupGui 销毁）
-  cleanupDriftScore(player.id);
-  // 倒计时动画：断线清进行中的 TextDraw 动画链（TD 掉线时 infernus 已自动销毁）
-  cancelCountdownFx(player.id);
-  // 玩家标识：清理 NameTag/聊天名缓存
-  cleanupPlayerStyle(player.id);
-  // 万能面板：清理层级记忆（断线后重新登录从主面板开始）
-  cleanupPanel(player.id);
-  // 动作：清理播放记录（实体动作在断线时随客户端重置，无需发包清除）
-  cleanupAction(player.id);
-  // 设置缓存：按 userId 失效（防长期运行内存累积）
-  if (leavingUserId) {
-    invalidateSettingCache(leavingUserId);
-  }
-  // 关闭游戏会话 + 清理内存态（内部含 clearAuthState）
-  void closePlayerSession(player.id);
   return next();
 });
 

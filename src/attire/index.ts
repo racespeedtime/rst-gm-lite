@@ -203,8 +203,12 @@ export async function applyVehiclePreset(
     include: { items: { include: { attire: true } } },
   });
   if (!preset) return [];
-  // 颜色 / paintjob / 改装件
-  vehicle.changeColors(Number(preset.color1), Number(preset.color2));
+  // 颜色：预设存了颜色（>0）才覆盖——懒创建预设 color1/color2=0 表示未设，
+  // 无条件 changeColors(0,0) 会把 /cc 换过的爱车色重置成黑；0 号色是黑色
+  // 极少被选，>0 判定足够区分（刷车路径已用存储色作为初始色，两者一致）
+  if (preset.color1 > 0 || preset.color2 > 0) {
+    vehicle.changeColors(Number(preset.color1), Number(preset.color2));
+  }
   if (preset.paintjob != null) vehicle.changePaintjob(Number(preset.paintjob));
   if (preset.modComponents) {
     for (const c of preset.modComponents.split(" ")) {

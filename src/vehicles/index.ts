@@ -24,6 +24,7 @@ import { showDialog } from "@/utils/dialog";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { VEHICLE_CATEGORIES, vehicleName, isValidVehicleModel } from "./catalog";
 import type { UserVehicleModel } from "@/prisma/generated/prisma/models/UserVehicle";
+import { Prisma } from "@/prisma/generated/prisma/client";
 
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 /** 车辆位置保存间隔（毫秒） */
@@ -77,11 +78,14 @@ export function addVehicleComponentIfPossible(vehicle: Vehicle, componentId: num
 /**
  * 懒创建 user_vehicle 行：
  * 刷车时按 (user, modelId) 查库，有则复用（含默认预设/外观），无则新建默认行。
+ * 返回行 + 该爱车当前外观预设的颜色（默认预设已存颜色则用之——/cc 换色持久化到
+ * 默认预设后重刷车保持所选色；未存则 [-1,-1] 用游戏默认色，防预设默认值 0,0
+ * 覆盖成黑车）。
  */
 export async function getOrCreateUserVehicle(
   player: Player,
   modelId: number,
-): Promise<UserVehicleModel> {
+): Promise<{ uv: UserVehicleModel; colors: [number, number] }> {
   const auth = getAuthState(player.id);
   const pos = player.getPos();
   const angle = player.isInAnyVehicle()
@@ -103,7 +107,15 @@ export async function getOrCreateUserVehicle(
     update: {},
     create: data,
   });
-  return uv;
+  let colors: [number, number] = [-1, -1];
+  if (uv.defaultPresetId) {
+    const preset = await prisma.vehiclePreset.findUnique({
+      where: { id: uv.defaultPresetId },
+      select: { color1: true, color2: true },
+    });
+    if (preset) colors = [preset.color1, preset.color2];
+  }
+  return { uv, colors };
 }
 
 /** 应用车辆外观（默认预设的 颜色/paintjob/改装件） */
@@ -122,7 +134,7 @@ export async function spawnVehicle(
     return false;
   }
   try {
-    const uv = await getOrCreateUserVehicle(player, modelId);
+    const { uv, colors } = await getOrCreateUserVehicle(player, modelId);
     // 一人一车：先销毁旧车
     destroyPlayerVehicle(player.id);
     const pos = player.getPos();
@@ -135,7 +147,7 @@ export async function spawnVehicle(
       y: pos.y,
       z: pos.z,
       zAngle: angle,
-      color: [-1, -1],
+      color: colors, // 爱车已存颜色（/cc 换色已持久化到默认预设）；未存则 [-1,-1] 游戏默认色
       respawnDelay: 0,
     });
     veh.create();
@@ -289,7 +301,40 @@ export async function toggleMyVehicleLock(player: Player): Promise<void> {
   player.sendClientMessage(COLOR_WHITE, isLocked ? "爱车已上锁" : "爱车已解锁");
 }
 
-/** 更换当前爱车颜色（/cc · /c color · /cars color 共用） */
+/**
+ * 事务内取该爱车默认预设（无则懒创建并设为默认）——与 onMod/onPaintjob 的存储
+ * 共用同一套路：并发写入不会重复创建预设触发 @@unique([userId,modelId,index])。
+ */
+async function ensureDefaultPresetTx(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  modelId: number,
+): Promise<string> {
+  const uv = await tx.userVehicle.findUnique({
+    where: { userId_modelId: { userId, modelId } },
+  });
+  let presetId = uv?.defaultPresetId ?? null;
+  if (!presetId) {
+    const maxIdx = await tx.vehiclePreset.findFirst({
+      where: { userId, modelId, deletedAt: null },
+      orderBy: { index: "desc" },
+      select: { index: true },
+    });
+    const created = await tx.vehiclePreset.create({
+      data: { userId, modelId, index: (maxIdx?.index ?? -1) + 1, name: null },
+    });
+    presetId = created.id;
+    await tx.userVehicle.update({
+      where: { userId_modelId: { userId, modelId } },
+      data: { defaultPresetId: created.id },
+    });
+  }
+  return presetId;
+}
+
+/** 更换当前爱车颜色（/cc · /c color · /cars color 共用）。
+ *  同步换色 + 异步持久化到默认预设 color1/color2（重刷车/重新登录后保持所选色——
+ *  否则 applyVehiclePreset 用预设默认 0,0 覆盖，爱车变黑） */
 export function changeMyVehicleColor(player: Player, c1: number, c2: number): void {
   const veh = playerVehs.get(player.id);
   if (!veh || !veh.isValid()) {
@@ -298,6 +343,22 @@ export function changeMyVehicleColor(player: Player, c1: number, c2: number): vo
   }
   veh.changeColors(c1, c2);
   player.sendClientMessage(COLOR_SUCCESS, `颜色已更换为 ${c1} / ${c2}`);
+  const auth = getAuthState(player.id);
+  if (!auth) return;
+  const modelId = veh.getModel();
+  void (async () => {
+    try {
+      await prisma.$transaction(async (tx) => {
+        const presetId = await ensureDefaultPresetTx(tx, auth.userId, modelId);
+        await tx.vehiclePreset.update({
+          where: { id: presetId },
+          data: { color1: c1, color2: c2 },
+        });
+      });
+    } catch (e) {
+      logger.error(`[veh] ${player.getName().name} 存储换色失败 model=${modelId}`, e);
+    }
+  })();
 }
 
 /** 更换当前爱车车牌（/c chepai · /cars chepai 共用；落库） */
@@ -379,31 +440,8 @@ export function initVehicleCommands(): void {
         // 事务内"取默认预设（无则建）→ 追加改件"原子完成：并发 onMod
         // （同帧装多个件）不会重复创建预设触发 @@unique([userId,modelId,index]) 冲突
         await prisma.$transaction(async (tx) => {
-          const uv = await tx.userVehicle.findUnique({
-            where: { userId_modelId: { userId: auth.userId, modelId } },
-          });
-          // 目标预设：爱车默认预设；无则懒创建并设为默认（index = 组内 max+1）
-          let presetId = uv?.defaultPresetId ?? null;
-          if (!presetId) {
-            const maxIdx = await tx.vehiclePreset.findFirst({
-              where: { userId: auth.userId, modelId, deletedAt: null },
-              orderBy: { index: "desc" },
-              select: { index: true },
-            });
-            const created = await tx.vehiclePreset.create({
-              data: {
-                userId: auth.userId,
-                modelId,
-                index: (maxIdx?.index ?? -1) + 1,
-                name: null,
-              },
-            });
-            presetId = created.id;
-            await tx.userVehicle.update({
-              where: { userId_modelId: { userId: auth.userId, modelId } },
-              data: { defaultPresetId: created.id },
-            });
-          }
+          // 目标预设：爱车默认预设；无则懒创建并设为默认（ensureDefaultPresetTx）
+          const presetId = await ensureDefaultPresetTx(tx, auth.userId, modelId);
           const preset = await tx.vehiclePreset.findUnique({ where: { id: presetId } });
           const list = (preset?.modComponents ? preset.modComponents.split(" ") : []).filter(
             Boolean,
@@ -437,30 +475,7 @@ export function initVehicleCommands(): void {
       try {
         // 事务内"取默认预设（无则懒创建并设为默认）→ 写 paintjob"原子完成
         await prisma.$transaction(async (tx) => {
-          const uv = await tx.userVehicle.findUnique({
-            where: { userId_modelId: { userId: auth.userId, modelId } },
-          });
-          let presetId = uv?.defaultPresetId ?? null;
-          if (!presetId) {
-            const maxIdx = await tx.vehiclePreset.findFirst({
-              where: { userId: auth.userId, modelId, deletedAt: null },
-              orderBy: { index: "desc" },
-              select: { index: true },
-            });
-            const created = await tx.vehiclePreset.create({
-              data: {
-                userId: auth.userId,
-                modelId,
-                index: (maxIdx?.index ?? -1) + 1,
-                name: null,
-              },
-            });
-            presetId = created.id;
-            await tx.userVehicle.update({
-              where: { userId_modelId: { userId: auth.userId, modelId } },
-              data: { defaultPresetId: created.id },
-            });
-          }
+          const presetId = await ensureDefaultPresetTx(tx, auth.userId, modelId);
           await tx.vehiclePreset.update({
             where: { id: presetId },
             data: { paintjob: paintjobId },
