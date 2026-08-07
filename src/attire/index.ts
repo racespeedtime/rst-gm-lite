@@ -870,8 +870,11 @@ export async function openVehiclePresetMenu(player: Player, back?: MenuBack): Pr
 async function vehiclePresetMenu(player: Player, back?: MenuBack): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
-  const veh = player.getVehicle();
-  const currentModel = veh ? veh.getModel() : 411;
+  // 默认模型取"自己的爱车"（playerVehs）而非 player.getVehicle（坐的当前车）：
+  // 刷了 /c 562 但没坐进车里时 getVehicle() 为 undefined 会误回退 411——
+  // 玩家以为默认应是刚刷的 562。爱车才代表"我的车"
+  const owned = getOwnedVehicle(player.id);
+  const currentModel = owned && owned.isValid() ? owned.getModel() : 411;
   const modelRes = await showDialog(
     player,
     new Dialog({
