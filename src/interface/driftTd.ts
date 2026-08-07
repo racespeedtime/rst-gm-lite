@@ -1,10 +1,12 @@
 import { Player, TextDraw } from "@infernus/core";
 import { getDriftScore, type DriftStatus } from "@/core/driftScore";
+import { logger } from "@/logger";
 
 /**
  * 漂移积分 TextDraw（屏幕上方居中、纯展示、不常驻）：
- * - 大数字：当前显示分数（滚动动画值，千分位）
- * - 小字徽章：DRIFT xN（ASCII 全兼容——TextDraw 不支持中文，曾写中文乱码）
+ * - 大数字：当前显示分数（滚动动画值，纯数字无千分位）
+ * - 小字徽章：DRIFT xN（ASCII 全兼容——TextDraw 不支持中文）；颜色按倍率分级
+ *   （×1 白 → ×2 黄 → ×3-4 橙 → ×5-6 红橙 → ×8 红），平滑渐变
  * - 不常驻：漂移中 / 分数 >0 时显示；无活动超时归 0 后自动隐藏（地平线式出现/消失）
  * - 刷新走文本 diff（100ms tick 零变化零 native）；状态切换颜色平滑渐变
  */
@@ -17,6 +19,8 @@ export interface DriftTdState {
   lastVisible: boolean;
   /** 徽章当前渲染色（状态切换时向目标色平滑过渡，非瞬跳） */
   color: number;
+  /** 诊断：上一次日志的颜色目标（倍率/状态变化才打一次，核对字节序） */
+  lastLoggedTarget: number;
 }
 
 /** 屏幕上方居中（网络信息 y0-3 下方一点），大数字 + 徽章上下排列。
@@ -50,16 +54,28 @@ export function createDriftTd(player: Player): DriftTdState {
     lastBadge: "",
     lastVisible: false,
     color: 0xffffffff,
+    lastLoggedTarget: -1,
   };
 }
 
-/** 状态 → 徽章文案与目标色（漂移亮橙/无活动白；ASCII 兼容，TextDraw 不支持中文）。
- *  无活动（status=none）仍返回 "xN" 而非空串：徽章与数字同生共死——只要整组
- *  可见（score>0 的收尾展示期），徽章就有文案，绝不单边隐藏造成"数字还在、
+/** 倍率 → 徽章颜色（用户指定分级：×1 白 → ×2 黄 → ×3-4 橙 → ×5-6 红橙 → ×8 红；
+ *  SA TextDraw 色值 0xRRGGBBAA，与 netstat/speedometer 同体系——这两个的绿/黄红
+ *  在实机显示正常，是本项目验证过的字节序） */
+function multiplierColor(multiplier: number): number {
+  if (multiplier >= 8) return 0xff0000ff; // 红
+  if (multiplier >= 5) return 0xff4500ff; // 红橙
+  if (multiplier >= 3) return 0xff8800ff; // 橙
+  if (multiplier >= 2) return 0xffff00ff; // 黄
+  return 0xffffffff; // ×1 白
+}
+
+/** 状态 → 徽章文案与目标色（漂移中按倍率分级，无活动白；ASCII 兼容，TextDraw
+ *  不支持中文）。无活动（status=none）仍返回 "xN" 而非空串：徽章与数字同生共死——
+ *  只要整组可见（score>0 的收尾展示期），徽章就有文案，绝不单边隐藏造成"数字还在、
  *  倍率先没了"的不同步 */
 function statusBadge(status: DriftStatus, multiplier: number): { text: string; color: number } {
   if (status === "drift") {
-    return { text: `DRIFT x${multiplier}`, color: 0xffaa00ff };
+    return { text: `DRIFT x${multiplier}`, color: multiplierColor(multiplier) };
   }
   return { text: `x${multiplier}`, color: 0xffffffff };
 }
@@ -119,6 +135,18 @@ export function updateDriftTd(state: DriftTdState, player: Player): void {
     if (stepped !== state.color) {
       state.color = stepped;
       state.badgeTd.setColor(stepped);
+      // 诊断：倍率/状态变化（目标色切换）打一次实际下发值——用户报过"橙色
+      // 显示成蓝绿"，据此核对客户端字节序（与 netstat/speedometer 对比）
+      if (badge.color !== state.lastLoggedTarget) {
+        state.lastLoggedTarget = badge.color;
+        logger.info(
+          `[driftTd] ${player.getName().name} ×${st.multiplier} ${st.status} 目标 0x${badge.color
+            .toString(16)
+            .padStart(8, "0")} 下发 0x${stepped.toString(16).padStart(8, "0")}`,
+        );
+      }
+      state.scoreTd.show(player);
+      state.badgeTd.show(player);
     }
   } else {
     state.color = badge.color; // 隐藏时收敛目标，避免下次显示从旧色漂移
