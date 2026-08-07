@@ -10,6 +10,8 @@ import {
   clearTimeoutSafe,
 } from "@/core/timers";
 import { isInRace } from "@/race/room";
+import { isInChallenge } from "@/replay/challenge";
+import { getReplaySession } from "@/replay/playback";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 /** 世界环境持有的实体（onExit 时统一销毁） */
@@ -19,7 +21,8 @@ interface WorldEnv {
   checkpoints: DynamicCheckpoint[];
 }
 
-import { COLOR_LABEL, COLOR_RACE, COLOR_ORANGE } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
+import { COLOR_LABEL, COLOR_RACE } from "@/utils/colors";
 /** 服务器全局天气（作为"世界"环境基准，供 syncWorldWeather 跟随） */
 export const WORLD_WEATHER = 10;
 /** 大世界时间同步间隔（毫秒）——现实时间映射，每 60 秒同步一次 */
@@ -58,13 +61,14 @@ const WEATHER_NAMES: Record<number, string> = {
 };
 
 /**
- * 按现实时间分时段确定天气：
- * 白天(6-18)晴天、黄昏(18-20)橙色、夜晚(20-6)晴夜。
+ * 按现实时间分时段确定基准天气：
+ * 白天(6-18)晴、黄昏(18-20)多云(15)、夜晚(20-6)晴薄雾(3)。
+ * 数值对齐原版分时段取值（ID 语义见 WEATHER_NAMES 表）。
  */
 function weatherByTime(hour: number): number {
   if (hour >= 6 && hour < 18) return 0; // 白天晴
-  if (hour >= 18 && hour < 20) return 15; // 黄昏
-  return 3; // 夜晚
+  if (hour >= 18 && hour < 20) return 15; // 黄昏（多云）
+  return 3; // 夜晚（晴·薄雾）
 }
 
 /** 上次整点提醒的小时（防启动首轮误报；跨整点才提醒一次） */
@@ -80,7 +84,7 @@ export async function syncWorldClock(): Promise<void> {
   if (hourChanged) {
     lastNotifiedHour = now.getHours();
   }
-  const hourMsg = `[天气] 现在 ${String(now.getHours()).padStart(2, "0")}:00`;
+  const hourMsg = `现在 ${String(now.getHours()).padStart(2, "0")}:00`;
   // 同步 syncGameTime=true 的在线玩家（现实 1 分钟 = 游戏 1 分钟）
   for (const player of Player.getInstances()) {
     if (player.isNpc() || !player.isConnected()) continue;
@@ -95,7 +99,7 @@ export async function syncWorldClock(): Promise<void> {
     cancelTimeTransition(player.id);
     player.setTime(now.getHours(), now.getMinutes());
     if (hourChanged) {
-      player.sendClientMessage(COLOR_ORANGE, hourMsg);
+      sysMsg(player, "weather", hourMsg, "info");
     }
   }
 }
@@ -122,7 +126,7 @@ async function rotateWeather(): Promise<void> {
   // 只在天气实际变化时提示（分时段基准可能连续相同，避免刷提示）
   const changed = currentWeather !== oldWeather;
   GameMode.setWeather(currentWeather);
-  const msg = `[天气] 大世界天气已变化：${WEATHER_NAMES[currentWeather] ?? `ID ${currentWeather}`}`;
+  const msg = `大世界天气已变化：${WEATHER_NAMES[currentWeather] ?? `ID ${currentWeather}`}`;
   for (const player of Player.getInstances()) {
     if (player.isNpc() || !player.isConnected()) continue;
     // 比赛中跳过：房间统一天气由 beginRace 定（见 syncWorldClock 注释）
@@ -134,7 +138,7 @@ async function rotateWeather(): Promise<void> {
     player.setWeather(currentWeather);
     // 只提示跟随大世界天气的玩家（不跟随的玩家有自己的个人天气，不打扰）
     if (changed) {
-      player.sendClientMessage(COLOR_ORANGE, msg);
+      sysMsg(player, "weather", msg, "info");
     }
   }
 }
@@ -456,10 +460,11 @@ export async function applyWorldEnv(player: Player): Promise<void> {
         timeFlowTimers.delete(player.id);
         return;
       }
-      // 比赛中/回放挑战世界跳过：房间统一时间由 beginRace 定（CP 脚本也会改），
-      // 冻结定时器把个人时间拉回会覆盖房间统一时间、与回退检查点的 time 回滚冲突
-      //（对齐 syncWorldClock/rotateWeather 的比赛跳过口径）
-      if (isInRace(player.id)) return;
+      // 比赛中/回放观看/影子挑战中跳过：房间统一时间由 beginRace 定（CP 脚本
+      // 也会改）、回放每帧 setTime 录制赛道时间——冻结定时器把个人时间拉回
+      // 会覆盖房间/回放时间轴（回放画面时钟被硬切），对齐 syncWorldClock/
+      // rotateWeather 与 getDisplayTime 的跳过口径
+      if (isInRace(player.id) || isInChallenge(player.id) || !!getReplaySession(player.id)) return;
       player.setTime(setting.timeHour, setting.timeMinute);
     }, 60_000);
     timeFlowTimers.set(player.id, timer);

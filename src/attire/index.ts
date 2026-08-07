@@ -1153,6 +1153,16 @@ function endVehicleAttireEdit(player: Player, reapply: boolean): void {
   const st = vehicleEditing.get(player.id);
   stopVehEditPoll(player.id);
   vehicleEditing.delete(player.id);
+  // 操作框还开着（世界变化/进比赛退出等路径）：显式关掉客户端对话框——
+  // 只清服务器会话的话，SA 对话框不随世界切换自动关闭，会残留在新世界成为
+  // 无响应死框（直到玩家手动应答），进比赛画面被遮挡
+  if (st?.dialogOpen) {
+    try {
+      Dialog.close(player);
+    } catch {
+      /* 已失效 */
+    }
+  }
   if (reapply && st) {
     const veh = getOwnedVehicle(player.id);
     if (veh && veh.isValid()) void applyVehiclePreset(veh, st.presetId, player.id);
@@ -1274,10 +1284,15 @@ async function showVehicleEditDialog(player: Player): Promise<void> {
       }),
     );
     if (r && r.response === 1) {
-      const v = parseFloat(r.inputText.trim());
-      if (Number.isFinite(v) && v > 0) {
+      // 严格数字格式 + 合理上限：parseFloat 会放行 "0.1abc"→0.1、无上限输入
+      // 100000 会把挂件甩出地图（位置 1e5 单位）且保存落库
+      const s = r.inputText.trim();
+      const v = /^\d+(\.\d+)?$/.test(s) ? parseFloat(s) : NaN;
+      if (Number.isFinite(v) && v >= 0.01 && v <= 10) {
         st.step = v;
         player.sendClientMessage(COLOR_WHITE, `[装扮] 微调步长已设为 ${v}`);
+      } else {
+        player.sendClientMessage(COLOR_ERROR, "[装扮] 步长需为 0.01-10 之间的数字");
       }
     }
     st.dialogOpen = false;
@@ -1291,18 +1306,25 @@ async function showVehicleEditDialog(player: Player): Promise<void> {
     return;
   }
   // 保存并退出：工作副本写 DB → 重建生效
-  await prisma.vehiclePresetItem.update({
-    where: { id: st.itemId },
-    data: {
-      x: st.work.x,
-      y: st.work.y,
-      z: st.work.z,
-      rX: st.work.rX,
-      rY: st.work.rY,
-      rZ: st.work.rZ,
-    },
-  });
-  player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
+  try {
+    await prisma.vehiclePresetItem.update({
+      where: { id: st.itemId },
+      data: {
+        x: st.work.x,
+        y: st.work.y,
+        z: st.work.z,
+        rX: st.work.rX,
+        rY: st.work.rY,
+        rZ: st.work.rZ,
+      },
+    });
+    player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
+  } catch (e) {
+    // 保存失败（条目可能被并发删除/DB 抖动）：不还原也不退出——提示后留在编辑
+    logger.error(`[attire] 保存车辆挂件编辑失败 ${player.getName().name}`, e);
+    player.sendClientMessage(COLOR_ERROR, "[装扮] 保存失败，请重试");
+    return;
+  }
   endVehicleAttireEdit(player, true);
 }
 
@@ -1372,9 +1394,13 @@ async function startEditVehicleAttire(
       if (left) nudgeVehicleAttire(player.id, st2, -1);
       else if (right) nudgeVehicleAttire(player.id, st2, 1);
     }
-    // 重开操作框：小键盘 2 或 方向键 ↓（边沿触发）
+    // 重开操作框：小键盘 2 或 方向键 ↓（边沿触发）。
+    // 必须 dialogOpen 守卫：对话框打开时 ↓ 是列表导航/取消键，此时重开会用新
+    // 对话框替换 pending 的旧框（infernus show 先 close 旧框 → 旧框 promise
+    // reject → 被 showDialog 当取消 → endVehicleAttireEdit 杀掉会话 + 还原未
+    // 保存微调），新框又因会话已删而失效——"一按即坏"。想重开先关闭当前框
     const down = (keys & KeysEnum.ANALOG_DOWN) !== 0 || ud === KeysEnum.KEY_DOWN;
-    if (down && !st2.prevKeys) {
+    if (down && !st2.prevKeys && !st2.dialogOpen) {
       void showVehicleEditDialog(p);
     }
     st2.prevKeys = down ? 1 : 0;
@@ -1606,8 +1632,20 @@ async function confirmDeletePreset(
  * 清理（编辑中进赛道：挂件/轮询/dialog 全部退出，防残留）。 */
 export function cleanupAttireEditing(playerId: number): void {
   playerEditing.delete(playerId);
+  const st = vehicleEditing.get(playerId);
   stopVehEditPoll(playerId); // 停按键微调轮询（编辑态随断线/重生清除）
   vehicleEditing.delete(playerId);
+  // 编辑中的车辆操作框还开着：关掉客户端对话框（进比赛/重生后旧框残留会遮挡）
+  if (st?.dialogOpen) {
+    const p = Player.getInstance(playerId);
+    if (p) {
+      try {
+        Dialog.close(p);
+      } catch {
+        /* 已失效 */
+      }
+    }
+  }
 }
 
 /**

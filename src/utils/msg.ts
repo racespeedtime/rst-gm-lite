@@ -38,6 +38,8 @@ export const PREFIX = {
   drift: "[漂移]",
   /** 回放 */
   replay: "[回放]",
+  /** 天气 / 世界时间 */
+  weather: "[天气]",
   /** 影子挑战 */
   challenge: "[影子]",
   /** 爱车 / 车辆 */

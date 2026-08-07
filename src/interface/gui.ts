@@ -223,7 +223,10 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
   if (gui.speedoTd.length > 0) {
     const kmhInt = Math.floor(kmh);
     const nowTs = Date.now();
-    if (kmhInt !== gui.speedoKmh || nowTs - gui.speedoAt >= 1000) {
+    // 兜底周期 3s：安全网只需保证"最坏 3 秒内恢复"，1s 会让静止玩家也每秒
+    // 无条件 1 setString + 20 setColor + 20 show = 41 native/s/人（500 人
+    // ≈2 万 native/s 走 JS→FFI 桥，规模性开销）
+    if (kmhInt !== gui.speedoKmh || nowTs - gui.speedoAt >= 3000) {
       gui.speedoKmh = kmhInt;
       gui.speedoAt = nowTs;
       updateSpeed2d(player, gui.speedoTd, kmh);
