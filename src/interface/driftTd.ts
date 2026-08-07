@@ -53,12 +53,15 @@ export function createDriftTd(player: Player): DriftTdState {
   };
 }
 
-/** 状态 → 徽章文案与目标色（漂移亮橙/无活动白；ASCII 兼容，TextDraw 不支持中文） */
+/** 状态 → 徽章文案与目标色（漂移亮橙/无活动白；ASCII 兼容，TextDraw 不支持中文）。
+ *  无活动（status=none）仍返回 "xN" 而非空串：徽章与数字同生共死——只要整组
+ *  可见（score>0 的收尾展示期），徽章就有文案，绝不单边隐藏造成"数字还在、
+ *  倍率先没了"的不同步 */
 function statusBadge(status: DriftStatus, multiplier: number): { text: string; color: number } {
   if (status === "drift") {
     return { text: `DRIFT x${multiplier}`, color: 0xffaa00ff };
   }
-  return { text: "", color: 0xffffffff };
+  return { text: `x${multiplier}`, color: 0xffffffff };
 }
 
 /** 当前渲染色向目标色平滑过渡（每 tick 15% 步进，SA 色值 0xRRGGBBAA） */
@@ -71,9 +74,9 @@ function stepColor(from: number, target: number): number {
   return (r & 0xff0000) | (g & 0xff00) | (b & 0xff) | 0xff;
 }
 
-/** 千分位（12345 → 12,345） */
+/** 分数纯数字（用户明确不要千分位逗号分隔） */
 function fmtScore(n: number): string {
-  return Math.max(0, Math.floor(n)).toLocaleString("en-US");
+  return String(Math.max(0, Math.floor(n)));
 }
 
 /** 刷新漂移积分 TD（按玩家当前状态/分数；无活动且分数 0 隐藏，文本 diff 去重） */
@@ -92,12 +95,9 @@ export function updateDriftTd(state: DriftTdState, player: Player): void {
     }
     if (badge.text !== state.lastBadge) {
       state.lastBadge = badge.text;
-      if (badge.text.length > 0) {
-        state.badgeTd.setString(badge.text);
-        state.badgeTd.show(player);
-      } else {
-        state.badgeTd.hide(player);
-      }
+      // 徽章始终有文案（statusBadge 无活动也返回 xN）——只 setString，显隐由
+      // 下方 lastVisible 块与数字一起切（同步出现/消失）
+      state.badgeTd.setString(badge.text);
     }
   }
   // 显隐切换才 show/hide（活动状态翻转时）

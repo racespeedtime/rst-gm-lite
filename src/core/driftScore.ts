@@ -7,7 +7,8 @@ import { Player, PlayerStateEnum, VehicleEvent } from "@infernus/core";
  *   （DRIFT_BREAK_GRACE_MS，对齐参考实现的超时语义）——短暂失速/回正不打断连击
  * - 显示分数走"滚动逼近"动画（displayScore 每 tick 向实际 score 靠拢）
  * - 单次漂移积分有上限（SCORE_CAP）：加到上限停止累加
- * - 无漂移活动超时（DRIFT_RESET_MS）→ 积分归 0（TD 隐藏，下次重新开始计算）
+ * - 无漂移活动超过宽限（1.5s）→ 本次漂移结束：倍率归 1、积分归 0、整组隐藏
+ *   （数字与倍率同步消失，下次漂移重新开始计算）
  * - 车身损伤状态变化（碰撞/爆胎/部件掉落）→ 打断：积分归 0 重来
  * - 无独立定时器：由 gui 100ms tick 调 tickDriftScore（onExit 由 clearAllTimers 兜底）
  * - per-player 状态 Map，断线经 cleanupDriftScore 清理
@@ -33,8 +34,6 @@ const DRIFT_ANGLE_MAX = 80;
 const DRIFT_SPEED_MIN = 45;
 /** 单次漂移积分上限（加到上限停止累加，数字不再变大） */
 const SCORE_CAP = 99999;
-/** 无漂移活动超过该时长 → 积分归 0（TD 隐藏，下次重新开始计算） */
-const DRIFT_RESET_MS = 3000;
 
 export type DriftStatus = "drift" | "none";
 
@@ -116,8 +115,9 @@ function normAngle180(a: number): number {
 /** 无漂移活动：宽限内不打断连击、不退出漂移显示态——对齐参考实现的超时语义
  * （drift-detection.inc 条件不满足累积 1.5s 才 OnPlayerDriftStop）：漂移中瞬时
  * 跌破阈值（弯心减速/甩尾抖动）是常态，若每帧都置 status=none，倍率徽章会
- * 一显示就隐藏、连击永远攒不起来。超宽限才归 1 倍率 + 退出显示态；
- * 超过 DRIFT_RESET_MS 积分归 0（TD 隐藏，下次重新开始计算）。
+ * 一显示就隐藏、连击永远攒不起来。宽限到期 = 本次漂移结束：倍率归 1 + 积分
+ * 同步归 0（数字与倍率一起消失，无"倍率先走、数字多留"的错位窗口——显示
+ * 端两者同生共死）。
  * lastActiveAt 置 0 冻结累计——宽限内恢复漂移时首 tick elapsed=0，中断期不计入倍率。 */
 function handleIdleDrift(st: DriftScoreState, now: number): void {
   if (st.inactiveSince === 0) st.inactiveSince = now;
@@ -126,8 +126,6 @@ function handleIdleDrift(st: DriftScoreState, now: number): void {
     st.status = "none";
     st.multiplier = 1;
     st.multiplierMs = 0;
-  }
-  if (now - st.inactiveSince >= DRIFT_RESET_MS) {
     st.score = 0;
     st.displayScore = 0;
     st.inactiveSince = 0;
@@ -138,8 +136,8 @@ function handleIdleDrift(st: DriftScoreState, now: number): void {
  * 每 tick 推进玩家漂移积分（gui 100ms tick 调用）：
  * - 读车辆速度（getVelocity 世界轴 ×180 = km/h）与车头方向（getMatrix.at* 单位向量）
  * - 漂移角 = 车身朝向角（atan2(atY,atX)）与运动方向角（atan2(vy,vx)）的夹角差；
- *   漂移 = 速度 ≥ 45 且 漂移角 ∈ [12°, 80°]；否则无活动（宽限内不打断连击，
- *   超宽限倍率归 1、超时积分归 0）
+ *   漂移 = 速度 ≥ 45 且 漂移角 ∈ [12°, 80°]；否则无活动（1.5s 宽限内不打断连击，
+ *   宽限到期倍率归 1、积分归 0——数字与倍率同步消失）
  * - 漂移：按强度累加 score（×multiplier），封顶 SCORE_CAP；累计 2s 倍率 +1（封顶 ×8）
  * - displayScore 每 tick 向 score 逼近（滚动动画：差值的 20% 步进，差 <10 直追）
  */
