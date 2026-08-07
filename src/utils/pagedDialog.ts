@@ -5,6 +5,8 @@ import { showDialog } from "@/utils/dialog";
 const NAV_PREV = -1;
 /** 分页导航哨兵：下一页 */
 const NAV_NEXT = -2;
+/** 分页导航哨兵：手输页码跳转 */
+const NAV_JUMP = -3;
 
 /**
  * 分页页码内存缓存（不落库）：playerId → cacheKey → 上次停留页（0 起）。
@@ -61,6 +63,7 @@ export interface PagedDialogResult<T> {
  * 单列（无 headers）：LIST 样式，首尾自动追加"← 上一页 / 下一页 →"导航行。
  * 多列（传 headers）：TABLIST_HEADERS 样式，表头 + 每行多列（\t 分隔），
  * 导航行统一放数据行之后，表头不占可选行号（TABLIST 的 listItem 从首个数据行起算）。
+ * 多页时底部追加"输入页码跳转（1-N）"：点它弹 INPUT 输页码直达，越界提示留本页。
  * 内部循环翻页，直到选中真实条目（selectable=true）返回结果，
  * 或用户取消/关闭/断线返回 null。
  */
@@ -128,6 +131,11 @@ export async function showPagedDialog<T>(
       lines.push("{FFD700}下一页 →");
       nav.set(row++, NAV_NEXT);
     }
+    // 手输页码跳转：多页时提供输入入口（长列表免连续翻页）
+    if (pageCount > 1) {
+      lines.push("{FFD700}输入页码跳转（1-" + String(pageCount) + "）");
+      nav.set(row++, NAV_JUMP);
+    }
     if (pageCount > 1) {
       lines.push(`{808080}—— 第 ${page + 1}/${pageCount} 页 ——`);
     }
@@ -154,6 +162,29 @@ export async function showPagedDialog<T>(
       page = Math.min(pageCount - 1, page + 1);
       savePage();
       continue;
+    }
+    if (target === NAV_JUMP) {
+      // 手输页码跳转：INPUT 弹窗（1-based 展示），非法/越界留在当前页并提示
+      const jr = await showDialog(
+        player,
+        new Dialog({
+          style: DialogStylesEnum.INPUT,
+          caption: "输入页码",
+          info: `共 ${pageCount} 页，当前第 ${page + 1} 页。输入目标页码（1-${pageCount}）：`,
+          button1: "跳转",
+          button2: "取消",
+        }),
+      );
+      if (jr && jr.response === 1) {
+        const n = parseInt(jr.inputText.trim(), 10);
+        if (Number.isInteger(n) && n >= 1 && n <= pageCount) {
+          page = n - 1;
+          savePage();
+          continue;
+        }
+        player.sendClientMessage("#ff5555", `页码需在 1-${pageCount} 之间`);
+      }
+      continue; // 取消/非法：留在当前页
     }
     if (target === undefined) continue; // 页脚行/点按钮：留在本页
     if (!selectable) continue; // 浏览模式：点普通条目忽略，留在本页
