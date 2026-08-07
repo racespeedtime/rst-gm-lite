@@ -535,6 +535,7 @@ async function listSystemTeleports(player: Player, back?: MenuBack): Promise<voi
   const r = await showPagedDialog(player, {
     caption: "系统传送点",
     data: points,
+    cacheKey: "tp:system", // 传送点列表常翻页找点，记住上次位置
     format: (p) => `/${p.name}${p.description ? `（${p.description}）` : ""}`,
     button1: "传送",
     button2: "取消",
@@ -571,6 +572,7 @@ async function listUserTeleports(player: Player, back?: MenuBack): Promise<void>
   const r = await showPagedDialog(player, {
     caption: "用户传送点",
     data: points,
+    cacheKey: "tp:user", // 用户传送点列表常翻页找点，记住上次位置
     format: (p) => `//${p.name}${p.description ? `（${p.description}）` : ""}`,
     button1: "传送",
     button2: "取消",
@@ -719,6 +721,7 @@ async function manageTeleports(player: Player, back?: MenuBack): Promise<void> {
   const r = await showPagedDialog(player, {
     caption: "管理传送点",
     data: points,
+    cacheKey: "tp:manage", // 管理列表常翻页找点删除，记住上次位置
     format: (p) =>
       `${p.isSystem ? "/" : "//"}${p.name}${p.description ? `（${p.description}）` : ""}`,
     button1: "删除",
