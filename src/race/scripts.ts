@@ -6,7 +6,7 @@ import {
   getOwnedVehicle,
   registerOwnedVehicle,
   getOrCreateUserVehicle,
-  addVehicleComponentIfPossible,
+  addNitro,
 } from "@/vehicles";
 import { applyVehiclePreset } from "@/attire";
 import { getAuthState } from "@/auth/auth";
@@ -262,7 +262,7 @@ export function execCpScript(
       v.create();
       v.setVirtualWorld(player.getVirtualWorld());
       v.linkToInterior(player.getInterior());
-      addVehicleComponentIfPossible(v, 1010); // 氮气（对齐比赛默认车/编辑器车，cveh 换出的新车同样带）
+      addNitro(v); // 氮气（对齐比赛默认车/编辑器车，cveh 换出的新车同样带）
       v.putPlayerIn(player, 0);
       // 恢复原速（司机/乘客一律恢复，对齐原版 SetVehicleVelocity 无条件执行）
       if (oldVelo) {

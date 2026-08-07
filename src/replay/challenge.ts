@@ -14,12 +14,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isInRace } from "@/race/room";
-import {
-  getOwnedVehicle,
-  spawnVehicle,
-  destroyPlayerVehicle,
-  addVehicleComponentIfPossible,
-} from "@/vehicles";
+import { getOwnedVehicle, spawnVehicle, destroyPlayerVehicle, addNitro } from "@/vehicles";
 import {
   setIntervalSafe,
   clearIntervalSafe,
@@ -224,7 +219,7 @@ function renderGhost(ch: ChallengeSession): void {
     // （与回放 playback renderGhost 同一套逻辑；起始/播完后 atEnd 不再补）
     if (s.keys & KeysEnum.SPRINT && !atEnd && now - ch.ghost.lastNitroAt >= 500) {
       ch.ghost.lastNitroAt = now;
-      addVehicleComponentIfPossible(ch.ghost.vehicle, 1010);
+      addNitro(ch.ghost.vehicle);
     }
     emulateDriverSync(ch.ghost.npcPlayerId, ch.ghost.vehicle, s, atEnd);
   } catch (e) {
@@ -332,7 +327,7 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
     owned.setVirtualWorld(ch.worldId);
     owned.setHealth(1000);
     owned.repair();
-    addVehicleComponentIfPossible(owned, 1010);
+    addNitro(owned);
   } else {
     if (owned) destroyPlayerVehicle(player.id); // 车已毁（爆炸残留失效实体）
     // pendingRespawn 与 ensureChallengeCar 共用：刷车期间（可能跨 tick/go 的
@@ -907,7 +902,7 @@ async function startChallengeCore(
     });
     veh.create();
     veh.setVirtualWorld(worldId);
-    addVehicleComponentIfPossible(veh, 1010); // 氮气（影子车与录制时玩家爱车一致）
+    addNitro(veh); // 氮气（影子车与录制时玩家爱车一致）
     // 锁门防玩家开走影子车（影子只可看不可开；NPC 已在车内不受影响）
     veh.setParamsEx(true, false, false, true, false, false, false);
     npc.setVirtualWorld(worldId);

@@ -161,7 +161,7 @@ export async function spawnVehicle(
     playerVehs.set(player.id, veh);
     veh.setVirtualWorld(player.getVirtualWorld());
     veh.linkToInterior(player.getInterior());
-    addVehicleComponentIfPossible(veh, 1010); // 氮气
+    addNitro(veh); // 氮气
     // 应用完整预设外观（颜色/paintjob/改装件 + 挂件），默认预设挂件也自动生效
     // （改装店装的 mod 已存进默认预设 mod_components，重刷车随预设一起应用）
     await applyVehiclePreset(veh, uv.defaultPresetId, player.id);
@@ -283,7 +283,7 @@ export async function summonMyVehicle(player: Player): Promise<void> {
   veh.setZAngle(angle);
   veh.setVirtualWorld(player.getVirtualWorld());
   veh.linkToInterior(player.getInterior());
-  addVehicleComponentIfPossible(veh, 1010);
+  addNitro(veh);
   veh.putPlayerIn(player, 0);
   player.sendClientMessage(COLOR_SUCCESS, "爱车已召唤到身边");
 }

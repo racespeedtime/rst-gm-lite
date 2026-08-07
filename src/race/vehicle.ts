@@ -1,5 +1,5 @@
 import { Player, Vehicle } from "@infernus/core";
-import { destroyPlayerVehicle, addVehicleComponentIfPossible } from "@/vehicles";
+import { destroyPlayerVehicle, addNitro } from "@/vehicles";
 import { syncNoCollisionState } from "@/core/vehicleAuto";
 import { getSetting } from "@/personalize/settings";
 import { getFirstCvehModel, registerScriptVehicle } from "./scripts";
@@ -54,6 +54,6 @@ export function spawnRaceVehicleAt(
   registerScriptVehicle(player.id, veh);
   veh.setVirtualWorld(player.getVirtualWorld());
   veh.linkToInterior(player.getInterior());
-  addVehicleComponentIfPossible(veh, 1010); // 氮气
+  addNitro(veh); // 氮气
   veh.putPlayerIn(player, 0);
 }

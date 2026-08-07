@@ -12,7 +12,7 @@ import {
   VehicleEvent,
 } from "@infernus/core";
 import { getAuthState } from "@/auth/auth";
-import { addVehicleComponentIfPossible } from "@/vehicles";
+import { addNitro } from "@/vehicles";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { isInRace } from "@/race/room";
 import { clearTimeoutSafe, setTimeoutSafe } from "@/core/timers";
@@ -208,7 +208,7 @@ function createDrifter(def: DrifterDef): void {
     vehicle.create();
     vehicle.setVirtualWorld(PUBLIC_WORLD_ID);
     vehicle.linkToInterior(0);
-    addVehicleComponentIfPossible(vehicle, 1010); // 氮气（对齐原版 NPC 漂移车带氮气）
+    addNitro(vehicle); // 氮气（对齐原版 NPC 漂移车带氮气）
     // 锁门防玩家抢司机位把 NPC 挤下车（对齐回放系统 ghost 车处理；
     // 乘客用 putPlayerIn 强塞座位，F 键仍可正常下车）
     vehicle.setParamsEx(true, false, false, true, false, false, false);
@@ -294,7 +294,7 @@ function rebuildDrifterVehicle(ent: DrifterEntity): void {
     vehicle.create();
     vehicle.setVirtualWorld(PUBLIC_WORLD_ID);
     vehicle.linkToInterior(0);
-    addVehicleComponentIfPossible(vehicle, 1010); // 氮气
+    addNitro(vehicle); // 氮气
     vehicle.setParamsEx(true, false, false, true, false, false, false); // 锁门防抢司机位
     ent.vehicle = vehicle;
     if (ent.npc?.isValid()) {

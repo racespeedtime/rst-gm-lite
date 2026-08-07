@@ -10,7 +10,7 @@ import {
   VehicleEvent,
 } from "@infernus/core";
 import { getSetting } from "@/personalize/settings";
-import { getOwnedVehicle, addVehicleComponentIfPossible } from "@/vehicles";
+import { getOwnedVehicle, addNitro } from "@/vehicles";
 import { setIntervalSafe } from "@/core/timers";
 import { logger } from "@/logger";
 
@@ -138,7 +138,7 @@ async function vehicleTick(player: Player): Promise<void> {
     const n = (nitroCount.get(player.id) ?? 0) + 1;
     if (n >= NITRO_TICK_LIMIT) {
       nitroCount.set(player.id, 0);
-      addVehicleComponentIfPossible(veh, 1010);
+      addNitro(veh);
     } else {
       nitroCount.set(player.id, n);
     }
@@ -204,7 +204,7 @@ export function initVehicleAuto(): void {
     if (newState !== PlayerStateEnum.DRIVER) return next();
     const veh = player.getVehicle();
     if (!veh || !isOwnVehicle(player, veh)) return next();
-    addVehicleComponentIfPossible(veh, 1010); // 氮气
+    addNitro(veh); // 氮气
     // 重置计时：上车即补，之后的 15 秒计数从上车时刻重新开始（timer/hold 共用）
     nitroCount.set(player.id, 0);
     return next();
@@ -222,7 +222,7 @@ export function initVehicleAuto(): void {
       const veh = player.getVehicle();
       if (!veh || !isOwnVehicle(player, veh)) return;
       nitroCount.set(player.id, NITRO_TICK_LIMIT); // 占位：15 秒内不重复补
-      addVehicleComponentIfPossible(veh, 1010);
+      addNitro(veh);
     })();
     return next();
   });

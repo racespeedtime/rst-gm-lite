@@ -12,12 +12,7 @@ import {
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import {
-  getOwnedVehicle,
-  spawnVehicle,
-  destroyPlayerVehicle,
-  addVehicleComponentIfPossible,
-} from "@/vehicles";
+import { getOwnedVehicle, spawnVehicle, destroyPlayerVehicle, addNitro } from "@/vehicles";
 import {
   execCpScript,
   cleanupScriptVehicle,
@@ -2293,7 +2288,7 @@ function respawnToCpCore(
     owned.setZAngle(pt.angle);
     owned.setHealth(1000);
     owned.repair();
-    addVehicleComponentIfPossible(owned, 1010);
+    addNitro(owned);
     owned.putPlayerIn(player, 0);
   } else {
     if (owned) destroyPlayerVehicle(player.id); // 清理爆炸后残留的失效实体引用
