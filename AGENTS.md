@@ -53,6 +53,7 @@ pnpm serve              # 生产模式
 10. **比赛 CP 脚本**：`spawnpos` 返回 false **终止整条脚本链**；**第一 CP 的 `cveh` = 赛道标准车型**（进赛道 joinRoom 即按它匹配/懒创建爱车，触碰第一 CP 跳过换车，`skipCveh`）；其他 CP 的 cveh 照常（如 Car 赛道 CP11 的 562）；`cveh` 换车后新车 `registerOwnedVehicle` 登记为爱车（离开比赛保留），脚本车（`registerScriptVehicle`）随离开/断线/比赛结束清理（爱车跳过）。
 11. **爱车语义**：一人一车（`playerVehs`，`src/vehicles/index.ts`）。`spawnVehicle` 懒创建 `user_vehicle` 行（有该模型则复用外观预设），无该模型爱车则自动创建——"玩家始终用自己的爱车"。刷车/换车都会销毁旧车实体。
 12. **数据库**：**不要动数据库里的数据**（用户明确）；schema 改动用 `npx prisma migrate dev --name xxx`（prisma.config.ts 指向 `src/prisma/schema.prisma`），`public.sql` 是线上 dump 只读参考。
+13. **禁止模块顶层调用跨模块函数**：本仓存在多组 ESM 循环依赖（room↔editor、vehicles↔attire、room↔replay、worldenv↔race 等）。所有跨模块函数引用只允许出现在**事件回调/定时器/init 函数体内**（顶层只放 Map/常量/函数声明）——ESM live binding 在事件触发时必然已完整初始化，循环安全。一旦有人在模块顶层写 `const x = getDefaultRaceModel(...)` 这类带调用的一次性求值，会因环序 undefined/TDZ 崩溃且极难排查。新代码必须遵守；需要跨模块查询的独立状态（如 `isInRace`/`isEditing`）后续应下沉到独立 state 模块破环。
 
 ## Git 习惯
 
