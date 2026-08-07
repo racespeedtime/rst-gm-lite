@@ -143,6 +143,7 @@ async function raceListFlow(player: Player, mode: "ALL" | "MINE", back?: MenuBac
   const r = await showPagedDialog(player, {
     caption: mode === "MINE" ? "我的赛道" : "赛道列表",
     data: races,
+    cacheKey: `race:list:${mode}`, // 赛道列表常翻页找赛道，记住上次位置
     headers: isAll
       ? ["#", "名称", "长度", "圈数", "作者", "创建"]
       : ["#", "名称", "长度", "圈数", "创建"],

@@ -1,10 +1,23 @@
-import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
+import { Dialog, DialogStylesEnum, Player, PlayerEvent } from "@infernus/core";
 import { showDialog } from "@/utils/dialog";
 
 /** 分页导航哨兵：上一页 */
 const NAV_PREV = -1;
 /** 分页导航哨兵：下一页 */
 const NAV_NEXT = -2;
+
+/**
+ * 分页页码内存缓存（不落库）：playerId → cacheKey → 上次停留页（0 起）。
+ * 同一列表（cacheKey）再次打开时回到上次页；数据变化导致页数减少时
+ * clamp 回退（可能到第一页）。断线清理该玩家条目（防 playerId 复用残留）。
+ */
+const pageMem = new Map<number, Map<string, number>>();
+
+// 模块导入期注册（与各事件模块同构）：断线清掉该玩家的分页记忆
+PlayerEvent.onDisconnect(({ player, next }) => {
+  pageMem.delete(player.id);
+  return next();
+});
 
 export interface PagedDialogOptions<T> {
   /** 对话框标题 */
@@ -27,6 +40,12 @@ export interface PagedDialogOptions<T> {
   button1?: string;
   /** 取消按钮文字，默认 "取消" */
   button2?: string;
+  /**
+   * 页码记忆缓存键：传入则启用"再次进入回到上次页"（纯内存，不落库）。
+   * 用静态标识（如 "replay:mine"），不要用含数量/名字的动态串——数据变化时
+   * 页数减少会自动 clamp 回退（可能第一页）。不传则不记忆（每次从第一页起）。
+   */
+  cacheKey?: string;
 }
 
 export interface PagedDialogResult<T> {
@@ -57,12 +76,26 @@ export async function showPagedDialog<T>(
     selectable = true,
     button1 = "确定",
     button2 = "取消",
+    cacheKey,
   } = options;
   if (data.length === 0) return null;
   const isMulti = !!headers && headers.length > 0;
 
   const pageCount = Math.max(1, Math.ceil(data.length / pageSize));
+  // 启用页码记忆：初始页 = 缓存值 clamp 到有效范围（数据变少/删了条目导致页数
+  // 减少 → 自动回退到最后一页或第一页；不可能越界）。翻页时更新缓存。
   let page = 0;
+  if (cacheKey) {
+    const mem = pageMem.get(player.id);
+    const cached = mem?.get(cacheKey);
+    if (cached != null) page = Math.min(Math.max(0, cached), pageCount - 1);
+  }
+  const savePage = (): void => {
+    if (!cacheKey) return;
+    let mem = pageMem.get(player.id);
+    if (!mem) pageMem.set(player.id, (mem = new Map()));
+    mem.set(cacheKey, page);
+  };
 
   for (;;) {
     const start = page * pageSize;
@@ -114,14 +147,17 @@ export async function showPagedDialog<T>(
     const target = nav.get(res.listItem);
     if (target === NAV_PREV) {
       page = Math.max(0, page - 1);
+      savePage();
       continue;
     }
     if (target === NAV_NEXT) {
       page = Math.min(pageCount - 1, page + 1);
+      savePage();
       continue;
     }
     if (target === undefined) continue; // 页脚行/点按钮：留在本页
     if (!selectable) continue; // 浏览模式：点普通条目忽略，留在本页
+    savePage(); // 选中条目也记录当前页（下次进入回到同页）
     return { item: data[target], index: target, page };
   }
 }

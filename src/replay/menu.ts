@@ -87,6 +87,7 @@ export async function openReplayMenu(
   const r = await showPagedDialog(player, {
     caption: `${caption}（${list.length}）`,
     data: list,
+    cacheKey: `replay:mine:${type ?? "all"}`, // 记忆上次翻到的页（翻列表找片，退出再进回到原页）
     headers: ["类型", "赛道", "名次", "时长", "时间"],
     format: (v) => [
       typeLabel(v.type),
@@ -195,6 +196,7 @@ export async function openPublicReplayMenu(player: Player, back?: MenuBack): Pro
   const r = await showPagedDialog(player, {
     caption: `全部比赛回放（${list.length}）`,
     data: list,
+    cacheKey: "replay:public",
     headers: ["录者", "赛道", "名次", "时长", "时间"],
     format: (v) => [
       v.recorderName,

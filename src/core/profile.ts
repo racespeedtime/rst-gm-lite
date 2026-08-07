@@ -319,6 +319,7 @@ async function listPlayerReplays(
   const r = await showPagedDialog(player, {
     caption: `${targetName} 的比赛回放（${list.length}）`,
     data: list,
+    cacheKey: `replay:profile:${targetUserId}`, // 看同一玩家回放时记住页码
     headers: ["赛道", "名次", "时长", "时间"],
     format: (v) => [
       v.raceName || "—",
