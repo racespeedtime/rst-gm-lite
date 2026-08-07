@@ -6,13 +6,12 @@ import {
   PlayerEvent,
   RaceCheckpoint,
   RaceCpEvent,
-  TextDraw,
   VehicleEvent,
 } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import { getOwnedVehicle, spawnVehicle, destroyPlayerVehicle, addNitro } from "@/vehicles";
+import { getOwnedVehicle, spawnVehicle, destroyPlayerVehicle } from "@/vehicles";
 import {
   execCpScript,
   cleanupScriptVehicle,
@@ -22,7 +21,7 @@ import {
   type CpScriptContext,
 } from "./scripts";
 import { isEditing } from "./editor";
-import { reapplyCurrentPlayerPreset, cleanupAttireEditing } from "@/attire";
+import { cleanupAttireEditing } from "@/attire";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import {
@@ -38,210 +37,58 @@ import {
   isRecording,
   getRecording,
   suspendRecording,
-  resumeRecording,
   dropRecording,
-  rebindRecording,
 } from "@/replay/recorder";
-import {
-  startObservePlayer,
-  stopObserve,
-  isObserving,
-  cleanupObserve,
-  getObserverIdsOf,
-  getObserveTarget,
-  onObserveStart,
-  onObserveStop,
-} from "@/core/observe";
-import { getSafeGroundZ } from "@/core/colandreas";
-import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
-import { sessionManager } from "@/sessions/manager";
+import { startObservePlayer, stopObserve, isObserving, getObserverIdsOf } from "@/core/observe";
+import { getWorldWeather } from "@/core/worldenv";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { formatTime, formatRaceTimeCs } from "@/utils/format";
-import { PREFIX, sysMsg } from "@/utils/msg";
-import { MIN_Z } from "@/utils/map";
-import { COLOR_RACE } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
+import {
+  showNextCheckpoint,
+  syncCpToObservers,
+  clearSpectatorCpForMember,
+  clearRaceMapIcons,
+  cleanupSpectatorCpForRoom,
+  initCpArrowSync,
+} from "./cpArrow";
+import {
+  createRaceTd,
+  updateBestTd,
+  setRaceTdText,
+  rankSuffix,
+  destroyRaceTds,
+  syncRaceTds,
+} from "./raceTd";
+import { respawnToLastCp, respawnPlayerToCp } from "./respawn";
+import { cleanupExpiredReconnects, checkRoomState, restorePlayerAfterRace } from "./reconnect";
+import {
+  rooms,
+  playerRaces,
+  isInRace,
+  getRacePlayerState,
+  getRaceRoom,
+  broadcastToRoom,
+  allocRaceWorld,
+  freeRaceWorld,
+} from "./state";
+import type { PlayerRace, RaceRoom } from "./types";
+
+/**
+ * 比赛状态机（房间生命周期/进度推进/排名结算）——模块拆分后只承载状态**写**路径：
+ * - 单例状态与只读 getter：./state.ts（含房间 Map / 世界 id / 广播）
+ * - 类型定义：./types.ts
+ * - 断线重连 / 房间销毁判定 / 世界恢复：./reconnect.ts（cleanupRacePlayer /
+ *   tryReconnectRace / checkRoomState，本文件在成员离开/掉线路径调用）
+ * - 重生/回退（死亡 / /kill / 面板回退）：./respawn.ts
+ * - 比赛信息 TD（创建/刷新/销毁）：./raceTd.ts
+ * - 观战者 CP 箭头同步：./cpArrow.ts
+ * 对外保持原导入面（barrel 重新导出），外部模块无感知。
+ */
 
 /** 第一名完成后的结束宽限时长（毫秒） */
 const END_GRACE_MS = 20_000;
-/** 赛道名/ID 查重共用（roomUi 命令层也用：/r s /r info /r edit 按名或 id 查赛道） */
-export const UUID_RE =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-/** 比赛小地图图标索引（对齐原版 RACE_MAP_ICON_INDEX=1，避开大世界 map_icon 的 0-69） */
-const RACE_MAP_ICON_NEXT = 70;
-/** 比赛小地图图标类型：56 = 赛车 CP 预览图标（原版 RACE_MAP_ICON_TYPE） */
-const RACE_MAP_ICON_TYPE_NEXT = 56;
-/** 比赛房间独立世界起始 id（战局上限 1000，比赛从 1001 起；回放/挑战世界从
- *   REPLAY_WORLD_BASE=2001 起，两区间各 1000 个互不叠加） */
-export const RACE_WORLD_BASE = 1001;
-let nextRaceWorldId = RACE_WORLD_BASE;
-/**
- * 已销毁房间释放的比赛世界 id（复用防无界增长）：
- * 房间创建/销毁非常频繁（每人一房、结束即销毁），若只递增不复用，长期运行
- * 约 1000 个房间后 worldId 会追上回放世界基准 2001（REPLAY_WORLD_BASE），
- * 造成比赛与回放/挑战世界互相可见（跨世界实体穿模）。销毁时回收、创建时先取。
- */
-const freedRaceWorlds: number[] = [];
-
-function allocRaceWorld(): number {
-  return freedRaceWorlds.pop() ?? nextRaceWorldId++;
-}
-
-function freeRaceWorld(worldId: number): void {
-  // 只回收本模块分配的 id（防误收外部世界；RACE_WORLD_BASE 之上都属本模块）
-  if (worldId >= RACE_WORLD_BASE) freedRaceWorlds.push(worldId);
-}
-
-/** 比赛房间状态 */
-type RaceRoomState = "WAITING" | "COUNTDOWN" | "RACING" | "FINISHED";
-
-/** 玩家比赛状态（含圈数进度） */
-interface PlayerRace {
-  roomId: number;
-  cpIndex: number; // 当前已通过的最大 CP 下标（-1 = 未过任何 CP）
-  lap: number; // 当前圈（0 = 第一圈，laps-1 = 最后一圈）
-  startTime: number;
-  finished: boolean;
-  /** 当前名次（0-based，tickRooms 排名计算写入）。60fps TD 刷新（syncRaceTds）
-   * 只读该缓存——排名计算要做距离采样+排序，200ms 足够，高频刷新不重算 */
-  rank?: number;
-  /** 加入比赛前的世界（开赛切独立世界，离开/结束时恢复） */
-  prevWorld: number;
-  /** 过 CP 后（脚本执行完）的状态快照，按"比赛累计 CP 序号"索引：
-   *  k = lap × 一圈CP数 + cpIndex（跨圈瞬间 cpIndex=-1、lap++，公式仍指向该 CP）。
-   *  记录 cveh 换车后的车型 + time/weather 脚本结果——重生多回退一格时
-   *  恢复目标 CP 触达后的状态（对齐"回放式状态回撤"，否则车模型/时间天气残留）。 */
-  cpSnapshots: CpSnapshot[];
-}
-
-/** 触达一个 CP 并执行完脚本后的状态快照（回退重生恢复用） */
-interface CpSnapshot {
-  vehModel: number; // 过该 CP 后玩家座驾车型（cveh 换车后的）
-  hour: number;
-  minute: number;
-  weather: number;
-}
-
-/** 比赛信息 UI（对齐原版 CreatePRaceTextDraw 的 4 行独立 TD） */
-interface RoomRaceTds {
-  cp: TextDraw; //   C  P / ~p~进度~w~/~y~总数
-  time: TextDraw; // TIME / mm:ss.cc
-  best: TextDraw; // BEST / mm:ss.cc（无记录 99:99:99）
-  rank: TextDraw; // RANK / N st/nd/rd/th
-}
-
-/** 比赛房间 */
-interface RaceRoom {
-  id: number;
-  raceId: string;
-  raceName: string;
-  authorName: string; // 赛道作者名（CP 脚本 #aname 变量，创建时预载避免逐脚本查库）
-  laps: number; // 圈数（赛道配置）
-  worldId: number; // 比赛独立世界（开赛时成员切换）
-  ownerId: number;
-  ownerUserId: string; // 房主 userId（重连恢复房主身份用）
-  state: RaceRoomState;
-  members: Map<number, Player>;
-  cps: {
-    index: number;
-    id: string;
-    x: number;
-    y: number;
-    z: number;
-    angle: number;
-    size: number;
-    scripts: string[];
-  }[];
-  results: { playerId: number; time: number; name: string }[];
-  /** 挂机检测：playerId -> 上次采样位置 + 已静止累计毫秒（仅 RACING 检测；
-   *  对齐原版 AFKTimes 每秒位移 <0.001 累计 45 秒移出赛道） */
-  afk: Map<number, { x: number; y: number; z: number; idleMs: number }>;
-  /** 最近一次 tickRooms 采样的成员位置（200ms 更新；掉线快照兜底——onDisconnect 时
-   *  Player.getInstance 可能已失效取不到坐标，用最近采样位置恢复重连定位） */
-  lastPositions: Map<number, { x: number; y: number; z: number }>;
-  endTimer?: NodeJS.Timeout;
-  /** 每个成员的比赛信息 TextDraw（playerId -> 4 行 TD，开赛时创建） */
-  raceTextTds: Map<number, RoomRaceTds>;
-  /** 比赛信息 TD 文本缓存（playerId -> 上次显示文本，成员与观战者各一条）。
-   *  60fps 高频刷新只对变化的内容 setString——静态/稳定段零 native 调用。
-   *  timeCs：上次显示的厘秒（秒表跳表去重，60fps 下大多数 tick 厘秒未变，
-   *  提前比较跳过 formatRaceTime 的格式化开销） */
-  tdTextCache: Map<number, { time: string; rank: string; timeCs: number }>;
-  /** 赛道个人最佳缓存（userId -> 最佳毫秒，开赛时查一次；重连复用） */
-  bestTimes: Map<string, number>;
-  /** 完成结果索引（playerId -> time），避免每 tick 线性查找 */
-  resultIndex: Map<number, number>;
-  /** 创建时间（WAITING 超时回收） */
-  createdAt: number;
-  /** 掉线重连：userId -> 重连截止时间戳（窗口内不清理）。
-   *  用 userId 而非 playerId 作 key：掉线期间 playerId 可能被新连接复用，
-   *  新玩家若命中旧窗口会劫持旧玩家的进度/名次/房主。 */
-  reconnectUntil: Map<string, number>;
-  /** 掉线重连：userId -> 断线时进度快照（含距下一 CP 距离——掉线玩家按快照
-   *  继续参与实时/最终排名，车停在原地被超越）。slot.playerId 为掉线时的
-   *  playerId：重连成功且 id 变化时用它把挂起的录制会话迁移到新 playerId；
-   *  超时落盘时也用它找挂起会话 */
-  reconnectSlots: Map<
-    string,
-    {
-      playerId: number;
-      cpIndex: number;
-      lap: number;
-      startTime: number;
-      prevWorld: number;
-      dist: number;
-      name: string;
-      /** 掉线瞬间位置：重连是全新连接（跳过 spawnPlayer/出生定位），须恢复到此
-       *  位置（配合 prevWorld 战局归属），否则玩家重连后出现在默认出生点 */
-      x: number;
-      y: number;
-      z: number;
-      /** 掉线瞬间原战局 id（callbacks 在 handlePlayerDisconnect 前快照）。sessionId
-       *  自增不复用——重连时按它精确匹配原战局（worldId 会被解散战局回收复用，
-       *  按 worldId 可能塞进无关新战局） */
-      sessionId?: number;
-    }
-  >;
-  /** 本场比赛参与过录制的成员（playerId → userId 快照：房间销毁且无人完成时
-   *  据此作废其未完成录像。存 userId 而非在线查 auth——掉线/重连超时者 auth
-   *  已清，离线作废依赖此快照） */
-  raceMembersLast: Map<number, string>;
-  /** 开赛时按房主设置定的房间统一时间天气（重连玩家是新连接，恢复用；
-   *  CP 脚本改时间天气后由脚本路径直接 setTime/setWeather，不更新此缓存） */
-  roomTime: { hour: number; minute: number };
-  roomWeather: number;
-}
-
-const rooms = new Map<number, RaceRoom>();
-const playerRaces = new Map<number, PlayerRace>();
-let nextRoomId = 1;
-/** 挂机检测参数（对齐原版 AFKTimes：静止累计超时移出比赛，防占坑不跑） */
-const AFK_IDLE_MS = 45_000; // 静止累计超 45s 移出比赛
-const AFK_WARN_MS = 30_000; // 静止累计超 30s 提示一次
-/** 200ms 内位移 < 0.1（≈0.5m/s）判静止——比原版 0.001/s 宽松：防撞墙顶油门/
- *  被车流堵塞缓慢蠕动的活跃玩家被误判挂机（原版阈值过严曾被投诉误封） */
-const AFK_MOVE_EPS = 0.1;
-const AFK_TICK_MS = 200; // 与 tickRooms 周期一致（每 tick 固定累计）
-/** 重连窗口参数：预计时长 × 20%，上限 5 分钟、下限 30 秒；<2.5 分钟不支持 */
-const RECONNECT_RATIO = 0.2;
-const RECONNECT_MAX_MS = 5 * 60_000;
-const RECONNECT_MIN_MS = 30_000;
-const RECONNECT_SUPPORT_MIN_MS = 2.5 * 60_000;
-
-/** 玩家是否在比赛中 */
-export function isInRace(playerId: number): boolean {
-  return playerRaces.has(playerId);
-}
-
-/** 获取玩家比赛状态（供其他模块读取） */
-export function getRacePlayerState(playerId: number): PlayerRace | undefined {
-  return playerRaces.get(playerId);
-}
-
-/** 获取比赛房间（供其他模块读取） */
-export function getRaceRoom(roomId: number): RaceRoom | undefined {
-  return rooms.get(roomId);
-}
 
 /**
  * 比赛中允许的主命令白名单（对齐原版 GP:545-622）：
@@ -268,195 +115,14 @@ export function isRaceCommandAllowed(command: string): boolean {
   return RACE_SAFE_COMMANDS.has(command);
 }
 
-/** 房间方法：广播 */
-/** 广播给房间内所有在线成员（roomUi 命令层加入提示也用）。
- *  前缀统一在此拼接（PREFIX.race）：调用点只传正文，防漏写/手写前缀 */
-export function broadcastToRoom(room: RaceRoom, msg: string): void {
-  for (const m of room.members.values()) {
-    m.sendClientMessage(COLOR_RACE, `${PREFIX.race} ${msg}`);
-  }
-}
-
-/**
- * 恢复玩家离开比赛后的环境：切回原世界 + 按个人设置恢复时间天气。
- * 车辆：玩家坐着的车切回；若玩家已下车，其爱车（playerVehs）也一并切回原世界
- * （防爱车遗留在比赛独立世界成为幽灵车，对齐原版 Race_Game_Quit 的车世界恢复）。
- */
-function restorePlayerAfterRace(player: Player, prevWorld: number): void {
-  if (!player.isConnected()) return;
-  player.setVirtualWorld(prevWorld);
-  if (player.isInAnyVehicle()) {
-    player.getVehicle()!.setVirtualWorld(prevWorld);
-  }
-  const owned = getOwnedVehicle(player.id);
-  if (owned && owned.isValid() && owned !== player.getVehicle()) {
-    owned.setVirtualWorld(prevWorld);
-  }
-  // 按个人设置恢复时间天气（CP 脚本改过的 time/weather 在此重置）
-  void applyWorldEnv(player);
-}
-
-/**
- * 估算比赛预计时长（毫秒）：总距离 / 平均速度（约 90 km/h = 25 m/s），再 ×圈数。
- * 用于重连窗口计算。
- */
-function estimateRaceDurationMs(room: RaceRoom): number {
-  // cps 是完整路线（每圈），总长 = 相邻 CP 距离和 × 圈数
-  let total = 0;
-  for (let i = 0; i < room.cps.length - 1; i++) {
-    const dx = room.cps[i].x - room.cps[i + 1].x;
-    const dy = room.cps[i].y - room.cps[i + 1].y;
-    const dz = room.cps[i].z - room.cps[i + 1].z;
-    total += Math.sqrt(dx * dx + dy * dy + dz * dz);
-  }
-  const avgSpeed = 25; // m/s ≈ 90 km/h
-  return (total / avgSpeed) * 1000 * room.laps;
-}
-
-/**
- * 玩家断线：进入重连窗口（不立即清成员/转移房主）。
- * - 短比赛（<2.5 分钟）不支持重连 → 走原断线逻辑
- * - 支持重连的比赛：记录进度快照 + 重连截止时间
- */
-export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number }): void {
-  const pr = playerRaces.get(playerId);
-  if (pr) {
-    const room = rooms.get(pr.roomId);
-    if (room) {
-      const tds = room.raceTextTds.get(playerId);
-      if (tds) {
-        // infernus 在玩家 onDisconnect 时已自动销毁其全部 PlayerTextDraw
-        //（_id 回到 65535），此处必须 isValid 守卫——裸 destroy 会抛
-        // TextDrawException 中断清理，TD 条目残留，tickRooms/syncRaceTds
-        // 继续对已销毁 TD setString 无限刷屏
-        for (const td of Object.values(tds)) {
-          if (td.isValid()) td.destroy();
-        }
-        room.raceTextTds.delete(playerId);
-      }
-      room.tdTextCache.delete(playerId);
-      // 掉线成员下线：清理指向该成员的观察者 CP 箭头（车停原地无人可跟）
-      for (const [oid, mid] of [...spectatorCpMap]) {
-        if (mid === playerId) clearSpectatorCp(oid);
-      }
-      // 比赛中且比赛支持重连 → 进入重连窗口（已完成玩家不开窗口：成绩已纪录，防重连后重复完成）
-      const estMs = estimateRaceDurationMs(room);
-      if (room.state === "RACING" && !pr.finished && estMs >= RECONNECT_SUPPORT_MIN_MS) {
-        // 窗口 key 用 userId（防 playerId 复用劫持）；auth 在断线时仍可用
-        //（closePlayerSession 清 auth 在其后执行），取不到则回退 playerId 字符串
-        const uid = getAuthState(playerId)?.userId ?? String(playerId);
-        const window = Math.min(
-          RECONNECT_MAX_MS,
-          Math.max(RECONNECT_MIN_MS, estMs * RECONNECT_RATIO),
-        );
-        room.reconnectUntil.set(uid, Date.now() + window);
-        // 快照含"距下一 CP 距离"：掉线玩家按掉线瞬间位置/CP 继续参与排名。
-        // onDisconnect 时 getPos 可能已失效（返回 undefined）→ 退化为 0,0,0，重连
-        // 后玩家会出生在默认出生点、与"继续第 N 圈"脱节——用 tickRooms 最近一次
-        // 采样位置兜底（200ms 内的最后已知位置，比 0,0,0 精确得多）
-        const discPlayer = Player.getInstance(playerId);
-        const dpos = discPlayer?.getPos() ?? room.lastPositions.get(playerId);
-        const nextCp = room.cps[pr.cpIndex + 1];
-        let dist = 0;
-        if (nextCp && dpos) {
-          dist = Math.hypot(dpos.x - nextCp.x, dpos.y - nextCp.y, dpos.z - nextCp.z);
-        }
-        room.reconnectSlots.set(uid, {
-          playerId,
-          cpIndex: pr.cpIndex,
-          lap: pr.lap,
-          startTime: pr.startTime,
-          prevWorld: pr.prevWorld,
-          dist,
-          name: discPlayer?.getName().name ?? `玩家${playerId}`,
-          // 掉线瞬间位置：重连是全新连接，恢复时 setPos 回此处（防出现在默认出生点）
-          x: dpos?.x ?? 0,
-          y: dpos?.y ?? 0,
-          z: dpos?.z ?? 0,
-          // 掉线瞬间原战局 id 快照（由 callbacks 在 handlePlayerDisconnect 删
-          // playerSessions 之前传入——onDisconnect 阶段再取 getPlayerSession 只会
-          // 命中公共大世界、恒为 0）
-          sessionId: opts?.sessionId,
-        });
-        room.members.delete(playerId);
-        room.lastPositions.delete(playerId); // 掉线快照缓存随成员移出清理
-        room.afk.delete(playerId); // 挂机累计随断线清理（重连是新上下文，从零累计）
-        playerRaces.delete(playerId);
-        // 录制挂起：会话保持、掉线期间 fallbackSample 生成静止帧（车停在掉线
-        // 位置、时间流逝），重连成功后 resume 续录——回放完整不中断，能看到
-        // 掉线后车原地不动那段的帧。不落盘（forceStopRecording 会跳过挂起）。
-        suspendRecording(playerId);
-        // 断线期间脚本车辆销毁（重连后玩家自己重新刷车/用脚本）
-        cleanupScriptVehicle(playerId);
-        // 房主断线：窗口内不转移房主（重连恢复），但保留窗口
-        broadcastToRoom(
-          room,
-          `${Player.getInstance(playerId)?.getName().name ?? "玩家"} 掉线，${Math.round(window / 1000)} 秒内可重连`,
-        );
-        cleanupObserve(playerId);
-        return;
-      }
-      // 不支持重连或非比赛状态 → 原断线逻辑
-      room.members.delete(playerId);
-      room.lastPositions.delete(playerId); // 掉线快照缓存随成员移出清理
-      room.afk.delete(playerId); // 挂机累计随断线清理（防 Map 残留到房间销毁）
-      // 房主掉线 → 转移房主
-      if (room.ownerId === playerId) {
-        const next = [...room.members.keys()][0];
-        if (next != null) {
-          room.ownerId = next;
-          room.ownerUserId = getAuthState(next)?.userId ?? "";
-          const np = Player.getInstance(next);
-          broadcastToRoom(room, `房主已掉线，${np?.getName().name ?? next} 成为新房主`);
-        }
-      }
-      if (room.state === "WAITING") {
-        broadcastToRoom(room, `一名玩家离开了比赛`);
-      }
-      checkRoomState(room);
-    }
-    playerRaces.delete(playerId);
-  }
-  // 脚本车辆（cveh）随玩家断线清理
-  cleanupScriptVehicle(playerId);
-  // 清理观战状态（被观战者/观战者掉线）
-  cleanupObserve(playerId);
-}
-
-/** 清理过期的重连窗口（tickRooms 调用）：窗口到期的玩家彻底移出房间 */
-function cleanupExpiredReconnects(room: RaceRoom): void {
-  const now = Date.now();
-  for (const [uid, until] of room.reconnectUntil) {
-    if (now >= until) {
-      const slot = room.reconnectSlots.get(uid);
-      room.reconnectUntil.delete(uid);
-      room.reconnectSlots.delete(uid);
-      // 重连超时：挂起中的录制落盘保留（未完成段，含掉线静止帧——玩家没回来，
-      // 录像停在原地；无人完成则由房间销毁路径作废）。用 slot.playerId（掉线时
-      // 的 id）找挂起会话——挂起会话键控在 playerId 上。归属校验：断线期间该
-      // playerId 可能被新连接复用开了录制（同一房间也可能被同房新成员复用——
-      // raceRoomId 会相同），必须再比 userId 才能确认是掉线者自己的会话，防误停
-      // 别人的活跃录制（与 endRoom/checkRoomState 的归属校验一致）
-      if (slot && isRecording(slot.playerId)) {
-        const rec = getRecording(slot.playerId);
-        if (rec && rec.userId === uid && (!rec.raceRoomId || rec.raceRoomId === room.id)) {
-          void stopRecording(slot.playerId, { quiet: true });
-        }
-      }
-      // 房主重连窗口过期 → 转移房主
-      if (slot && room.ownerUserId === uid) {
-        const next = [...room.members.keys()][0];
-        if (next != null) {
-          room.ownerId = next;
-          room.ownerUserId = getAuthState(next)?.userId ?? "";
-          const np = Player.getInstance(next);
-          broadcastToRoom(room, `房主重连超时，${np?.getName().name ?? next} 成为新房主`);
-        }
-      }
-    }
-  }
-  checkRoomState(room);
-}
+let nextRoomId = 1;
+/** 挂机检测参数（对齐原版 AFKTimes：静止累计超时移出比赛，防占坑不跑） */
+const AFK_IDLE_MS = 45_000; // 静止累计超 45s 移出比赛
+const AFK_WARN_MS = 30_000; // 静止累计超 30s 提示一次
+/** 200ms 内位移 < 0.1（≈0.5m/s）判静止——比原版 0.001/s 宽松：防撞墙顶油门/
+ *  被车流堵塞缓慢蠕动的活跃玩家被误判挂机（原版阈值过严曾被投诉误封） */
+const AFK_MOVE_EPS = 0.1;
+const AFK_TICK_MS = 200; // 与 tickRooms 周期一致（每 tick 固定累计）
 
 /**
  * 随机抽一张启用赛道（有 CP 的）。无可用返回 null。
@@ -602,8 +268,8 @@ export async function createRaceRoom(
  * 更新房间赛道数据 + 重定位所有成员（起点 + TD 刷新 + CP 箭头重建）。
  */
 export async function changeRoomTrack(player: Player, raceId?: string): Promise<boolean> {
-  const pr = playerRaces.get(player.id);
-  const room = pr ? rooms.get(pr.roomId) : undefined;
+  const pr = getRacePlayerState(player.id);
+  const room = pr ? getRaceRoom(pr.roomId) : undefined;
   if (!room) {
     sysMsg(player, "race", "你不在比赛房间中", "error");
     return false;
@@ -678,8 +344,8 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
  * 注：比赛结束（FINISHED）时房间已销毁（endRoom），重开需重新创建房间。
  */
 export async function restartRace(player: Player): Promise<void> {
-  const pr = playerRaces.get(player.id);
-  const room = pr ? rooms.get(pr.roomId) : undefined;
+  const pr = getRacePlayerState(player.id);
+  const room = pr ? getRaceRoom(pr.roomId) : undefined;
   if (!room) {
     sysMsg(player, "race", "你不在比赛房间中", "error");
     return;
@@ -918,9 +584,9 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
 
 /** 房主开始比赛：倒计时 5s */
 export async function startRace(player: Player): Promise<void> {
-  const pr = playerRaces.get(player.id);
+  const pr = getRacePlayerState(player.id);
   if (!pr) return;
-  const room = rooms.get(pr.roomId);
+  const room = getRaceRoom(pr.roomId);
   if (!room) return;
   if (room.ownerId !== player.id) {
     sysMsg(player, "race", "只有房主能开始比赛", "error");
@@ -1089,178 +755,6 @@ function beginRace(room: RaceRoom): void {
   broadcastToRoom(room, "比赛开始！");
 }
 
-/** 比赛信息 UI 通用样式（对齐原版 CreatePRaceTextDraw）：
- * font 2 / letter 0.238 x 1.19 / 左对齐 / 白 / outline 0 / shadow 1 / 无底色。
- * TextDraw 必须先 create() 再设置属性（否则抛 "Cannot set font before create"）。 */
-function raceTdBase(player: Player, y: number, text: string): TextDraw {
-  return new TextDraw({ player, x: 500, y, text })
-    .create()
-    .setFont(2)
-    .setLetterSize(0.238, 1.19)
-    .setAlignment(1)
-    .setColor(0xffffffff)
-    .setOutline(0)
-    .setShadow(1)
-    .setProportional(true);
-}
-
-/** 创建比赛信息 UI（每人 4 行独立 TD，位置与原版一致：x 500 左缘，y 118/136/154/172） */
-function createRaceTd(player: Player, room: RaceRoom): RoomRaceTds {
-  const tds: RoomRaceTds = {
-    cp: raceTdBase(player, 118, `C  P / ~p~1~w~/~y~${room.cps.length}`),
-    time: raceTdBase(player, 136, "TIME / 00:00:00"),
-    best: raceTdBase(player, 154, "BEST / 00:00:00"),
-    rank: raceTdBase(player, 172, "RANK / 1 st"),
-  };
-  Object.values(tds).forEach((t) => t.show(player));
-  room.raceTextTds.set(player.id, tds);
-  return tds;
-}
-
-/** 毫秒 → mm:ss.cc（两位百分秒，对齐原版 ms2time 后 msg[2]/10） */
-/** 排名后缀（对齐原版 RANK / %i st/nd/rd/th） */
-function rankSuffix(rank: number): string {
-  const n = rank + 1;
-  if (n === 1) return "st";
-  if (n === 2) return "nd";
-  if (n === 3) return "rd";
-  return "th";
-}
-
-/** 查询赛道个人最佳并更新 BEST TD（对齐原版进比赛时 Race_GetPlayerRecord：
- * 无记录显示 BEST / 99:99:99，有记录显示 BEST / mm:ss.cc）。房间级缓存，只查一次。 */
-async function updateBestTd(player: Player, room: RaceRoom, tds: RoomRaceTds): Promise<void> {
-  const auth = getAuthState(player.id);
-  if (!auth) return;
-  try {
-    let best = room.bestTimes.get(auth.userId);
-    if (best === undefined) {
-      const rec = await prisma.raceRecord.findFirst({
-        where: { userId: auth.userId, raceId: room.raceId, deletedAt: null },
-        orderBy: { record: "asc" },
-      });
-      best = rec ? rec.record : -1;
-      room.bestTimes.set(auth.userId, best);
-    }
-    // DB 查询为异步：查询期间玩家可能已掉线（TD 被 infernus 自动销毁）或
-    // 已离开比赛——setString 前守卫 isValid，防 async 续体对失效 TD 抛错
-    if (tds.best.isValid()) {
-      tds.best.setString(best === -1 ? "BEST / 99:99:99" : `BEST / ${formatRaceTimeCs(best)}`);
-    }
-  } catch (e) {
-    logger.error(`[race] 查询个人最佳失败 ${player.getName().name}`, e);
-  }
-}
-
-/**
- * 显示下一个检查点箭头（红色=指向下一个CP，黄色=终点CP）。
- * 对齐原版 Race_ShowCp：
- * - RaceCheckpoint 红圈在"当前要过的 CP"（nxt）、箭头指向下一个（nxt2）
- * - 小地图图标在"下一个 CP"（nrcp = nxt2），类型 56 + color 0 + style 1
- * - nxt 是最后一个 CP（无 nxt2）→ 终点黄圈；原版该分支不调 SetPlayerMapIcon，
- *   图标保留在上一个位置（标记终点），不主动清除
- */
-function showNextCheckpoint(player: Player, cps: RaceRoom["cps"], cpIndex: number): void {
-  // 下一个 CP（nxt）与下下个 CP（nxt2，若有）：箭头从 nxt 指向 nxt2
-  let nxt = cps[cpIndex + 1];
-  let nxt2 = nxt ? cps[cpIndex + 2] : undefined;
-  if (!nxt) {
-    // 当前是最后一个 CP（还差圈）→ 回到第一个 CP（nxt2 = 第二个）
-    nxt = cps[0];
-    nxt2 = cps[1];
-  }
-  if (!nxt) return;
-  if (nxt2) {
-    RaceCheckpoint.set(player, 0, nxt.x, nxt.y, nxt.z, nxt2.x, nxt2.y, nxt2.z, nxt.size);
-  } else {
-    RaceCheckpoint.set(player, 1, nxt.x, nxt.y, nxt.z, nxt.x, nxt.y, nxt.z, nxt.size);
-  }
-  // 小地图图标：下一个 CP（nrcp=nxt2），类型 56 + color 0 + style 1（原版 RACE_MAP_ICON_TYPE）
-  if (nxt2) {
-    player.setMapIcon(RACE_MAP_ICON_NEXT, nxt2.x, nxt2.y, nxt2.z, RACE_MAP_ICON_TYPE_NEXT, 0, 1);
-  }
-}
-
-/** 清除比赛小地图图标（离开/结束/完成时，对齐原版 Race_HideCp 的 RemovePlayerMapIcon） */
-function clearRaceMapIcons(player: Player): void {
-  if (!player.isConnected()) return;
-  player.removeMapIcon(RACE_MAP_ICON_NEXT);
-}
-
-/**
- * 观战者 → 被观战比赛成员 的 CP 同步映射（观察者 playerId → 成员 playerId）。
- * 仅"观察者当前正在观战本房间成员"时维护；成员 CP 变化时经 syncCpToObservers
- * 更新观察者的箭头/图标，stopObserve/切换目标/断线/房间销毁时清除。观察者本身
- * 不是房间成员（/tv 外部玩家观战比赛）或完赛自动观战者（仍在 members）都可能。
- */
-const spectatorCpMap = new Map<number, number>();
-
-/** 为观察者同步其当前观战成员的下一 CP 箭头/图标（成员 CP 变化各同步点调用）。
- *  仅当观察者确实在看该成员（originPlayerId 匹配，覆盖车内目标）且世界在房间
- *  世界时才更新——观察者切走/离开房间世界后不干扰。 */
-function syncCpToObservers(room: RaceRoom, member: Player, cpIndex: number): void {
-  for (const oid of getObserverIdsOf(member.id)) {
-    const ob = Player.getInstance(oid);
-    if (!ob || !ob.isConnected()) continue;
-    if (ob.getVirtualWorld() !== room.worldId) continue; // 未在比赛世界（换世界中）
-    const st = getObserveTarget(oid);
-    if (!st || st.originPlayerId !== member.id) continue; // 当前目标不是该成员
-    spectatorCpMap.set(oid, member.id);
-    showNextCheckpoint(ob, room.cps, cpIndex);
-  }
-}
-
-/** 清除观察者的比赛 CP 箭头/图标（退出观战/切换目标/断线/房间销毁时），并删映射 */
-function clearSpectatorCp(observerId: number): void {
-  if (!spectatorCpMap.delete(observerId)) return; // 未为任何成员同步过 → 无操作
-  const ob = Player.getInstance(observerId);
-  if (!ob || !ob.isConnected()) return;
-  try {
-    RaceCheckpoint.disable(ob);
-  } catch {
-    /* 已失效 */
-  }
-  ob.removeMapIcon(RACE_MAP_ICON_NEXT);
-}
-
-/** 房间销毁/成员离开时清理指向该房间成员的观察者 CP 同步 */
-function cleanupSpectatorCpForRoom(room: RaceRoom): void {
-  for (const [oid, mid] of [...spectatorCpMap]) {
-    const pr = playerRaces.get(mid);
-    if (pr && pr.roomId === room.id) {
-      clearSpectatorCp(oid);
-    }
-  }
-}
-
-/** 观察者开始观战时：若是房间成员 → 立即同步其当前 CP（含从看别人切到看该成员） */
-function onSpectatorStart(observerId: number): void {
-  clearSpectatorCp(observerId); // 先清旧（若之前在看另一房间成员）
-  const st = getObserveTarget(observerId);
-  if (!st || st.originPlayerId == null) return;
-  const member = Player.getInstance(st.originPlayerId);
-  if (!member || !member.isConnected()) return;
-  const pr = playerRaces.get(member.id);
-  if (!pr) return;
-  const room = rooms.get(pr.roomId);
-  if (room && room.state === "RACING") {
-    syncCpToObservers(room, member, pr.cpIndex);
-  }
-}
-
-/** 销毁房间所有比赛信息 TD（防未创建/已失效的 TD destroy 抛异常） */
-function destroyRaceTds(room: RaceRoom): void {
-  for (const tds of room.raceTextTds.values()) {
-    for (const td of Object.values(tds)) {
-      if (td.isValid()) {
-        td.destroy();
-      }
-    }
-  }
-  room.raceTextTds.clear();
-  room.tdTextCache.clear();
-}
-
 /** 特殊音效脚本函数（过此 CP 有显著动作）：cveh 换车 / speed* 变速 / angle 转向 /
  *  vgoto 传送 / fix 修复 / damage 破坏——播特殊音效 1133 提示"此 CP 有特殊效果"。
  *  time/weather/msg 属环境/文案类（无车辆动作），保持普通 CP 音效 1056。
@@ -1405,9 +899,7 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   RaceCheckpoint.disable(player);
   clearRaceMapIcons(player); // 完成：清比赛小地图图标
   // 完成者不再跑：清理指向该成员的观察者 CP 箭头（观察者跟随完赛自动观战切走）
-  for (const [oid, mid] of [...spectatorCpMap]) {
-    if (mid === player.id) clearSpectatorCp(oid);
-  }
+  clearSpectatorCpForMember(player.id);
   const time = Date.now() - pr.startTime;
   // name 快照：完成后玩家可能掉线/离开，endRoom 补计排名时 getName 已取不到
   room.results.push({ playerId: player.id, time, name: player.getName().name });
@@ -1548,6 +1040,7 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   }
 }
 
+/** 比赛结束：最终排名结算 + 成员收尾 + 房间销毁（结束宽限到点/全员完成/重连窗口清空） */
 function endRoom(room: RaceRoom): void {
   if (room.state === "FINISHED") return;
   room.state = "FINISHED";
@@ -1679,51 +1172,6 @@ function endRoom(room: RaceRoom): void {
   rooms.delete(room.id);
 }
 
-function checkRoomState(room: RaceRoom): void {
-  // 全员离开但仍有重连窗口 → 不销毁：重连是"成员全掉线也靠窗口存活"的场景
-  //（单人房掉线是重连功能最典型用法）。窗口全部到期后 cleanupExpiredReconnects
-  // 会再调本函数，此时窗口空、members 仍空 → 正常销毁。
-  if (room.members.size === 0 && room.reconnectSlots.size === 0 && room.reconnectUntil.size === 0) {
-    // 置 FINISHED：COUNTDOWN 中全员离开时，倒计时链每步都查 state，置位后
-    // beginRace 不再被调用（防闭包链空转几秒无效执行）
-    room.state = "FINISHED";
-    // 全员离开：各自的倒计时动画链随断线自停（组件帧守卫），成员残留 TD 一并清
-    for (const m of room.members.values()) cancelCountdownFx(m.id);
-    if (room.endTimer) {
-      clearTimeoutSafe(room.endTimer);
-      room.endTimer = undefined;
-    }
-    destroyRaceTds(room);
-    cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
-    // 有人完成（room.results 非空）→ 比赛有成绩，录像保留：挂起会话落盘、
-    // 已落盘段不作废。仅"无人完成"才作废删除（挂起丢弃 + 已落盘段删除）。
-    const someoneFinished = room.results.length > 0;
-    for (const pid of room.raceMembersLast.keys()) {
-      // 当前 pid 上的会话归属：只处理本房间的挂起/活跃会话（玩家退赛后又加入
-      // 别的房间时，其新会话 raceRoomId 是别的房间——防误停/误丢另一房间的录制）
-      const rec = getRecording(pid);
-      const mine = !rec || !rec.raceRoomId || rec.raceRoomId === room.id;
-      if (isRecording(pid) && mine) {
-        if (someoneFinished) {
-          void stopRecording(pid, { quiet: true }); // 挂起会话落盘保留（含静止段）
-        } else {
-          dropRecording(pid); // 挂起会话：丢弃（静止段无成绩价值）
-        }
-      }
-      // 已落盘未完成段作废：不依赖 isRecording 状态——pid 可能已被新连接复用
-      // 开了别的房间录制（isRecording=true 且归属不符），旧用户本场的落盘段
-      // 仍须作废。discardRaceReplay 按 userId+raceId+raceRoomId 精确匹配本场
-      //（rank=null），只会命中旧段，碰不到新用户（不同 userId）的活跃会话
-      if (!someoneFinished) {
-        discardRaceReplay(pid, room.raceId, room.raceMembersLast.get(pid), room.id);
-      }
-    }
-    room.raceMembersLast.clear();
-    freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id
-    rooms.delete(room.id);
-  }
-}
-
 /** 离开比赛 */
 export function leaveRace(player: Player): void {
   const pr = playerRaces.get(player.id);
@@ -1739,9 +1187,7 @@ export function leaveRace(player: Player): void {
     room.afk.delete(player.id); // 挂机累计随离开清理（防 Map 残留）
     cancelCountdownFx(player.id); // 倒计时中离开：停掉自己的倒计时动画（视觉/音效残留）
     // 离开者不再被观战：清理指向该成员的观察者 CP 箭头（观察者切走/继续看别人）
-    for (const [oid, mid] of [...spectatorCpMap]) {
-      if (mid === player.id) clearSpectatorCp(oid);
-    }
+    clearSpectatorCpForMember(player.id);
     broadcastToRoom(room, `${player.getName().name} 离开了比赛`);
     const tds = room.raceTextTds.get(player.id);
     if (tds) {
@@ -1952,90 +1398,6 @@ function tickRooms(): void {
   }
 }
 
-/** 写比赛信息 TD 文本 + 更新文本缓存（去重：相同文本不重复 setString）。
- * 成员与观战者共用：cache 按 playerId 记录上次显示的文本，60fps 高频刷新
- * 只对变化的内容调 native——静态/稳定段零开销 */
-function setRaceTdText(room: RaceRoom, playerId: number, timeText: string, rankText: string): void {
-  const tds = room.raceTextTds.get(playerId);
-  if (!tds) return;
-  // TD 可能已被销毁但 Map 条目残留（如掉线瞬间 infernus 自动销毁玩家 TD 后
-  // 清理中断）——setString 前守卫 isValid，防止定时器对已销毁 TD 无限抛错
-  if (!tds.time.isValid() || !tds.rank.isValid()) return;
-  let cache = room.tdTextCache.get(playerId);
-  if (!cache) {
-    cache = { time: "", rank: "", timeCs: -1 };
-    room.tdTextCache.set(playerId, cache);
-  }
-  if (timeText !== cache.time) {
-    cache.time = timeText;
-    tds.time.setString(timeText);
-  }
-  if (rankText !== cache.rank) {
-    cache.rank = rankText;
-    tds.rank.setString(rankText);
-  }
-}
-
-/** 60fps 比赛信息 TD 高频刷新（对齐回放观战的平滑效果）：TIME 实时推进跳表。
- * 排名由 tickRooms（200ms）计算写入 mp.rank / tdTextCache，本函数只按缓存重放
- * 文本——不做距离采样/排序，内容未变零 native 调用（cache 去重），仅 RACING
- * 房间参与（WAITING/COUNTDOWN/FINISHED 直接跳过，空转开销忽略）。
- * 成员刷自己的计时；观战者刷被观战者的计时（其 TD 缓存由 tickRooms 写入，
- * 这里按被观战者 startTime 重算同值） */
-function syncRaceTds(): void {
-  const now = Date.now();
-  for (const room of rooms.values()) {
-    if (room.state !== "RACING") continue;
-    // 成员本人：TIME 实时推进（finished 定格在 tickRooms 写入的完成时间）。
-    // 观战中的成员跳过：其 TD 显示被观战者的信息（下面观战循环写），否则
-    // 60fps 会用自己的时间覆盖掉 tickRooms 写入的被观战者时间——出现"自己的
-    // 时间 + 别人的名次"错乱。
-    for (const m of room.members.values()) {
-      const mp = playerRaces.get(m.id);
-      const tds = room.raceTextTds.get(m.id);
-      const cache = room.tdTextCache.get(m.id);
-      if (!mp || !tds || !cache || mp.finished || isObserving(m.id)) continue;
-      // 60fps 热路径：TD 可能因掉线被 infernus 自动销毁（残留条目不命中上面
-      // 的 !tds）——setString 前守卫 isValid，防对已销毁 TD 抛错刷屏
-      if (!tds.time.isValid()) continue;
-      // 秒表跳表：仅当显示值（厘秒）变化才格式化+setString——60fps 下大多数
-      // tick 的厘秒没变，跳过能省下 formatRaceTime 的除法/padStart/模板串
-      const cs = Math.floor((now - mp.startTime) / 10);
-      if (cs !== cache.timeCs) {
-        cache.timeCs = cs;
-        const timeText = `TIME / ${formatRaceTimeCs(now - mp.startTime)}`;
-        cache.time = timeText;
-        tds.time.setString(timeText);
-      }
-    }
-    // 观战中的房内成员：同步被观战者（玩家）的 TIME（RANK 由 tickRooms 写入
-    // 被观战者名次，两者一致）。只处理房内成员（tdTextCache 只为有房间 TD 的
-    // 成员/观察者创建；房外观察者无本房 TD，本就没有 TD 可刷）。
-    for (const pid of room.tdTextCache.keys()) {
-      if (!isObserving(pid)) continue;
-      const st = getObserveTarget(pid);
-      if (!st || st.kind !== "player") continue;
-      // 跨房间校验：房间 X 成员可能 /tv 观战别的房间的步行玩家，此时不能用
-      // 目标房间 Y 的 startTime 写本房间 X 的 TD（"Y 的时间 + 自己的名次"错乱）
-      const tmp = playerRaces.get(st.targetId);
-      if (!tmp || tmp.roomId !== room.id) continue;
-      const target = Player.getInstance(st.targetId);
-      if (!target || !target.isConnected()) continue;
-      const tds = room.raceTextTds.get(pid);
-      const cache = room.tdTextCache.get(pid);
-      if (!tds || !cache || tmp.finished) continue;
-      if (!tds.time.isValid()) continue;
-      const cs = Math.floor((now - tmp.startTime) / 10);
-      if (cs !== cache.timeCs) {
-        cache.timeCs = cs;
-        const timeText = `TIME / ${formatRaceTimeCs(now - tmp.startTime)}`;
-        cache.time = timeText;
-        tds.time.setString(timeText);
-      }
-    }
-  }
-}
-
 /** 初始化比赛系统 */
 export function initRaceSystem(): void {
   // /r(race) 命令入口（/r s|j|l|info|create|edit|page + 赛道列表）已拆到 roomUi.ts 的
@@ -2044,8 +1406,7 @@ export function initRaceSystem(): void {
   // 观战者 CP 箭头同步：观察者开始观战（/tv / 切换目标 / 完赛自动观战）时若目标是
   // 房间成员 → 立即摆上其当前 CP；停止观战/断线/切换时清除。清理集中在钩子 +
   // 房间销毁（cleanupSpectatorCpForRoom），无独立实体残留
-  onObserveStart(onSpectatorStart);
-  onObserveStop(clearSpectatorCp);
+  initCpArrowSync();
 
   // 到达检查点事件
   RaceCpEvent.onPlayerEnter(({ player, next }) => {
@@ -2085,8 +1446,8 @@ export function initRaceSystem(): void {
       player.setHealth(0);
       return next();
     }
-    const pr = playerRaces.get(player.id);
-    const room = pr ? rooms.get(pr.roomId) : undefined;
+    const pr = getRacePlayerState(player.id);
+    const room = pr ? getRaceRoom(pr.roomId) : undefined;
     if (room && room.state === "RACING") {
       // 比赛中：直接回到上一 CP（/kill 在比赛中 = 重置回上一个检查点）
       respawnToLastCp(player, pr!, room);
@@ -2101,8 +1462,8 @@ export function initRaceSystem(): void {
   // 比赛中死亡：重生回上一 CP（原版 updateSpeedometer 防卡住检测驱动）
   PlayerEvent.onDeath(({ player, next }) => {
     if (isInRace(player.id)) {
-      const pr = playerRaces.get(player.id);
-      const room = pr ? rooms.get(pr.roomId) : undefined;
+      const pr = getRacePlayerState(player.id);
+      const room = pr ? getRaceRoom(pr.roomId) : undefined;
       if (room && room.state === "RACING") {
         // 死亡后需要重新出生
         respawnPlayerToCp(player, pr!, room);
@@ -2124,8 +1485,8 @@ export function initRaceSystem(): void {
       !driver.isWasted() &&
       isInRace(driver.id)
     ) {
-      const pr = playerRaces.get(driver.id);
-      const room = pr ? rooms.get(pr.roomId) : undefined;
+      const pr = getRacePlayerState(driver.id);
+      const room = pr ? getRaceRoom(pr.roomId) : undefined;
       if (room && room.state === "RACING" && getOwnedVehicle(driver.id) === vehicle) {
         destroyPlayerVehicle(driver.id); // 清理爆炸后残留的失效实体引用
         void spawnVehicle(driver, getDefaultRaceModel(room.cps), true);
@@ -2136,412 +1497,15 @@ export function initRaceSystem(): void {
   });
 }
 
-/**
- * 计算重生坐标 Z：以 CP 原始高度为基准（对齐原版重生 SetPlayerPos 用 CP 坐标——
- * CP 是赛道编辑时贴地放置的，原始 z 即正确地面高度）。
- * colandreas 仅当 CP 原始 z 异常偏低（数据异常/水下）时抬升到实际地面，
- * 避免把坡顶/桥上/平台上的 CP 压到下方地面（原实现无条件取地面导致重生偏低）。
- */
-function getSafeRespawnZ(cp: { x: number; y: number; z: number }): number {
-  const ground = getSafeGroundZ(cp.x, cp.y, cp.z);
-  // ground 合理时取 CP 原始 z 与地面的较高者；colandreas 不可用/超范围时
-  // ground 回退为 cp.z（等于 CP 原始高度），自然取 cp.z
-  return ground > MIN_Z ? Math.max(cp.z, ground) : cp.z;
-}
-
-/**
- * 从 CP 脚本数组解析 spawnpos 重生点（原版 ReSpawnRaceVehicle 重生优先用 spawnpos）。
- * spawnpos x y z a —— 过 CP 时它只终止脚本链（防瞬移，见 execCpScript），
- * 重生时才单独解析坐标：原版在 ReSpawnRaceVehicle 里扫描脚本数组、有 spawnpos 即
- * 调用（RaceCpScript_func_spawnpos：人车一起挪到指定坐标 + 朝向），没有才用 CP 坐标。
- */
-function parseSpawnPos(
-  scripts: string[],
-): { x: number; y: number; z: number; angle: number } | null {
-  for (const script of scripts) {
-    const [fn, sx, sy, sz, sa] = script.trim().split(/\s+/);
-    if (fn === "spawnpos") {
-      const x = Number(sx);
-      const y = Number(sy);
-      const z = Number(sz);
-      const angle = Number(sa);
-      if ([x, y, z, angle].every(Number.isFinite)) {
-        return { x, y, z, angle };
-      }
-      return null; // 坐标残缺：作废该 spawnpos，回退 CP 坐标
-    }
-  }
-  return null;
-}
-
-/** 重生点计算：优先该 CP 的 spawnpos 坐标（原版语义），否则 CP 原始坐标 + colandreas 抬升。
- * spawnpos 是作者精确放置的重生点，直接信其坐标；z 异常（数据错误/水下）时用
- * colandreas 抬升到实际地面（与 getSafeRespawnZ 同口径）。 */
-function getRespawnPoint(cp: RaceRoom["cps"][number]): {
-  x: number;
-  y: number;
-  z: number;
-  angle: number;
-} {
-  const sp = parseSpawnPos(cp.scripts);
-  if (sp) {
-    const ground = getSafeGroundZ(sp.x, sp.y, sp.z);
-    const z = ground > MIN_Z ? Math.max(sp.z, ground) : sp.z;
-    return { x: sp.x, y: sp.y, z, angle: sp.angle };
-  }
-  return { x: cp.x, y: cp.y, z: getSafeRespawnZ(cp), angle: cp.angle };
-}
-
-/** 重生目标 CP 计算：回退 rollback 格（0 = 回上一 CP = 当前进度；1 = 再往前一个 CP）。
- * 已触达 CP 的累计序号与快照写入（onPlayerReachCp）公式一致：lap × 一圈CP数 + cpIndex。
- * 跨圈瞬间 cpIndex=-1、lap++，该式仍指向刚触达的上一圈末 CP（如 2×len+(-1) = 上一圈第 len-1 个），
- * 而非"当前圈第一个 CP"——否则跨圈后重生会落在下一目标上、跳过上一圈末到本圈首的路段。
- * 回退 rollback 格 → 累计序号减 rollback（clamp 到 0 = 第一 CP）；位置/箭头用 cumIdx % len 取圈内下标。 */
-function computeTargetCp(
-  pr: PlayerRace,
-  room: RaceRoom,
-  rollback = 0,
-): { prevIdx: number; cumIdx: number; prev: RaceRoom["cps"][number] | undefined } {
-  const cumIdx = Math.max(0, pr.lap * room.cps.length + pr.cpIndex - rollback);
-  const prevIdx = cumIdx % room.cps.length;
-  return { prevIdx, cumIdx, prev: room.cps[prevIdx] };
-}
-
-/** 回撤重生目标的状态（回放式状态回撤）：
- * - 车模型：目标快照的车型 ≠ 当前车型 → 回退到该车型（cveh 换车场景，否则车模型残留）。
- *   目标快照缺（比赛开始即回退/无记录）→ 模型不变（只能回退位置）；跳过"过点车"不可逆。
- * - time/weather：目标快照存在则恢复（time/weather 脚本可逆、覆盖当前即可）。
- * 快照有 vehModel=0（过点时步行）时保持当前车模型（不把车变没）。 */
-function applyRollbackState(
-  player: Player,
-  pr: PlayerRace,
-  target: ReturnType<typeof computeTargetCp>,
-): void {
-  const snap = pr.cpSnapshots[target.cumIdx];
-  if (snap) {
-    const model = player.isInAnyVehicle() ? player.getVehicle()!.getModel() : 0;
-    if (snap.vehModel && model && model !== snap.vehModel) {
-      void spawnVehicle(player, snap.vehModel, true); // 懒创建爱车，与 cveh 语义一致
-    }
-    player.setTime(snap.hour, snap.minute);
-    player.setWeather(snap.weather);
-  }
-}
-
-/** 重生时重执行该 CP 的脚本（对齐"触达即生效"语义——部分赛道靠 CP 弹射 speed /
- *  cveh 换车才能继续过后续路段，重生回该 CP 后检查点已消耗、红圈在下一个，玩家
- *  无法再次"触达"触发脚本 → 会被卡死或只能反复 /kill）：
- * - spawnpos：位置已由 getRespawnPoint 单独处理，且它会终止整条脚本链——跳过
- * - vgoto：会把刚放好的重生位置又传走——跳过
- * - damage：重生已挪车+修复，重执行会刚修好又爆胎——跳过
- * - 其余（speed/speedex/zspeed/angle/time/weather/cveh/fix/msg）照执行：弹射初速
- *   恢复（必需场景）、车型/时间天气恢复、提示重演
- * - 第一 CP 的 cveh 是赛道标准车（skipCveh，与过点语义一致） */
-function replayCpScriptsOnRespawn(player: Player, room: RaceRoom, prevIdx: number): void {
-  const cp = room.cps[prevIdx];
-  if (!cp) return;
-  const scripts = cp.scripts.filter((s) => {
-    const fn = s.trim().split(/\s+/)[0];
-    return fn !== "spawnpos" && fn !== "vgoto" && fn !== "damage";
-  });
-  if (scripts.length === 0) return;
-  const pr = playerRaces.get(player.id);
-  if (!pr) return;
-  const isFirstCp = cp.index === room.cps[0].index;
-  const scriptCtx: CpScriptContext = {
-    raceId: room.raceId,
-    cpid: cp.index,
-    raceName: room.raceName,
-    authorName: room.authorName,
-    cps: room.cps.map((c) => ({ index: c.index, x: c.x, y: c.y, z: c.z })),
-  };
-  try {
-    for (const script of scripts) {
-      if (!execCpScript(player, scriptCtx, script, { skipCveh: isFirstCp })) break;
-      // 脚本执行（同步）期间玩家可能已离开/比赛结束 → 终止后续脚本
-      if (!playerRaces.has(player.id) || rooms.get(pr.roomId)?.state !== "RACING" || pr.finished) {
-        break;
-      }
-    }
-  } catch (e) {
-    // 脚本执行异常（native 读取失败等）：不影响玩家状态（对齐过点脚本防御式执行）
-    logger.error(`[race] 重生重执行脚本异常 race=${room.raceId} cp=${cp.index}`, e);
-  }
-}
-
-/** 重生到指定 CP（位置 + 车就位 + 放回车里）：respawnPlayerToCp / respawnToLastCp 共用。
- * spawnpos 优先（对齐原版 ReSpawnRaceVehicle），否则 CP 坐标 + colandreas 抬升。
- * 车完好 → 挪到重生点 + 修复 + 加氮气 + 放回车里；车已毁（爆炸，getOwnedVehicle
- * 失效）→ 刷默认比赛车兜底（懒创建爱车）——玩家重生后始终有车（对齐原版
- * ReSpawnRaceVehicle / 本分支"玩家应始终在车上"的语义）。 */
-function respawnToCpCore(
-  player: Player,
-  room: RaceRoom,
-  target: ReturnType<typeof computeTargetCp>,
-): void {
-  const { prevIdx, prev } = target;
-  if (!prev) return;
-  const pt = getRespawnPoint(prev);
-  const owned = getOwnedVehicle(player.id);
-  if (owned && owned.isValid()) {
-    owned.setPos(pt.x, pt.y, pt.z);
-    owned.setZAngle(pt.angle);
-    owned.setHealth(1000);
-    owned.repair();
-    addNitro(owned);
-    owned.putPlayerIn(player, 0);
-  } else {
-    if (owned) destroyPlayerVehicle(player.id); // 清理爆炸后残留的失效实体引用
-    void spawnVehicle(player, getDefaultRaceModel(room.cps), true);
-  }
-  // 重新显示当前 CP（红箭头指向下一个）
-  showNextCheckpoint(player, room.cps, prevIdx);
-  // 重生/回退同步观战者的 CP 箭头（观察者看到与成员一致的当前目标）
-  syncCpToObservers(room, player, prevIdx);
-  // 重生重执行该 CP 脚本（弹射/换车等必需效果恢复，跳过 spawnpos/vgoto/damage——
-  // 见 replayCpScriptsOnRespawn 注释）。放在 applyRollbackState 之前：重执行 cveh
-  // 已把车型换对，快照回撤的车型判断自然跳过（不重复刷车），time/weather 同值幂等。
-  replayCpScriptsOnRespawn(player, room, prevIdx);
-}
-
-/** 重生回上一 CP（死亡场景：setSpawnInfo + spawn 复活） */
-function respawnPlayerToCp(
-  player: Player,
-  pr: PlayerRace,
-  room: RaceRoom,
-  rollback?: number,
-): void {
-  const target = computeTargetCp(pr, room, rollback);
-  const prev = target.prev;
-  if (!prev) return;
-  const pt = getRespawnPoint(prev);
-  player.setSpawnInfo(0, player.getSkin(), pt.x, pt.y, pt.z, pt.angle, 0, 0, 0, 0, 0, 0);
-  player.spawn();
-  respawnToCpCore(player, room, target);
-  applyRollbackState(player, pr, target);
-  writeBackRollbackProgress(player, pr, room, target, rollback);
-  sysMsg(player, "race", `已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`, "info");
-}
-
-/** 比赛中重生回上一 CP（/kill 与快捷操作共用；车就位 + 放回车里） */
-export function respawnToLastCp(
-  player: Player,
-  pr: PlayerRace,
-  room: RaceRoom,
-  rollback?: number,
-): void {
-  const target = computeTargetCp(pr, room, rollback);
-  if (!target.prev) return;
-  respawnToCpCore(player, room, target);
-  applyRollbackState(player, pr, target);
-  writeBackRollbackProgress(player, pr, room, target, rollback);
-  sysMsg(player, "race", `已重生回${rollback ? `前 ${rollback + 1} 个` : "上一个"}检查点`, "info");
-}
-
-/** 回退（rollback>0）时把玩家进度回写到目标 CP：否则 onPlayerReachCp 仍按旧
- * cpIndex+1 取目标，红圈在回退目标、事件却期待更后面的 CP——脚本在错误位置触发
- * 且目标 CP 永远重跑不到（cveh 换车类赛道回退后车型/时间错乱）。
- * 普通重生（rollback=0）进度本就一致（playerRaces 与位置同步推进），不回写——
- * 跨圈瞬间 cpIndex=-1 时回写会错误地把 lap 打回上一圈。 */
-function writeBackRollbackProgress(
-  player: Player,
-  pr: PlayerRace,
-  room: RaceRoom,
-  target: ReturnType<typeof computeTargetCp>,
-  rollback?: number,
-): void {
-  if (!rollback) return;
-  const len = room.cps.length;
-  // 目标累计序号对应某圈的**最后一个 CP**：onPlayerReachCp 里"触达末 CP"是函数体
-  // 内瞬态（随后立即 cpIndex=-1、lap++ 翻圈），不能持久化为 (lap, len-1)——
-  // 否则 nextCp = cps[len] = undefined 导致过点事件永久早退、进度软锁。写
-  // post-wrap 状态（lap+1, cpIndex=-1），与正常翻圈后的进度一致；红圈已由
-  // respawnToCpCore 的 showNextCheckpoint(prevIdx=len-1) 摆到本圈第一个 CP。
-  if (target.cumIdx % len === len - 1) {
-    pr.lap = Math.floor(target.cumIdx / len) + 1;
-    pr.cpIndex = -1;
-  } else {
-    pr.lap = Math.floor(target.cumIdx / len);
-    pr.cpIndex = target.cumIdx % len;
-  }
-  // 圈内进度 = 目标累计序号 % 一圈CP数 + 1（末 CP 情形 = len，与正常翻圈后的显示一致）
-  // 玩家自身 + 观战他的观察者（对齐过 CP 时 onPlayerReachCp 的同步口径——否则
-  // 观战者右上角停在回退前的高进度，直到下次过 CP 才被拉回）
-  const cpDone = (target.cumIdx % len) + 1;
-  const cpText = `C  P / ~p~${cpDone}~w~/~y~${len}`;
-  const raceTds = room.raceTextTds.get(player.id);
-  if (raceTds && raceTds.cp.isValid()) {
-    raceTds.cp.setString(cpText);
-  }
-  for (const oid of getObserverIdsOf(player.id)) {
-    const ot = room.raceTextTds.get(oid);
-    if (ot && ot.cp.isValid()) {
-      ot.cp.setString(cpText);
-    }
-  }
-  // 录制会话的 cpProgress 同步回退：否则回放帧残留回退前的高进度，C P TD 与
-  // seek 显示玩家实际未跑到的进度（对齐过 CP 时的 noteCpProgress 口径）
-  noteCpProgress(player.id, Math.min(cpDone, len), len);
-}
-
-/** 多回退一格重生（面板「回退到更早检查点」）：上一 CP 可能是空中/无落点（无 spawnpos、
- * colandreas 抬不动），重生会落空/卡空——回退到更早一个 CP，并恢复该 CP 触达后的状态
- * （cveh 车型 / time / weather，回放式状态回撤）。 */
-export function rollbackToPrevCp(player: Player, pr: PlayerRace, room: RaceRoom): void {
-  // 已触达累计序号 < 1（起点 / 刚过第一个 CP / 第一圈未过任何 CP）→ 没有更早的
-  // 不同 CP 可回退（回退会 clamp 到同一目标）。跨圈后 cpIndex=-1 但累计序号
-  // lap×len-1 ≥ len-1，回退目标 = 上一圈末 CP 的前一个，有效。
-  if (pr.lap * room.cps.length + pr.cpIndex < 1) {
-    sysMsg(player, "race", "当前进度没有更早的检查点可回退", "error");
-    return;
-  }
-  respawnToLastCp(player, pr, room, 1);
-}
-
-/**
- * 掉线重连：玩家重新进入游戏时，若其断线窗口未过期且房间仍存在，恢复比赛进度。
- * 返回 true 表示已恢复；false 表示无可重连房间。
- */
-export async function tryReconnectRace(player: Player): Promise<boolean> {
-  const auth = getAuthState(player.id);
-  if (!auth) return false;
-  // 遍历房间找该玩家的重连窗口（key 是 userId：防 playerId 复用劫持旧窗口）
-  for (const room of rooms.values()) {
-    const until = room.reconnectUntil.get(auth.userId);
-    if (until == null) continue;
-    const slot = room.reconnectSlots.get(auth.userId);
-    // 窗口过期或房间已结束/解散 → 清理窗口，无法重连；对齐 cleanupExpiredReconnects
-    // 把挂起的录制落盘（不落盘则会话永久悬挂、静止帧无限累积内存）
-    if (Date.now() >= until || room.state === "FINISHED") {
-      room.reconnectUntil.delete(auth.userId);
-      room.reconnectSlots.delete(auth.userId);
-      // 归属校验（对齐 cleanupExpiredReconnects）：断线期间该 playerId 可能被新
-      // 连接复用开了录制（含同一房间被同房新成员复用——raceRoomId 相同），须再
-      // 比 userId 才是掉线者自己的挂起会话，防误停别人的活跃会话
-      if (slot && isRecording(slot.playerId)) {
-        const rec = getRecording(slot.playerId);
-        if (rec && rec.userId === auth.userId && (!rec.raceRoomId || rec.raceRoomId === room.id)) {
-          void stopRecording(slot.playerId, { quiet: true });
-        }
-      }
-      // 玩家已在线（重连流程中）：明确提示窗口状态，避免"输入完密码直接走登录
-      // 流程"的困惑（重连窗口只对进行中的比赛建立，短比赛/过期/房间结束都无
-      // 法恢复，走正常登录是预期行为，但要说清楚）
-      sysMsg(
-        player,
-        "race",
-        room.state === "FINISHED"
-          ? "原比赛房间已结束，无法重连（将正常登录）"
-          : "重连窗口已过期，无法恢复比赛（将正常登录）",
-        "warn",
-      );
-      continue;
-    }
-    // 恢复：重新加入房间 + 恢复进度
-    room.reconnectUntil.delete(auth.userId);
-    room.reconnectSlots.delete(auth.userId);
-    // playerId 可能已被复用（新连接 id 与掉线时不同）：把挂起的录制会话从
-    // 旧 id 迁移到新 id，否则 resumeRecording(player.id) 找不到会话（掉线静帧
-    // 断在旧 id 上、回放缺段），且旧 id 残留挂起会话占内存。传 raceRoomId 归属
-    // 校验：旧 id 可能已被新连接占用来开别的房间的挂起会话，不能劫持
-    if (slot && slot.playerId !== player.id) {
-      rebindRecording(slot.playerId, player.id, room.id, auth.userId);
-    }
-    room.members.set(player.id, player);
-    room.raceMembersLast.set(player.id, auth.userId); // 重新登记本场录制成员（userId 快照供离线作废）
-    // 恢复战局归属：按掉线时快照的原战局 id 精确匹配（sessionId 自增不复用，战局
-    // 仍在则必然命中原战局——worldId 会被解散战局回收复用，按 worldId 可能塞进
-    // 无关新战局）。战局已解散（查无此 id）→ 回公共大世界并修正 prevWorld=0
-    //（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
-    const prevWorld = slot?.prevWorld ?? player.getVirtualWorld();
-    const joinedSession = sessionManager.rejoinPlayerSession(player, slot?.sessionId ?? 0);
-    playerRaces.set(player.id, {
-      roomId: room.id,
-      cpIndex: slot?.cpIndex ?? -1,
-      lap: slot?.lap ?? 0,
-      startTime: slot?.startTime ?? Date.now(),
-      finished: false,
-      // 恢复断线前所在世界（重连时玩家必然在世界 0，不能用作 prevWorld）
-      prevWorld: joinedSession ? prevWorld : 0,
-      cpSnapshots: [], // 重连是新连接：回退重生快照从空重建（后续过 CP 重新记录）
-    });
-    // 切回比赛世界 + 恢复掉线瞬间位置（重连是全新连接，跳过出生定位，不恢复
-    // 会出现在地图默认出生点，与"继续第 N 圈"提示严重不符）。
-    // 只 setSpawnInfo 不设 pendingSpawnPos：比赛中 onSpawn 的 respawnBySetting 对
-    // isInRace 玩家提前 return（不会随机定位），setSpawnInfo 即权威；而 pendingSpawnPos
-    // 若残留会在**之后的死亡重生**被 onSpawn 误消费（把玩家 setPos 回掉线点并弹出车）。
-    player.setVirtualWorld(room.worldId);
-    if (slot && slot.x !== 0) {
-      const angle = room.cps[Math.max(0, slot.cpIndex)]?.angle ?? 0;
-      player.setSpawnInfo(0, player.getSkin(), slot.x, slot.y, slot.z, angle, 0, 0, 0, 0, 0, 0);
-      player.setPos(slot.x, slot.y, slot.z);
-    }
-    // 清挂机采样：playerId 键可能继承掉线前的静止累计（重连后停在原地没立刻开
-    // 车会误判"即将移出比赛"），且重连玩家是新上下文，从零开始累计
-    room.afk.delete(player.id);
-    if (room.state === "RACING") {
-      // 回放：恢复挂起的录制（同一会话续录，掉线静止帧衔接无缝；若挂起会话
-      // 已被其他路径处理——超时落盘/房间销毁/重开丢弃——resume 无会话可恢复，
-      // 则新开一段录制兜底）
-      resumeRecording(player.id);
-      if (!isRecording(player.id)) {
-        raceRecordingStart(player.id, {
-          raceId: room.raceId,
-          raceName: room.raceName,
-          raceRoomId: room.id,
-        });
-      }
-      const tds = createRaceTd(player, room);
-      // 立即写入 TIME/RANK（含初始化 tdTextCache）：否则下一个 tickRooms（≤200ms）
-      // 前 syncRaceTds 无 cache 跳过、TD 停在创建时的 "00:00:00 / 1 st"，显示
-      // 从 0 跳变到掉线前累计时间。TIME 用 startTime 起算（slot 恢复的掉线前计时）
-      const rstart = playerRaces.get(player.id)?.startTime ?? Date.now();
-      setRaceTdText(
-        room,
-        player.id,
-        `TIME / ${formatRaceTimeCs(Date.now() - rstart)}`,
-        `RANK / 1 ${rankSuffix(0)}`,
-      );
-      // 恢复 BEST TD（房间缓存已有，无则查询）
-      void updateBestTd(player, room, tds);
-      // 恢复 CP 进度 TD（按断线时进度）
-      const cpDone = Math.min((slot?.cpIndex ?? -1) + 1, room.cps.length);
-      tds.cp.setString(`C  P / ~p~${cpDone}~w~/~y~${room.cps.length}`);
-      showNextCheckpoint(player, room.cps, slot?.cpIndex ?? -1);
-      // 重连恢复同步观战者的 CP 箭头（观察者跟着看到重连后的当前目标）
-      syncCpToObservers(room, player, slot?.cpIndex ?? -1);
-      // 重新强制无碰撞（重连是全新连接，碰撞状态已重置）
-      applyRaceNoCollision(player, true);
-      // 恢复房间统一时间天气（重连是新连接，默认回服务器时间天气——不恢复会
-      // 与同房其他成员不一致，直到碰到带 time/weather 脚本的 CP）
-      player.setTime(room.roomTime.hour, room.roomTime.minute);
-      player.setWeather(room.roomWeather);
-      // 无车兜底（断线前坐默认比赛车，重连时已被清理）：用默认比赛车型刷爱车
-      // （有该模型爱车则复用外观，没有则自动创建成爱车——与 joinRoom/beginRace 一致）。
-      // 判 isValid：断线期间爱车可能被炸（实体失效但仍占 Map 条目）
-      const ownedVeh = getOwnedVehicle(player.id);
-      if (!player.isInAnyVehicle() && (!ownedVeh || !ownedVeh.isValid())) {
-        void spawnVehicle(player, getDefaultRaceModel(room.cps), true);
-      }
-    }
-    // 重连是全新连接：onDisconnect 已 cleanupAttire 清空挂件，且重连路径不触发
-    // onSpawn（玩家被直接放回车里）——手动重挂默认人物装扮，否则整个重连比赛
-    // 期间装扮缺失
-    void reapplyCurrentPlayerPreset(player);
-    broadcastToRoom(room, `${player.getName().name} 已重连比赛！`);
-    sysMsg(
-      player,
-      "race",
-      `已重连比赛「${room.raceName}」，继续第 ${(slot?.lap ?? 0) + 1} 圈`,
-      "success",
-    );
-    // 房主重连 → 恢复房主身份
-    if (room.ownerId === player.id || room.ownerUserId === auth.userId) {
-      room.ownerId = player.id;
-      room.ownerUserId = auth.userId;
-      broadcastToRoom(room, `${player.getName().name} 恢复了房主身份`);
-    }
-    return true;
-  }
-  return false;
-}
+// —— 对外公开 API（模块拆分后统一从这里导入；外部模块无感知，导入面保持不变）——
+export {
+  UUID_RE,
+  RACE_WORLD_BASE,
+  isInRace,
+  getRacePlayerState,
+  getRaceRoom,
+  broadcastToRoom,
+} from "./state";
+export { cleanupRacePlayer, tryReconnectRace } from "./reconnect";
+export { respawnToLastCp, rollbackToPrevCp } from "./respawn";
+export type { PlayerRace, RaceRoom, CpSnapshot, RoomRaceTds, RaceRoomState } from "./types";

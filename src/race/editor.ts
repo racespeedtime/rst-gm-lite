@@ -7,7 +7,8 @@ import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
 import { spawnRaceVehicleAt, getDefaultRaceModel } from "./vehicle";
 import { cleanupScriptVehicle } from "./scripts";
-import { isInRace, UUID_RE } from "./room";
+import { isInRace } from "./state";
+import { UUID_RE } from "./state";
 import { sysMsg } from "@/utils/msg";
 
 /** 编辑中的赛道（raceId + 玩家当前查看的 CP） */
