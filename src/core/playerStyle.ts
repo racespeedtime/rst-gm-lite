@@ -28,11 +28,6 @@ export function getChatDisplayName(playerId: number, baseName: string): string {
   return `${s.prefix}{${color}}${baseName}{FFFFFF}${s.suffix}`;
 }
 
-/** 玩家是否隐藏了自己的 NameTag（同步，供登录时同步给新玩家用） */
-export function isNameTagHidden(playerId: number): boolean {
-  return hiddenNameTag.has(playerId);
-}
-
 /** 让某玩家对目标显示/隐藏自己的 NameTag */
 function setOwnNameTagVisibility(player: Player, target: Player, show: boolean): void {
   player.showNameTag(target, show);

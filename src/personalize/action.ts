@@ -148,11 +148,6 @@ export function cleanupAction(playerId: number): void {
   activeActions.delete(playerId);
 }
 
-/** 当前动作 ID（未播放/已清除为 undefined） */
-export function getActiveAction(playerId: number): number | undefined {
-  return activeActions.get(playerId);
-}
-
 /**
  * 边界检查：动作是否可在当前状态使用。返回 null = 允许；否则返回拒绝提示文案。
  * 覆盖：比赛 / 赛道编辑 / 观战 / 回放 / 影子挑战 / 车内 / 死亡·上下车·观战态。

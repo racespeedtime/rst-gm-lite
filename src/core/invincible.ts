@@ -27,11 +27,6 @@ const lastGiveNotify = new Map<string, number>();
 let bulletIntercepts = 0;
 let bulletInterceptLogged = false;
 
-/** 玩家是否无敌（同步读取，供伤害事件与 raknet 拦截用） */
-export function isInvincible(playerId: number): boolean {
-  return invincibleSet.has(playerId);
-}
-
 /** 满血 + 满甲（无敌状态下生命值维持） */
 function fullHealthAndArmor(player: Player): void {
   player.setHealth(100);

@@ -1,5 +1,3 @@
-import { PUBLIC_WORLD_ID } from "@/sessions/session";
-
 /**
  * 电梯系统配置（移植自 infernus filterscript 的 4 个电梯脚本：
  * ls_elevator / ls_apartments1 / ls_beach_side / sf_zombo_tech）。
@@ -356,6 +354,3 @@ export const ELEVATOR_CONFIGS: readonly ElevatorConfig[] = [
   LS_BEACH_SIDE,
   SF_ZOMBO_TECH,
 ];
-
-/** 电梯实体所在世界（公共大世界，与玩家战局隔离无关：建筑在 world 0） */
-export const ELEVATOR_WORLD_ID = PUBLIC_WORLD_ID;

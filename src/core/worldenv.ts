@@ -88,9 +88,11 @@ export async function syncWorldClock(): Promise<void> {
   // 同步 syncGameTime=true 的在线玩家（现实 1 分钟 = 游戏 1 分钟）
   for (const player of Player.getInstances()) {
     if (player.isNpc() || !player.isConnected()) continue;
-    // 比赛中跳过：比赛房间由 beginRace 按房主设置统一时间天气（CP 脚本也会改），
-    // 轮换会把房间统一时间拉回服务器时间（重连恢复/快照回退也受影响）
-    if (isInRace(player.id)) continue;
+    // 比赛中/回放观看/影子挑战中跳过：比赛房间统一时间由 beginRace 定（CP 脚本
+    // 也会改）、回放每帧 setTime 录制赛道时间——同步会把房间/回放画面时钟拉回
+    // 服务器时间（最长 1 分钟错位，回放帧时间变化才重设）。对齐 timeFlow 冻结
+    // 定时器与 getDisplayTime 的三态跳过口径
+    if (isInRace(player.id) || isInChallenge(player.id) || !!getReplaySession(player.id)) continue;
     const auth = getAuthState(player.id);
     if (!auth) continue;
     const setting = await getSetting(player);
@@ -129,8 +131,9 @@ async function rotateWeather(): Promise<void> {
   const msg = `大世界天气已变化：${WEATHER_NAMES[currentWeather] ?? `ID ${currentWeather}`}`;
   for (const player of Player.getInstances()) {
     if (player.isNpc() || !player.isConnected()) continue;
-    // 比赛中跳过：房间统一天气由 beginRace 定（见 syncWorldClock 注释）
-    if (isInRace(player.id)) continue;
+    // 比赛中/回放观看/影子挑战中跳过：房间统一天气由 beginRace 定、回放每帧
+    // setWeather 录制赛道天气（对齐 syncWorldClock 的三态跳过口径）
+    if (isInRace(player.id) || isInChallenge(player.id) || !!getReplaySession(player.id)) continue;
     const auth = getAuthState(player.id);
     if (!auth) continue;
     const setting = await getSetting(player);
