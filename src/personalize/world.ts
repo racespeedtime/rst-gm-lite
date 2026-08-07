@@ -51,7 +51,7 @@ interface ColorEntry {
   label: string;
 }
 
-/** 色板条目：经典配色（去重后 100 色）+ 自定义入口（分页选择，实际颜色渲染） */
+/** 色板条目：经典配色（去重后 98 色）+ 自定义入口（分页选择，实际颜色渲染） */
 const COLOR_ENTRIES: ColorEntry[] = [
   ...PLAYER_PALETTE.map((v) => ({ value: v, label: v })),
   { value: "", label: "自定义…" },

@@ -72,8 +72,9 @@ export function createSpeed2d(player: Player): TextDraw[] {
 /**
  * 刷新 2d 速度表文本与刻度颜色。
  * 刻度逻辑（每格 = 10km/h）：
- * - 前 17 格（0-170）：越过变黄 REACHED_FAST，未达灰色
- * - 后 3 格（170/180/190 红区）：越过变红 REACHED_HIGH，未达半透明
+ * - 前 17 格（0-170，j=0..16 阈值 10..170）：越过变黄 REACHED_FAST，未达灰色
+ * - 后 3 格（180/190/200，j=17..19 阈值 180/190/200）：越过变红 REACHED_HIGH，
+ *   未达半透明（红区从 180 起，170 是黄区末尾）
  * setColor 后必须重新 show 刻度：部分客户端/组件下 setColor 只改存储不重绘，
  * 颜色变化要 re-show 才生效——此前"GUI 去重"删掉了每 tick 的无条件 show，
  * 导致刻度颜色永远停在创建时的灰（数字 setString 不受影响）。本函数仅在

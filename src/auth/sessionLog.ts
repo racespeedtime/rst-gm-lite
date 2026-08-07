@@ -11,8 +11,9 @@ import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
 const RECENT_LIMIT = 50;
 const PAGE_SIZE = 10;
 
-/** 格式化会话时长（秒 → 可读） */
-function formatDuration(seconds: number | null): string {
+/** 格式化会话时长（**秒** → 可读；入参来自 sys_user_game_session.duration，单位为秒，
+ *  与 utils/format 的 formatDuration（毫秒）单位不同，故本地独立实现并显式命名避免混淆） */
+function formatSessionDuration(seconds: number | null): string {
   if (seconds == null) return "—";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -46,7 +47,7 @@ function formatSessionLine(
     String(index + 1),
     formatDate(s.loginAt),
     s.logoutAt ? formatDate(s.logoutAt) : "—",
-    formatDuration(s.duration),
+    formatSessionDuration(s.duration),
     s.ip ?? "—",
     s.status === "ONLINE" ? "{00FF00}在线" : "{808080}离线",
   ];

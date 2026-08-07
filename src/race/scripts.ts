@@ -201,17 +201,18 @@ export function execCpScript(
       return true;
     }
     case "time": {
-      // 对齐原版 time：时 0-24、分 0-59
+      // 对齐原版 time：时 0-23（GTA 合法区间）、分 0-59。原版注释写 0-24 但
+      // setTime(24,...) 越界（客户端行为未定），按合法区间校验
       const [hour, minute] = args.map(Number);
       if (
         !Number.isInteger(hour) ||
         hour < 0 ||
-        hour > 24 ||
+        hour > 23 ||
         !Number.isInteger(minute) ||
         minute < 0 ||
         minute > 59
       ) {
-        return (err("time 需要 时(0-24) 分(0-59)"), true);
+        return (err("time 需要 时(0-23) 分(0-59)"), true);
       }
       player.setTime(hour, minute);
       break;

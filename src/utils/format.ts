@@ -8,9 +8,20 @@ export function formatTime(ms: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(mm).padStart(3, "0")}`;
 }
 
+/** 毫秒 → mm:ss:cc（厘秒，比赛 HUD TIME/BEST 用；room 与回放观战 TD 共用一份，
+ *  收敛自 race/room.formatRaceTime 与 replay/playback.fmtRaceTime 的逐字节副本） */
+export function formatRaceTimeCs(ms: number): string {
+  const safe = Math.max(0, ms);
+  const m = Math.floor(safe / 60000);
+  const s = Math.floor((safe % 60000) / 1000);
+  const cs = Math.floor((safe % 1000) / 10);
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(cs).padStart(2, "0")}`;
+}
+
 /** 时长格式化（mm:ss 或 ss，回放列表等短格式用；原各列表页内联实现收敛至此） */
 export function formatDuration(ms: number): string {
-  const s = Math.floor(ms / 1000);
+  // 负值兜底（对齐 formatTime 的 Math.max(0, ...)）：计时器漂移等防御
+  const s = Math.floor(Math.max(0, ms) / 1000);
   if (s < 60) return `${s}s`;
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
