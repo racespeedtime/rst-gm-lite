@@ -1072,7 +1072,17 @@ async function vehiclePresetDetail(
       return back?.();
     }
     await applyVehiclePreset(owned, presetId, player.id);
-    player.sendClientMessage(COLOR_SUCCESS, "已应用车辆预设");
+    // 同时设为该车型的默认预设：应用 = 采用该方案，重刷车（/c 车型）自动带上。
+    // 否则 defaultPresetId 只被改装店/换色路径（ensureDefaultPresetTx）设置——
+    // 只在装扮菜单应用过的车型（如 562）刷车时装扮丢失，而 411 有默认就正常
+    const auth = getAuthState(player.id);
+    if (auth) {
+      await prisma.userVehicle.updateMany({
+        where: { userId: auth.userId, modelId },
+        data: { defaultPresetId: presetId },
+      });
+    }
+    player.sendClientMessage(COLOR_SUCCESS, "已应用车辆预设（重刷车自动带上）");
     return toThis();
   } else if (idx === 1) {
     await addVehiclePresetItem(player, presetId, modelId, toThis);
