@@ -77,7 +77,14 @@ export function createSpeed2d(player: Player): TextDraw[] {
  */
 export function updateSpeed2d(tds: TextDraw[], speed: number): void {
   const kmh = Math.floor(speed);
-  tds[1].setString(String(kmh).padStart(3, "0"));
+  // 数字与刻度在同一个函数里：若数字已失效（TD 被销毁/断线自动清理），setString
+  // 抛异常会中断后面的 setColor 循环——刻度停在旧色。先校验整体有效性再刷
+  if (!tds[0].isValid()) return;
+  try {
+    tds[1].setString(String(kmh).padStart(3, "0"));
+  } catch {
+    return; // 数字失效：本轮放弃（下一轮 speedoAt 1s 兜底重试）
+  }
   for (let j = 0; j < 20; j++) {
     const passed = kmh >= (j + 1) * 10;
     tds[j + 2].setColor(

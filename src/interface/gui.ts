@@ -46,6 +46,10 @@ interface PlayerGui {
   /** 上次 2d 速度表渲染的整数 kmh（100ms 刷新去重：刻度颜色只在跨 10 分档变化
    *  才重绘，静止玩家一个都不变——避免每 tick 无条件 21 次 native setString+setColor） */
   speedoKmh: number;
+  /** 上次 2d 速度表强制重刷的时间戳（去重之外的安全网：无论何因（TD 状态重置/
+   *  某轮异常吞掉）导致 speedoKmh 与实际速度粘住，每 1 秒无条件重绘一次，
+   *  保证刻度颜色最坏 1 秒内恢复，不会永远停灰） */
+  speedoAt: number;
   /** 上次 3d 速度表贴图文本（去重：材质文字重渲染是重型 native，文本不变跳过） */
   speedo3dText: string;
   /** hideAllGui 隐藏中（hideAllGui=true 时置位，恢复时据此重 show 所有 TD——
@@ -85,6 +89,7 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
     speedo3d: null,
     speedo3dVehId: null,
     speedoKmh: -1,
+    speedoAt: 0,
     speedo3dText: "",
     hidden: false,
     netstat: null,
@@ -212,11 +217,15 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
   if (setting.hideAllGui) return;
   const kmh = getDisplaySpeed(player);
   // 2d 速度表：整数 kmh 分档去重——刻度颜色只在跨 10 的分档变化（静止玩家一次
-  // 都不变），避免每 100ms 无条件 1 setString + 20 setColor（全库最高 native 源）
+  // 都不变），避免每 100ms 无条件 1 setString + 20 setColor（全库最高 native 源）。
+  // 安全网：speedoAt 每 1 秒强制重刷一次——防 speedoKmh 因任何原因（TD 状态
+  // 重置/某轮异常吞掉）与实际速度粘住，刻度颜色永远停灰
   if (gui.speedoTd.length > 0) {
     const kmhInt = Math.floor(kmh);
-    if (kmhInt !== gui.speedoKmh) {
+    const nowTs = Date.now();
+    if (kmhInt !== gui.speedoKmh || nowTs - gui.speedoAt >= 1000) {
       gui.speedoKmh = kmhInt;
+      gui.speedoAt = nowTs;
       updateSpeed2d(gui.speedoTd, kmh);
     }
   }
