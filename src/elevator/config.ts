@@ -359,12 +359,3 @@ export const ELEVATOR_CONFIGS: readonly ElevatorConfig[] = [
 
 /** 电梯实体所在世界（公共大世界，与玩家战局隔离无关：建筑在 world 0） */
 export const ELEVATOR_WORLD_ID = PUBLIC_WORLD_ID;
-
-/** 电梯建筑/实体可见的全部虚拟世界（0 + 战局 1..1000 + 比赛 1001..2000 + 回放
- *  2001..2100）：电梯建筑移除原版后靠 extraObjects 补，removeBuilding 对任何世界
- *  生效——若实体只在 world 0，比赛/回放世界会"原版被移除但补建不可见"成空白。
- *  交互不受影响：比赛中电梯系统禁用（onKeyStateChange 的 isInRace 守卫） */
-export const ELEVATOR_ALL_WORLDS: number[] = [
-  PUBLIC_WORLD_ID,
-  ...Array.from({ length: 2100 }, (_, i) => i + 1),
-];

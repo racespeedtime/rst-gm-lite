@@ -29,7 +29,6 @@ import {
   ELEVATOR_STATE_MOVING,
   ELEVATOR_STATE_WAITING,
   ELEVATOR_WAIT_TIME,
-  ELEVATOR_ALL_WORLDS,
   INVALID_FLOOR,
   type ElevatorConfig,
 } from "./config";
@@ -305,7 +304,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
       rx: 0,
       ry: 0,
       rz: config.elevatorRotation,
-      worldId: ELEVATOR_ALL_WORLDS,
+      worldId: -1, // 所有世界可见（removeBuilding 对任何世界生效，补建须全世界显示）
     }),
     carDoors: [
       new DynamicObject({
@@ -316,7 +315,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
         rx: 0,
         ry: 0,
         rz: config.elevatorRotation,
-        worldId: ELEVATOR_ALL_WORLDS,
+        worldId: -1, // 所有世界可见（removeBuilding 对任何世界生效，补建须全世界显示）
       }),
       new DynamicObject({
         modelId: 18756, // 右门
@@ -326,7 +325,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
         rx: 0,
         ry: 0,
         rz: config.elevatorRotation,
-        worldId: ELEVATOR_ALL_WORLDS,
+        worldId: -1, // 所有世界可见（removeBuilding 对任何世界生效，补建须全世界显示）
       }),
     ],
     floorDoors: [],
@@ -354,7 +353,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
         rx: 0,
         ry: 0,
         rz: config.elevatorRotation,
-        worldId: ELEVATOR_ALL_WORLDS,
+        worldId: -1, // 所有世界可见（removeBuilding 对任何世界生效，补建须全世界显示）
       }),
       new DynamicObject({
         modelId: 18756,
@@ -364,7 +363,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
         rx: 0,
         ry: 0,
         rz: config.elevatorRotation,
-        worldId: ELEVATOR_ALL_WORLDS,
+        worldId: -1, // 所有世界可见（removeBuilding 对任何世界生效，补建须全世界显示）
       }),
     ];
     el.floorDoors[i][0].create();
@@ -394,7 +393,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
       rx: o.rx,
       ry: o.ry,
       rz: o.rz,
-      worldId: ELEVATOR_ALL_WORLDS,
+      worldId: -1, // 所有世界可见（removeBuilding 对任何世界生效，补建须全世界显示）
     });
     obj.create();
     el.extraObjects.push(obj);
