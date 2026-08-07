@@ -112,6 +112,30 @@ function normAngle180(a: number): number {
   return ((((a + 180) % 360) + 360) % 360) - 180;
 }
 
+/** 不可漂移的车型（对齐参考 IsModelACar 排除表：摩托/船/飞机——漂移语义只对轿车成立） */
+const NON_DRIFTABLE_MODELS = new Set<number>([
+  // 摩托车
+  448, 461, 462, 463, 468, 471, 481, 509, 510, 521, 522, 523, 581, 586,
+  // 船
+  430, 446, 452, 453, 454, 484, 493, 595,
+  // 飞机
+  417, 425, 447, 460, 469, 476, 487, 488, 497, 511, 512, 513, 519, 520, 548, 553, 563, 577, 592,
+  593,
+]);
+
+/** 立即结束本次漂移（下车/不在车内/车型不可漂移）：不等宽限——参考实现
+ *  OnPlayerStateChange 离开司机位立即 OnPlayerDriftEnd（下车是明确结束，不该
+ *  享受 1.5s"短暂回正"宽限） */
+function endDriftNow(st: DriftScoreState): void {
+  st.status = "none";
+  st.multiplier = 1;
+  st.multiplierMs = 0;
+  st.score = 0;
+  st.displayScore = 0;
+  st.lastActiveAt = 0;
+  st.inactiveSince = 0;
+}
+
 /** 无漂移活动：宽限内不打断连击、不退出漂移显示态——对齐参考实现的超时语义
  * （drift-detection.inc 条件不满足累积 1.5s 才 OnPlayerDriftStop）：漂移中瞬时
  * 跌破阈值（弯心减速/甩尾抖动）是常态，若每帧都置 status=none，倍率徽章会
@@ -149,9 +173,15 @@ export function tickDriftScore(player: Player): void {
   const st = getDriftScore(player.id);
   const veh = player.isInAnyVehicle() ? player.getVehicle() : null;
   const now = Date.now();
-  // 不在车内 / 非司机：视为无活动（宽限内不打断连击，超宽限倍率归 1、超时积分归 0）
-  if (!veh || !veh.isValid() || player.getState() !== PlayerStateEnum.DRIVER) {
-    handleIdleDrift(st, now);
+  // 不在车内 / 非司机 / 车型不可漂移（摩托/船/飞机）→ 立即结束漂移：
+  // 下车是明确结束（参考 OnPlayerStateChange），不该享受 1.5s"短暂回正"宽限
+  if (
+    !veh ||
+    !veh.isValid() ||
+    player.getState() !== PlayerStateEnum.DRIVER ||
+    NON_DRIFTABLE_MODELS.has(veh.getModel())
+  ) {
+    endDriftNow(st);
     st.displayScore += Math.round((st.score - st.displayScore) * 0.2);
     if (Math.abs(st.score - st.displayScore) < 10) st.displayScore = st.score;
     return;

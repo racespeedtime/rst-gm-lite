@@ -1,6 +1,5 @@
 import { Player, TextDraw } from "@infernus/core";
 import { getDriftScore, type DriftStatus } from "@/core/driftScore";
-import { logger } from "@/logger";
 
 /**
  * 漂移积分 TextDraw（屏幕上方居中、纯展示、不常驻）：
@@ -19,8 +18,6 @@ export interface DriftTdState {
   lastVisible: boolean;
   /** 徽章当前渲染色（状态切换时向目标色平滑过渡，非瞬跳） */
   color: number;
-  /** 诊断：上一次日志的颜色目标（倍率/状态变化才打一次，核对字节序） */
-  lastLoggedTarget: number;
 }
 
 /** 屏幕上方居中（网络信息 y0-3 下方一点），大数字 + 徽章上下排列。
@@ -54,7 +51,6 @@ export function createDriftTd(player: Player): DriftTdState {
     lastBadge: "",
     lastVisible: false,
     color: 0xffffffff,
-    lastLoggedTarget: -1,
   };
 }
 
@@ -82,12 +78,22 @@ function statusBadge(status: DriftStatus, multiplier: number): { text: string; c
 
 /** 当前渲染色向目标色平滑过渡（每 tick 15% 步进，SA 色值 0xRRGGBBAA） */
 function stepColor(from: number, target: number): number {
-  const cur = from & 0xffffff;
-  const dst = target & 0xffffff;
-  const r = cur + Math.round(((dst & 0xff0000) - (cur & 0xff0000)) * 0.15);
-  const g = cur + Math.round(((dst & 0xff00) - (cur & 0xff00)) * 0.15);
-  const b = cur + Math.round(((dst & 0xff) - (cur & 0xff)) * 0.15);
-  return (r & 0xff0000) | (g & 0xff00) | (b & 0xff) | 0xff;
+  const curR = (from >> 24) & 0xff;
+  const curG = (from >> 16) & 0xff;
+  const curB = (from >> 8) & 0xff;
+  const curA = from & 0xff;
+
+  const tarR = (target >> 24) & 0xff;
+  const tarG = (target >> 16) & 0xff;
+  const tarB = (target >> 8) & 0xff;
+  const tarA = target & 0xff;
+
+  const r = Math.round(curR + (tarR - curR) * 0.15);
+  const g = Math.round(curG + (tarG - curG) * 0.15);
+  const b = Math.round(curB + (tarB - curB) * 0.15);
+  const a = Math.round(curA + (tarA - curA) * 0.15);
+
+  return (r << 24) | (g << 16) | (b << 8) | a;
 }
 
 /** 分数纯数字（用户明确不要千分位逗号分隔） */
@@ -135,16 +141,6 @@ export function updateDriftTd(state: DriftTdState, player: Player): void {
     if (stepped !== state.color) {
       state.color = stepped;
       state.badgeTd.setColor(stepped);
-      // 诊断：倍率/状态变化（目标色切换）打一次实际下发值——用户报过"橙色
-      // 显示成蓝绿"，据此核对客户端字节序（与 netstat/speedometer 对比）
-      if (badge.color !== state.lastLoggedTarget) {
-        state.lastLoggedTarget = badge.color;
-        logger.info(
-          `[driftTd] ${player.getName().name} ×${st.multiplier} ${st.status} 目标 0x${badge.color
-            .toString(16)
-            .padStart(8, "0")} 下发 0x${stepped.toString(16).padStart(8, "0")}`,
-        );
-      }
       state.scoreTd.show(player);
       state.badgeTd.show(player);
     }
