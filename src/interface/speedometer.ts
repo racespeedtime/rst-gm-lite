@@ -74,8 +74,12 @@ export function createSpeed2d(player: Player): TextDraw[] {
  * 刻度逻辑（每格 = 10km/h）：
  * - 前 17 格（0-170）：越过变黄 REACHED_FAST，未达灰色
  * - 后 3 格（170/180/190 红区）：越过变红 REACHED_HIGH，未达半透明
+ * setColor 后必须重新 show 刻度：部分客户端/组件下 setColor 只改存储不重绘，
+ * 颜色变化要 re-show 才生效——此前"GUI 去重"删掉了每 tick 的无条件 show，
+ * 导致刻度颜色永远停在创建时的灰（数字 setString 不受影响）。本函数仅在
+ * 分档变化/1s 兜底时执行，频率低，show 20 个刻度的开销可忽略。
  */
-export function updateSpeed2d(tds: TextDraw[], speed: number): void {
+export function updateSpeed2d(player: Player, tds: TextDraw[], speed: number): void {
   const kmh = Math.floor(speed);
   // 数字与刻度在同一个函数里：若数字已失效（TD 被销毁/断线自动清理），setString
   // 抛异常会中断后面的 setColor 循环——刻度停在旧色。先校验整体有效性再刷
@@ -90,6 +94,7 @@ export function updateSpeed2d(tds: TextDraw[], speed: number): void {
     tds[j + 2].setColor(
       j <= 16 ? (passed ? REACHED_FAST : UNREACHED) : passed ? REACHED_HIGH : UNREACHED_HIGH,
     );
+    tds[j + 2].show(player); // setColor 后 re-show：颜色立即生效
   }
 }
 

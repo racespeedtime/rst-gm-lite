@@ -226,7 +226,7 @@ function refreshGuiText(player: Player, gui: PlayerGui, setting: SysUserSettingM
     if (kmhInt !== gui.speedoKmh || nowTs - gui.speedoAt >= 1000) {
       gui.speedoKmh = kmhInt;
       gui.speedoAt = nowTs;
-      updateSpeed2d(gui.speedoTd, kmh);
+      updateSpeed2d(player, gui.speedoTd, kmh);
     }
   }
   // 3d 速度表：贴图材质文字重渲染昂贵，文本不变跳过
