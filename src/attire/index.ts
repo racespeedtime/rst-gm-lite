@@ -1191,6 +1191,10 @@ function rebuildVehicleAttireItem(playerId: number, st: VehEditState, modelId: n
   updateStreamerForPlayer(playerId);
 }
 
+/** 旋转轴（前翻/侧翻/旋转）的步长倍率：旋转以度计，0.1 度/步（位置步长）肉眼
+ *  无感（按住 1 秒才 1 度）——放大到 5 度/步，与位置 0.1 单位的可见性匹配 */
+const ROT_STEP_MULT = 50;
+
 /** 对当前微调轴 ±step（dir=-1/1，对齐原版小键盘 4/6） */
 function nudgeVehicleAttire(playerId: number, st: VehEditState, dir: -1 | 1): void {
   const objMap = vehicleObjMap.get(playerId);
@@ -1198,6 +1202,7 @@ function nudgeVehicleAttire(playerId: number, st: VehEditState, dir: -1 | 1): vo
   if (!objMap || !old || !old.isValid()) return;
   const model = old.getModel();
   const d = st.step * dir;
+  const dRot = st.step * ROT_STEP_MULT * dir;
   switch (st.axis) {
     case 1:
       st.work.x += d;
@@ -1209,13 +1214,13 @@ function nudgeVehicleAttire(playerId: number, st: VehEditState, dir: -1 | 1): vo
       st.work.z += d;
       break;
     case 4:
-      st.work.rX += d;
+      st.work.rX += dRot;
       break;
     case 5:
-      st.work.rY += d;
+      st.work.rY += dRot;
       break;
     case 6:
-      st.work.rZ += d;
+      st.work.rZ += dRot;
       break;
   }
   rebuildVehicleAttireItem(playerId, st, model);
@@ -1245,9 +1250,11 @@ async function showVehicleEditDialog(player: Player): Promise<void> {
   }
   if (res.listItem < 6) {
     st.axis = res.listItem + 1;
+    const stepText =
+      res.listItem < 3 ? `每次 ±${st.step} 单位` : `每次 ±${st.step * ROT_STEP_MULT} 度`;
     player.sendClientMessage(
       COLOR_WHITE,
-      `[装扮] 当前微调：${VEHC_EDIT_AXES[res.listItem]}（小键盘 4/6，按住连续）`,
+      `[装扮] 当前微调：${VEHC_EDIT_AXES[res.listItem]}（方向键 ←/→ 按住连续，${stepText}）`,
     );
     st.dialogOpen = false;
     return;
@@ -1259,7 +1266,7 @@ async function showVehicleEditDialog(player: Player): Promise<void> {
       new Dialog({
         style: DialogStylesEnum.INPUT,
         caption: "调速",
-        info: `当前步长 ${st.step}（每次微调 ±该值）：`,
+        info: `当前位置步长 ${st.step}（每次微调：位置 ±${st.step} 单位 / 旋转 ±${st.step * ROT_STEP_MULT} 度）：`,
         button1: "确定",
         button2: "取消",
       }),
