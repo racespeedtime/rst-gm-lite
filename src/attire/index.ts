@@ -25,16 +25,7 @@ import type { MenuBack } from "@/core/panel";
 export const MAX_PLAYER_ATTIRE = 10;
 export const MAX_VEHICLE_ATTIRE = 15;
 
-/** samp-node 注入的全局 native（@infernus/core 内部同源使用）。这里仅剩一处调用：
- *  SetDynamicObjectAttachedVehicle 做"车辆挂件分离"——已确认 infernus 的
- *  DynamicObject 无 detach/attachedVehicle 方法（只有 attachToVehicle，无分离 API），
- *  只能直接调 streamer native。而刷新类操作（Streamer_Update）infernus 提供了
- *  Streamer.update，已改用公开 API（见 updateStreamerForPlayer），不在此手写 */
-declare const samp: {
-  callNative: (name: string, format: string, ...args: unknown[]) => number;
-};
-/** streamer INVALID_VEHICLE_ID（分离挂件用） */
-const INVALID_VEHICLE_ID = 0xffff;
+/** 刷新类操作（Streamer_Update）infernus 提供了 Streamer.update，见 updateStreamerForPlayer */
 
 /**
  * 请求 streamer 立即为玩家刷新（Streamer.update = Streamer_Update）。
@@ -72,6 +63,10 @@ const appliedPresetByPlayer = new Map<number, string | null>();
 interface AttireEditState {
   presetId: string;
   itemId: string;
+  /** 车辆挂件编辑期间的独立编辑对象：attach 对象编辑拖不动（attach 关系覆盖
+   *  编辑写入），编辑前销毁 attach 对象、同位置建独立对象进入 obj.edit；保存/取消
+   *  后销毁它并重建 attach（全程 infernus API，无直接 native 调用） */
+  editObj?: DynamicObject;
 }
 const playerEditing = new Map<number, AttireEditState>();
 const vehicleEditing = new Map<number, AttireEditState>();
@@ -271,8 +266,7 @@ export function cleanupAttire(playerId: number): void {
   playerSlotMap.delete(playerId);
   vehicleObjMap.delete(playerId);
   appliedPresetByPlayer.delete(playerId);
-  playerEditing.delete(playerId);
-  vehicleEditing.delete(playerId);
+  cleanupAttireEditing(playerId); // 含销毁编辑中的独立对象（防断线泄漏）
 }
 
 /**
@@ -1112,12 +1106,13 @@ async function editVehiclePresetItem(
   }
 }
 
-/** 开始实时编辑车辆挂件：先把挂件从车辆上分离成独立对象，再进入 obj 拖拽编辑。
+/** 开始实时编辑车辆挂件：把挂件从车辆上分离成独立对象，再进入 obj 拖拽编辑。
  *  返回是否成功（未挂载 → false，调用方回菜单）
  *  detach 必要性：挂件 attach 在车上时，EditDynamicObject 拖拽无效（attach 关系
- *  持续覆盖编辑写入的位置/旋转），表现为"拖不动"。SetDynamicObjectAttachedVehicle
- *  分离后挂件保持当前位置成为独立全局对象，编辑的是世界坐标；保存/取消后由
- *  applyVehiclePreset 按 DB 值重建重新 attach。 */
+ *  持续覆盖编辑写入的位置/旋转），表现为"拖不动"。infernus DynamicObject 无
+ *  detach API，改用"销毁 attach 对象 + 同位置建独立编辑对象"实现分离（全程
+ *  公开 API，无直接 native 调用）；保存/取消后由 applyVehiclePreset 按 DB 值
+ *  重建重新 attach。 */
 async function startEditVehicleAttire(
   player: Player,
   itemId: string,
@@ -1125,23 +1120,37 @@ async function startEditVehicleAttire(
 ): Promise<boolean> {
   const objMap = vehicleObjMap.get(player.id);
   const obj = objMap?.get(itemId);
-  if (!obj || !obj.isValid()) {
+  if (!objMap || !obj || !obj.isValid()) {
     player.sendClientMessage(COLOR_ERROR, "该挂件未挂载（先应用此预设或坐进车内），无法实时编辑");
     return false;
   }
-  vehicleEditing.set(player.id, { presetId, itemId });
+  // 记录当前位置/旋转（attach 对象 getPos/getRot 返回世界坐标），销毁 attach
+  // 对象后用同模型/同位置建独立对象进入编辑
+  const pos = obj.getPos();
+  const rot = obj.getRot();
+  const editObj = new DynamicObject({
+    modelId: obj.getModel(),
+    x: pos.x,
+    y: pos.y,
+    z: pos.z,
+    rx: rot.rx,
+    ry: rot.ry,
+    rz: rot.rz,
+    worldId: player.getVirtualWorld(),
+  }).create();
   try {
-    // 分离挂件（attach 状态编辑拖不动）：分离后对象留在当前位置，成为独立对象。
-    // infernus DynamicObject 无 detach API，仅此一处用 streamer native（见 samp 声明注释）
-    samp.callNative("SetDynamicObjectAttachedVehicle", "ii", obj.id, INVALID_VEHICLE_ID);
-    // 分离是对象状态突变（attach → 独立），streamer 默认不更新静止玩家的对象——
-    // 立即请求刷新，否则分离后挂件可能短暂不显示/位置错位
-    updateStreamerForPlayer(player.id);
-  } catch (e) {
-    logger.warn(`[attire] 车辆挂件分离失败 ${player.getName().name}`, e);
+    obj.destroy(); // 销毁 attach 对象：防双对象显示 + attach 残留覆盖编辑
+  } catch {
+    /* 已失效 */
   }
+  // map 引用换为编辑对象：保存/取消回调据此匹配 objectMp.id 并销毁
+  objMap.set(itemId, editObj);
+  vehicleEditing.set(player.id, { presetId, itemId, editObj });
+  // 分离是对象状态突变（attach → 独立），streamer 默认不更新静止玩家的对象——
+  // 立即请求刷新，否则编辑对象可能短暂不显示/位置错位
+  updateStreamerForPlayer(player.id);
   player.sendClientMessage(COLOR_WHITE, "[装扮] 拖拽调整挂件位置，保存确认 / Esc 取消");
-  obj.edit(player);
+  editObj.edit(player);
   return true;
 }
 
@@ -1354,6 +1363,14 @@ async function confirmDeletePreset(
  */
 function cleanupAttireEditing(playerId: number): void {
   playerEditing.delete(playerId);
+  const st = vehicleEditing.get(playerId);
+  if (st?.editObj) {
+    try {
+      if (st.editObj.isValid()) st.editObj.destroy();
+    } catch {
+      /* 已失效 */
+    }
+  }
   vehicleEditing.delete(playerId);
 }
 
@@ -1450,8 +1467,16 @@ export function initAttireEditor(): void {
       if (!obj || objectMp?.id !== obj.id) return next();
       if (response === EditResponseTypesEnum.CANCEL) {
         vehicleEditing.delete(player.id);
-        // B3：取消后按 DB 值重应用（原位置恢复）——否则 DynamicObject 停在拖拽后
-        // 的位置但 DB 未变（所见与所存不一致），与人物挂件 CANCEL 行为对齐
+        // 销毁独立编辑对象（attach 原对象已在 startEdit 时销毁）——
+        // 否则独立对象残留；然后按 DB 值重应用（原位置恢复），与人物挂件
+        // CANCEL 行为对齐
+        if (st.editObj) {
+          try {
+            if (st.editObj.isValid()) st.editObj.destroy();
+          } catch {
+            /* 已失效 */
+          }
+        }
         const veh = getOwnedVehicle(player.id);
         if (veh && veh.isValid()) {
           void applyVehiclePreset(veh, st.presetId, player.id);
@@ -1463,6 +1488,14 @@ export function initAttireEditor(): void {
         return next(); // UPDATE 预览帧不落库（防拖拽每帧写 DB），仅保存时写
       }
       vehicleEditing.delete(player.id);
+      // 销毁独立编辑对象（applyVehiclePreset 重建 attach 前清掉）
+      if (st.editObj) {
+        try {
+          if (st.editObj.isValid()) st.editObj.destroy();
+        } catch {
+          /* 已失效 */
+        }
+      }
       void (async () => {
         try {
           await prisma.vehiclePresetItem.update({
