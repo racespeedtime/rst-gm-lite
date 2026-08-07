@@ -1219,7 +1219,7 @@ async function showVehicleEditDialog(player: Player): Promise<void> {
     player,
     new Dialog({
       style: DialogStylesEnum.LIST,
-      caption: `挂件编辑（小键盘 4/6 微调 · 2 重开本框）`,
+      caption: `挂件编辑（方向键←/→ 微调 · ↓ 重开本框）`,
       info,
       button1: "选择",
       button2: "取消",
@@ -1321,7 +1321,9 @@ async function startEditVehicleAttire(
       rZ: Number(item.rZ),
     },
   });
-  // 轮询：小键盘 4/6 连续微调（按住每 tick 一次）；numpad 2（ANALOG_DOWN）边沿重开操作框
+  // 轮询：方向键 ←/→（ANALOG_LEFT/RIGHT，小键盘 4/6 同键位）按住连续微调；
+  // 方向键 ↓（ANALOG_DOWN，小键盘 2 同键位）边沿重开操作框。无小键盘的玩家
+  // 用方向键即可（SA 键位系统里两者是同一输入）
   const timer = setIntervalSafe(() => {
     const st2 = vehicleEditing.get(player.id);
     const p = Player.getInstance(player.id);
@@ -1340,9 +1342,18 @@ async function startEditVehicleAttire(
     st2.prevKeys = keys;
   }, VEH_EDIT_POLL_MS);
   vehEditTimers.set(player.id, timer);
+  // 建议坐进车里操作：方向键在车外是移动键，会边走边调（对齐原版要求
+  // IsPlayerInAnyVehicle 编辑）；车里方向键=转向，不冲突。不强制——站车外
+  // 也能调，只是方向键会移动角色
+  if (!player.isInAnyVehicle()) {
+    player.sendClientMessage(
+      COLOR_WHITE,
+      "[装扮] 建议坐进车里编辑（车外方向键是移动），坐车后方向键=转向不冲突",
+    );
+  }
   player.sendClientMessage(
     COLOR_WHITE,
-    "[装扮] 小键盘 4/6 微调挂件位置，2 打开操作框（调速/删除/保存）",
+    "[装扮] 方向键 ←/→ 微调挂件位置（小键盘 4/6 同键位），方向键 ↓ 打开操作框",
   );
   void showVehicleEditDialog(player);
   return true;
