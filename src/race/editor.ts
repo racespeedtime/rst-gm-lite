@@ -7,11 +7,8 @@ import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
 import { spawnRaceVehicleAt, getDefaultRaceModel } from "./vehicle";
 import { cleanupScriptVehicle } from "./scripts";
-import { isInRace } from "./room";
+import { isInRace, UUID_RE } from "./room";
 import { sysMsg } from "@/utils/msg";
-
-/** UUID 格式（按 id 查赛道前校验，避免非 uuid 输入触发 PostgreSQL 类型错误） */
-const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
 /** 编辑中的赛道（raceId + 玩家当前查看的 CP） */
 interface EditState {

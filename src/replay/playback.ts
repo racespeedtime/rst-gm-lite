@@ -14,6 +14,7 @@ import { InCarSync, IncomingBitStream } from "@infernus/raknet";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
+import { formatRaceTimeCs } from "@/utils/format";
 import { isInRace } from "@/race/room";
 import { isInChallenge } from "./challenge";
 import { getOwnedVehicle, addVehicleComponentIfPossible } from "@/vehicles";
@@ -372,19 +373,13 @@ function replayTdBase(player: Player, y: number, text: string): TextDraw {
     .setProportional(true);
 }
 
-/** 毫秒 → mm:ss.cc（对齐原版 ms2time 后 msg[2]/10） */
-function fmtRaceTime(ms: number): string {
-  const m = Math.floor(ms / 60000);
-  const s = Math.floor((ms % 60000) / 1000);
-  const cs = Math.floor((ms % 1000) / 10);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(cs).padStart(2, "0")}`;
-}
+/** 毫秒 → mm:ss.cc（对齐原版 ms2time 后 msg[2]/10；公共函数在 utils/format） */
 
 /** 给观战者创建比赛信息 TD（回放事件无关，从帧状态渲染；rank 用录制名次快照） */
 function ensureObserverTds(session: ReplaySession, player: Player): void {
   if (session.tds.has(player.id)) return;
   const header = session.data.header;
-  const best = header.bestMs >= 0 ? `BEST / ${fmtRaceTime(header.bestMs)}` : "BEST / --:--:--";
+  const best = header.bestMs >= 0 ? `BEST / ${formatRaceTimeCs(header.bestMs)}` : "BEST / --:--:--";
   // 初始 RANK：v8 文件用帧内实时名次（首帧 syncObserverTds 立即刷入，初始 -- 防
   // DB 快照闪变）；旧 v7 及以下无帧内名次 → 用 DB 名次快照
   const rank =
@@ -872,7 +867,7 @@ function syncObserverTds(session: ReplaySession): void {
     session.ghosts[0].playTime,
   );
   const cpText = `C  P / ~p~${s.cpProgress}~w~/~y~${session.data.header.totalCp || 1}`;
-  const timeText = `TIME / ${fmtRaceTime(timeMs)}`;
+  const timeText = `TIME / ${formatRaceTimeCs(timeMs)}`;
   if (cpText !== session.lastCpText || timeText !== session.lastTimeText) {
     session.lastCpText = cpText;
     session.lastTimeText = timeText;

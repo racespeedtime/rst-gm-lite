@@ -75,6 +75,14 @@ export function addVehicleComponentIfPossible(vehicle: Vehicle, componentId: num
   }
 }
 
+/** 氮气组件 ID（散落 14 处的魔法数字收敛；刷车/比赛车/回放车/NPC 车统一用） */
+export const NITRO_COMPONENT = 1010;
+
+/** 给车辆加氮气组件（能装才装；对齐 addVehicleComponentIfPossible 的校验） */
+export function addNitro(vehicle: Vehicle): void {
+  addVehicleComponentIfPossible(vehicle, NITRO_COMPONENT);
+}
+
 /**
  * 懒创建 user_vehicle 行：
  * 刷车时按 (user, modelId) 查库，有则复用（含默认预设/外观），无则新建默认行。

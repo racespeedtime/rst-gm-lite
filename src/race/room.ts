@@ -61,7 +61,7 @@ import { getSafeGroundZ } from "@/core/colandreas";
 import { applyWorldEnv, getWorldWeather } from "@/core/worldenv";
 import { sessionManager } from "@/sessions/manager";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
-import { formatTime } from "@/utils/format";
+import { formatTime, formatRaceTimeCs } from "@/utils/format";
 import { PREFIX, sysMsg } from "@/utils/msg";
 import { MIN_Z } from "@/utils/map";
 import { COLOR_RACE } from "@/utils/colors";
@@ -1123,13 +1123,6 @@ function createRaceTd(player: Player, room: RaceRoom): RoomRaceTds {
 }
 
 /** 毫秒 → mm:ss.cc（两位百分秒，对齐原版 ms2time 后 msg[2]/10） */
-function formatRaceTime(ms: number): string {
-  const m = Math.floor(ms / 60000);
-  const s = Math.floor((ms % 60000) / 1000);
-  const cs = Math.floor((ms % 1000) / 10);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(cs).padStart(2, "0")}`;
-}
-
 /** 排名后缀（对齐原版 RANK / %i st/nd/rd/th） */
 function rankSuffix(rank: number): string {
   const n = rank + 1;
@@ -1157,7 +1150,7 @@ async function updateBestTd(player: Player, room: RaceRoom, tds: RoomRaceTds): P
     // DB 查询为异步：查询期间玩家可能已掉线（TD 被 infernus 自动销毁）或
     // 已离开比赛——setString 前守卫 isValid，防 async 续体对失效 TD 抛错
     if (tds.best.isValid()) {
-      tds.best.setString(best === -1 ? "BEST / 99:99:99" : `BEST / ${formatRaceTime(best)}`);
+      tds.best.setString(best === -1 ? "BEST / 99:99:99" : `BEST / ${formatRaceTimeCs(best)}`);
     }
   } catch (e) {
     logger.error(`[race] 查询个人最佳失败 ${player.getName().name}`, e);
@@ -1492,7 +1485,7 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   if (isPB && auth) {
     const raceTds = room.raceTextTds.get(player.id);
     if (raceTds && raceTds.best.isValid()) {
-      raceTds.best.setString(`BEST / ${formatRaceTime(time)}`);
+      raceTds.best.setString(`BEST / ${formatRaceTimeCs(time)}`);
       room.bestTimes.set(auth.userId, time);
     }
   }
@@ -1952,7 +1945,7 @@ function tickRooms(): void {
       // 事件驱动——无录制会话时零开销）
       noteRank(r.playerId, rank + 1);
       const time = mp.finished ? r.time : now - mp.startTime;
-      const timeText = `TIME / ${formatRaceTime(time)}`;
+      const timeText = `TIME / ${formatRaceTimeCs(time)}`;
       const rankText = `RANK / ${rank + 1} ${rankSuffix(rank)}`;
       setRaceTdText(room, r.playerId, timeText, rankText);
       // 观战者同步：观察该玩家的玩家显示同样的 TIME/RANK（对齐原版 RaceRunTime/
@@ -2015,7 +2008,7 @@ function syncRaceTds(): void {
       const cs = Math.floor((now - mp.startTime) / 10);
       if (cs !== cache.timeCs) {
         cache.timeCs = cs;
-        const timeText = `TIME / ${formatRaceTime(now - mp.startTime)}`;
+        const timeText = `TIME / ${formatRaceTimeCs(now - mp.startTime)}`;
         cache.time = timeText;
         tds.time.setString(timeText);
       }
@@ -2040,7 +2033,7 @@ function syncRaceTds(): void {
       const cs = Math.floor((now - tmp.startTime) / 10);
       if (cs !== cache.timeCs) {
         cache.timeCs = cs;
-        const timeText = `TIME / ${formatRaceTime(now - tmp.startTime)}`;
+        const timeText = `TIME / ${formatRaceTimeCs(now - tmp.startTime)}`;
         cache.time = timeText;
         tds.time.setString(timeText);
       }
@@ -2511,7 +2504,7 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       setRaceTdText(
         room,
         player.id,
-        `TIME / ${formatRaceTime(Date.now() - rstart)}`,
+        `TIME / ${formatRaceTimeCs(Date.now() - rstart)}`,
         `RANK / 1 ${rankSuffix(0)}`,
       );
       // 恢复 BEST TD（房间缓存已有，无则查询）
