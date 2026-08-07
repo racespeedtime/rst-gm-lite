@@ -4,6 +4,7 @@ import {
   DialogStylesEnum,
   DynamicObject,
   EditResponseTypesEnum,
+  KeysEnum,
   ObjectMpEvent,
   Player,
   PlayerEvent,
@@ -15,6 +16,7 @@ import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle, addVehicleComponentIfPossible } from "@/vehicles";
 import { invalidateSettingCache, getSetting } from "@/personalize/settings";
+import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
@@ -63,13 +65,23 @@ const appliedPresetByPlayer = new Map<number, string | null>();
 interface AttireEditState {
   presetId: string;
   itemId: string;
-  /** 车辆挂件编辑期间的独立编辑对象：attach 对象编辑拖不动（attach 关系覆盖
-   *  编辑写入），编辑前销毁 attach 对象、同位置建独立对象进入 obj.edit；保存/取消
-   *  后销毁它并重建 attach（全程 infernus API，无直接 native 调用） */
-  editObj?: DynamicObject;
+}
+/** 车辆挂件按键微调会话（对齐原版 CDIALOG_CarZB：选轴 → 小键盘 4/6 连续微调，
+ *  numpad 2 重开操作框；全程 destroy+recreate+attachToVehicle，纯 API 无拖拽） */
+interface VehEditState extends AttireEditState {
+  /** 当前微调轴（1=X 左右 2=Y 前后 3=Z 上下 4=RX 前翻 5=RY 侧翻 6=RZ 旋转，对齐原版） */
+  axis: number;
+  /** 微调步长（默认 0.1，操作框可调速） */
+  step: number;
+  /** 操作框打开中（打开时轮询不响应微调键，防误触） */
+  dialogOpen: boolean;
+  /** 上次轮询的按键位（numpad 2 重开操作框的边沿检测） */
+  prevKeys: number;
+  /** 本次会话的偏移工作副本：微调改这里，保存时才写 DB（对齐原版：DB 仅在保存时落） */
+  work: { x: number; y: number; z: number; rX: number; rY: number; rZ: number };
 }
 const playerEditing = new Map<number, AttireEditState>();
-const vehicleEditing = new Map<number, AttireEditState>();
+const vehicleEditing = new Map<number, VehEditState>();
 
 /** 人物骨骼列表（对齐原版 bone 目录，两处使用共用一份） */
 const PLAYER_BONES = [
@@ -1082,7 +1094,7 @@ async function editVehiclePresetItem(
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: `挂件：${item.attire.name}`,
-      info: "1. 实时编辑位置（拖拽）\n2. 调整位置/旋转\n3. 移除该挂件",
+      info: "1. 实时编辑位置（小键盘 4/6 微调）\n2. 调整位置/旋转\n3. 移除该挂件",
       button1: "确定",
       button2: "取消",
     }),
@@ -1106,13 +1118,177 @@ async function editVehiclePresetItem(
   }
 }
 
-/** 开始实时编辑车辆挂件：把挂件从车辆上分离成独立对象，再进入 obj 拖拽编辑。
+/** 车辆挂件按键微调轮询定时器（keyed by playerId；登记制，onExit 统一清理） */
+const vehEditTimers = new Map<number, NodeJS.Timeout>();
+const VEH_EDIT_POLL_MS = 100;
+
+/** 微调轴名（对齐原版 CDIALOG_CarZB 列表；索引+1 = axis） */
+const VEHC_EDIT_AXES = ["左右", "前后", "上下", "前翻", "侧翻", "旋转"];
+
+/** 停止按键微调轮询 */
+function stopVehEditPoll(playerId: number): void {
+  const t = vehEditTimers.get(playerId);
+  if (t) clearIntervalSafe(t);
+  vehEditTimers.delete(playerId);
+}
+
+/** 结束车辆挂件编辑会话（保存/删除/取消/断线）：停轮询 + 清状态；reapply 时按当前
+ *  DB 值重建挂件（保存=新偏移生效，取消/删除=还原原状） */
+function endVehicleAttireEdit(player: Player, reapply: boolean): void {
+  const st = vehicleEditing.get(player.id);
+  stopVehEditPoll(player.id);
+  vehicleEditing.delete(player.id);
+  if (reapply && st) {
+    const veh = getOwnedVehicle(player.id);
+    if (veh && veh.isValid()) void applyVehiclePreset(veh, st.presetId, player.id);
+  }
+}
+
+/** 重建单个车辆挂件对象（纯 API：销毁 → 新建 → attachToVehicle 工作副本偏移）。
+ *  按键微调不写 DB、不改预设——每步 destroy+recreate+attach 让偏移即时生效。 */
+function rebuildVehicleAttireItem(playerId: number, st: VehEditState, modelId: number): void {
+  const player = Player.getInstance(playerId);
+  const veh = getOwnedVehicle(playerId);
+  const objMap = vehicleObjMap.get(playerId);
+  if (!player || !veh || !veh.isValid() || !objMap) return;
+  const old = objMap.get(st.itemId);
+  if (!old || !old.isValid()) return;
+  try {
+    old.destroy();
+  } catch {
+    /* 已失效 */
+  }
+  const obj = new DynamicObject({
+    modelId,
+    x: 0,
+    y: 0,
+    z: 0,
+    rx: 0,
+    ry: 0,
+    rz: 0,
+  }).create();
+  obj.attachToVehicle(veh, st.work.x, st.work.y, st.work.z, st.work.rX, st.work.rY, st.work.rZ);
+  objMap.set(st.itemId, obj);
+  // 同步应用对象数组的引用（applyVehiclePreset 销毁时按数组清）
+  const arr = appliedVehicleObjs.get(playerId);
+  if (arr) {
+    const i = arr.indexOf(old);
+    if (i >= 0) arr[i] = obj;
+  }
+  updateStreamerForPlayer(playerId);
+}
+
+/** 对当前微调轴 ±step（dir=-1/1，对齐原版小键盘 4/6） */
+function nudgeVehicleAttire(playerId: number, st: VehEditState, dir: -1 | 1): void {
+  const objMap = vehicleObjMap.get(playerId);
+  const old = objMap?.get(st.itemId);
+  if (!objMap || !old || !old.isValid()) return;
+  const model = old.getModel();
+  const d = st.step * dir;
+  switch (st.axis) {
+    case 1:
+      st.work.x += d;
+      break;
+    case 2:
+      st.work.y += d;
+      break;
+    case 3:
+      st.work.z += d;
+      break;
+    case 4:
+      st.work.rX += d;
+      break;
+    case 5:
+      st.work.rY += d;
+      break;
+    case 6:
+      st.work.rZ += d;
+      break;
+  }
+  rebuildVehicleAttireItem(playerId, st, model);
+}
+
+/** 车辆挂件操作框（对齐原版 CDIALOG_CarZB）：选轴 / 调速 / 删除 / 保存退出。
+ *  取消 → 还原退出；断线由 showDialog 转 null 走同一分支 */
+async function showVehicleEditDialog(player: Player): Promise<void> {
+  const st = vehicleEditing.get(player.id);
+  if (!st) return;
+  st.dialogOpen = true;
+  const info = [...VEHC_EDIT_AXES, "调速", "{FF0000}删除", "{00FF00}保存并退出"].join("\n");
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: `挂件编辑（小键盘 4/6 微调 · 2 重开本框）`,
+      info,
+      button1: "选择",
+      button2: "取消",
+    }),
+  );
+  if (!res || res.response !== 1) {
+    // 取消 / 断线：还原退出（DB 未动，applyVehiclePreset 恢复原状）
+    endVehicleAttireEdit(player, true);
+    return;
+  }
+  if (res.listItem < 6) {
+    st.axis = res.listItem + 1;
+    player.sendClientMessage(
+      COLOR_WHITE,
+      `[装扮] 当前微调：${VEHC_EDIT_AXES[res.listItem]}（小键盘 4/6，按住连续）`,
+    );
+    st.dialogOpen = false;
+    return;
+  }
+  if (res.listItem === 6) {
+    // 调速
+    const r = await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.INPUT,
+        caption: "调速",
+        info: `当前步长 ${st.step}（每次微调 ±该值）：`,
+        button1: "确定",
+        button2: "取消",
+      }),
+    );
+    if (r && r.response === 1) {
+      const v = parseFloat(r.inputText.trim());
+      if (Number.isFinite(v) && v > 0) {
+        st.step = v;
+        player.sendClientMessage(COLOR_WHITE, `[装扮] 微调步长已设为 ${v}`);
+      }
+    }
+    st.dialogOpen = false;
+    return showVehicleEditDialog(player);
+  }
+  if (res.listItem === 7) {
+    // 删除：删 DB 行 → 重建预设（该挂件消失）
+    await prisma.vehiclePresetItem.delete({ where: { id: st.itemId } });
+    player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已删除该挂件");
+    endVehicleAttireEdit(player, true);
+    return;
+  }
+  // 保存并退出：工作副本写 DB → 重建生效
+  await prisma.vehiclePresetItem.update({
+    where: { id: st.itemId },
+    data: {
+      x: st.work.x,
+      y: st.work.y,
+      z: st.work.z,
+      rX: st.work.rX,
+      rY: st.work.rY,
+      rZ: st.work.rZ,
+    },
+  });
+  player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
+  endVehicleAttireEdit(player, true);
+}
+
+/** 开始实时编辑车辆挂件（对齐原版：选轴 + 小键盘 4/6 微调，无拖拽）。
  *  返回是否成功（未挂载 → false，调用方回菜单）
- *  detach 必要性：挂件 attach 在车上时，EditDynamicObject 拖拽无效（attach 关系
- *  持续覆盖编辑写入的位置/旋转），表现为"拖不动"。infernus DynamicObject 无
- *  detach API，改用"销毁 attach 对象 + 同位置建独立编辑对象"实现分离（全程
- *  公开 API，无直接 native 调用）；保存/取消后由 applyVehiclePreset 按 DB 值
- *  重建重新 attach。 */
+ *  原理：attach 对象无法直接拖拽（attach 关系覆盖编辑写入），原版用"按键微调
+ *  偏移 + destroy/recreate/attachToVehicle"实现——纯 API，无 EditDynamicObject、
+ *  无直接 native。微调只改会话工作副本，保存时才写 DB。 */
 async function startEditVehicleAttire(
   player: Player,
   itemId: string,
@@ -1124,33 +1300,51 @@ async function startEditVehicleAttire(
     player.sendClientMessage(COLOR_ERROR, "该挂件未挂载（先应用此预设或坐进车内），无法实时编辑");
     return false;
   }
-  // 记录当前位置/旋转（attach 对象 getPos/getRot 返回世界坐标），销毁 attach
-  // 对象后用同模型/同位置建独立对象进入编辑
-  const pos = obj.getPos();
-  const rot = obj.getRot();
-  const editObj = new DynamicObject({
-    modelId: obj.getModel(),
-    x: pos.x,
-    y: pos.y,
-    z: pos.z,
-    rx: rot.rx,
-    ry: rot.ry,
-    rz: rot.rz,
-    worldId: player.getVirtualWorld(),
-  }).create();
-  try {
-    obj.destroy(); // 销毁 attach 对象：防双对象显示 + attach 残留覆盖编辑
-  } catch {
-    /* 已失效 */
+  const item = await prisma.vehiclePresetItem.findUnique({ where: { id: itemId } });
+  if (!item) {
+    player.sendClientMessage(COLOR_ERROR, "挂件数据不存在");
+    return false;
   }
-  // map 引用换为编辑对象：保存/取消回调据此匹配 objectMp.id 并销毁
-  objMap.set(itemId, editObj);
-  vehicleEditing.set(player.id, { presetId, itemId, editObj });
-  // 分离是对象状态突变（attach → 独立），streamer 默认不更新静止玩家的对象——
-  // 立即请求刷新，否则编辑对象可能短暂不显示/位置错位
-  updateStreamerForPlayer(player.id);
-  player.sendClientMessage(COLOR_WHITE, "[装扮] 拖拽调整挂件位置，保存确认 / Esc 取消");
-  editObj.edit(player);
+  vehicleEditing.set(player.id, {
+    presetId,
+    itemId,
+    axis: 1,
+    step: 0.1,
+    dialogOpen: false,
+    prevKeys: 0,
+    work: {
+      x: Number(item.x),
+      y: Number(item.y),
+      z: Number(item.z),
+      rX: Number(item.rX),
+      rY: Number(item.rY),
+      rZ: Number(item.rZ),
+    },
+  });
+  // 轮询：小键盘 4/6 连续微调（按住每 tick 一次）；numpad 2（ANALOG_DOWN）边沿重开操作框
+  const timer = setIntervalSafe(() => {
+    const st2 = vehicleEditing.get(player.id);
+    const p = Player.getInstance(player.id);
+    if (!st2 || !p || !p.isConnected()) {
+      stopVehEditPoll(player.id);
+      return;
+    }
+    const keys = p.getKeys().keys & 0xffff;
+    if (!st2.dialogOpen) {
+      if (keys & KeysEnum.ANALOG_LEFT) nudgeVehicleAttire(player.id, st2, -1);
+      else if (keys & KeysEnum.ANALOG_RIGHT) nudgeVehicleAttire(player.id, st2, 1);
+    }
+    if (keys & KeysEnum.ANALOG_DOWN && !(st2.prevKeys & KeysEnum.ANALOG_DOWN)) {
+      void showVehicleEditDialog(p); // 重开操作框（调速/删除/保存）
+    }
+    st2.prevKeys = keys;
+  }, VEH_EDIT_POLL_MS);
+  vehEditTimers.set(player.id, timer);
+  player.sendClientMessage(
+    COLOR_WHITE,
+    "[装扮] 小键盘 4/6 微调挂件位置，2 打开操作框（调速/删除/保存）",
+  );
+  void showVehicleEditDialog(player);
   return true;
 }
 
@@ -1363,14 +1557,7 @@ async function confirmDeletePreset(
  */
 function cleanupAttireEditing(playerId: number): void {
   playerEditing.delete(playerId);
-  const st = vehicleEditing.get(playerId);
-  if (st?.editObj) {
-    try {
-      if (st.editObj.isValid()) st.editObj.destroy();
-    } catch {
-      /* 已失效 */
-    }
-  }
+  stopVehEditPoll(playerId); // 停按键微调轮询（编辑态随断线/重生清除）
   vehicleEditing.delete(playerId);
 }
 
@@ -1437,82 +1624,6 @@ export function initAttireEditor(): void {
         } catch (e) {
           logger.error(`[attire] 保存挂件编辑失败 ${player.getName().name}`, e);
           player.sendClientMessage(COLOR_ERROR, "[装扮] 保存失败");
-        }
-      })();
-      return next();
-    },
-  );
-
-  // 车辆挂件编辑回调（onPlayerEdit 只报全局对象编辑：obj.edit 的响应）
-  ObjectMpEvent.onPlayerEdit(
-    ({
-      player,
-      isGlobal,
-      isPlayerObject,
-      objectMp,
-      response,
-      fX,
-      fY,
-      fZ,
-      fRotX,
-      fRotY,
-      fRotZ,
-      next,
-    }) => {
-      const st = vehicleEditing.get(player.id);
-      // 仅处理全局对象（车辆挂件是 DynamicObject），且编辑对象确实是我们登记的那个
-      if (!st || !isGlobal || isPlayerObject) return next();
-      const objMap = vehicleObjMap.get(player.id);
-      const obj = objMap?.get(st.itemId);
-      if (!obj || objectMp?.id !== obj.id) return next();
-      if (response === EditResponseTypesEnum.CANCEL) {
-        vehicleEditing.delete(player.id);
-        // 销毁独立编辑对象（attach 原对象已在 startEdit 时销毁）——
-        // 否则独立对象残留；然后按 DB 值重应用（原位置恢复），与人物挂件
-        // CANCEL 行为对齐
-        if (st.editObj) {
-          try {
-            if (st.editObj.isValid()) st.editObj.destroy();
-          } catch {
-            /* 已失效 */
-          }
-        }
-        const veh = getOwnedVehicle(player.id);
-        if (veh && veh.isValid()) {
-          void applyVehiclePreset(veh, st.presetId, player.id);
-        }
-        player.sendClientMessage(COLOR_WHITE, "[装扮] 已取消编辑，恢复原位置");
-        return next();
-      }
-      if (response !== EditResponseTypesEnum.FINAL) {
-        return next(); // UPDATE 预览帧不落库（防拖拽每帧写 DB），仅保存时写
-      }
-      vehicleEditing.delete(player.id);
-      // 销毁独立编辑对象（applyVehiclePreset 重建 attach 前清掉）
-      if (st.editObj) {
-        try {
-          if (st.editObj.isValid()) st.editObj.destroy();
-        } catch {
-          /* 已失效 */
-        }
-      }
-      void (async () => {
-        try {
-          await prisma.vehiclePresetItem.update({
-            where: { id: st.itemId },
-            data: { x: fX, y: fY, z: fZ, rX: fRotX, rY: fRotY, rZ: fRotZ },
-          });
-          player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
-        } catch (e) {
-          logger.error(`[attire] 保存车辆挂件编辑失败 ${player.getName().name}`, e);
-          player.sendClientMessage(COLOR_ERROR, "[装扮] 保存失败");
-        }
-        // 重建挂件：编辑期间对象是 detach 的独立状态，保存后必须按 DB 新偏移
-        // 重建并重新 attach（applyVehiclePreset 销毁旧对象 + 新建 attach），
-        // 否则挂件停在编辑位置且不再跟随车辆
-        const veh = getOwnedVehicle(player.id);
-        if (veh && veh.isValid()) {
-          void applyVehiclePreset(veh, st.presetId, player.id);
         }
       })();
       return next();
