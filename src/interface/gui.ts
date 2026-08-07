@@ -267,13 +267,18 @@ function getDisplaySpeed(player: Player): number {
   if (st) {
     if (st.kind === "vehicle") {
       const veh = Vehicle.getInstance(st.targetId);
-      if (!veh) return 0;
-      const sp = veh.getSpeed();
-      const scale = getReplaySpeedScaleForVehicle(veh.id);
-      return scale ? sp / scale : sp;
+      if (veh && veh.isValid()) {
+        const sp = veh.getSpeed();
+        const scale = getReplaySpeedScaleForVehicle(veh.id);
+        return scale ? sp / scale : sp;
+      }
+      // 观战车辆已销毁（幽灵车/回放结束残留条目）：回退真实速度——
+      // 否则速度表恒 0，刻度永远灰
+    } else {
+      const target = Player.getInstance(st.targetId);
+      if (target && target.isConnected()) return target.getSpeed();
+      // 观战目标不在线：同样回退
     }
-    const target = Player.getInstance(st.targetId);
-    return target ? target.getSpeed() : 0;
   }
   const veh = player.isInAnyVehicle() ? player.getVehicle() : null;
   return veh ? veh.getSpeed() : player.getSpeed();
