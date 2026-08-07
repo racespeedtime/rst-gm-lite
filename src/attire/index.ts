@@ -1324,9 +1324,10 @@ async function startEditVehicleAttire(
       rZ: Number(item.rZ),
     },
   });
-  // 轮询：方向键 ←/→（ANALOG_LEFT/RIGHT，小键盘 4/6 同键位）按住连续微调；
-  // 方向键 ↓（ANALOG_DOWN，小键盘 2 同键位）边沿重开操作框。无小键盘的玩家
-  // 用方向键即可（SA 键位系统里两者是同一输入）
+  // 轮询微调键：小键盘 4/6（keys 位集 ANALOG_*）与方向键 ←/→（leftRight 参数）
+  // 是两套独立按键——SA 键位里方向键走 GetPlayerKeys 的 leftRight/updown 参数，
+  // 小键盘数字键走 keys 位集。两套都要监听（无小键盘玩家用方向键）。
+  // 重开操作框：小键盘 2（ANALOG_DOWN）或 方向键 ↓（updown 参数）
   const timer = setIntervalSafe(() => {
     const st2 = vehicleEditing.get(player.id);
     const p = Player.getInstance(player.id);
@@ -1334,15 +1335,22 @@ async function startEditVehicleAttire(
       stopVehEditPoll(player.id);
       return;
     }
-    const keys = p.getKeys().keys & 0xffff;
+    const k = p.getKeys();
+    const keys = k.keys & 0xffff;
+    const lr = k.leftRight;
+    const ud = k.upDown;
     if (!st2.dialogOpen) {
-      if (keys & KeysEnum.ANALOG_LEFT) nudgeVehicleAttire(player.id, st2, -1);
-      else if (keys & KeysEnum.ANALOG_RIGHT) nudgeVehicleAttire(player.id, st2, 1);
+      const left = (keys & KeysEnum.ANALOG_LEFT) !== 0 || lr === KeysEnum.KEY_LEFT;
+      const right = (keys & KeysEnum.ANALOG_RIGHT) !== 0 || lr === KeysEnum.KEY_RIGHT;
+      if (left) nudgeVehicleAttire(player.id, st2, -1);
+      else if (right) nudgeVehicleAttire(player.id, st2, 1);
     }
-    if (keys & KeysEnum.ANALOG_DOWN && !(st2.prevKeys & KeysEnum.ANALOG_DOWN)) {
-      void showVehicleEditDialog(p); // 重开操作框（调速/删除/保存）
+    // 重开操作框：小键盘 2 或 方向键 ↓（边沿触发）
+    const down = (keys & KeysEnum.ANALOG_DOWN) !== 0 || ud === KeysEnum.KEY_DOWN;
+    if (down && !st2.prevKeys) {
+      void showVehicleEditDialog(p);
     }
-    st2.prevKeys = keys;
+    st2.prevKeys = down ? 1 : 0;
   }, VEH_EDIT_POLL_MS);
   vehEditTimers.set(player.id, timer);
   // 建议坐进车里操作：方向键在车外是移动键，会边走边调（对齐原版要求
