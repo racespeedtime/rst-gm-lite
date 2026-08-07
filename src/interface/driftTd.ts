@@ -19,7 +19,9 @@ export interface DriftTdState {
   color: number;
 }
 
-/** 屏幕上方居中（网络信息 y0-3 下方一点），大数字 + 徽章上下排列 */
+/** 屏幕上方居中（网络信息 y0-3 下方一点），大数字 + 徽章上下排列。
+ *  创建时不 show：等首次 updateDriftTd 判定 visible 后才显示——否则进游戏
+ *  立即闪一个"0"（直到 100ms 后首 tick 隐藏），违背"第一次漂移才显示" */
 export function createDriftTd(player: Player): DriftTdState {
   const scoreTd = new TextDraw({ player, x: 320, y: 8, text: "0" })
     .create()
@@ -41,8 +43,6 @@ export function createDriftTd(player: Player): DriftTdState {
     .setShadow(1)
     .setProportional(true)
     .setSelectable(false);
-  scoreTd.show(player);
-  badgeTd.show(player);
   return {
     scoreTd,
     badgeTd,

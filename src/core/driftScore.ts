@@ -113,13 +113,17 @@ function normAngle180(a: number): number {
   return ((((a + 180) % 360) + 360) % 360) - 180;
 }
 
-/** 无漂移活动：宽限内不打断连击；超过宽限倍率归 1；超过 DRIFT_RESET_MS 积分归 0。
- *  lastActiveAt 置 0 冻结累计——宽限内恢复漂移时首 tick elapsed=0，中断期不计入倍率。 */
+/** 无漂移活动：宽限内不打断连击、不退出漂移显示态——对齐参考实现的超时语义
+ * （drift-detection.inc 条件不满足累积 1.5s 才 OnPlayerDriftStop）：漂移中瞬时
+ * 跌破阈值（弯心减速/甩尾抖动）是常态，若每帧都置 status=none，倍率徽章会
+ * 一显示就隐藏、连击永远攒不起来。超宽限才归 1 倍率 + 退出显示态；
+ * 超过 DRIFT_RESET_MS 积分归 0（TD 隐藏，下次重新开始计算）。
+ * lastActiveAt 置 0 冻结累计——宽限内恢复漂移时首 tick elapsed=0，中断期不计入倍率。 */
 function handleIdleDrift(st: DriftScoreState, now: number): void {
   if (st.inactiveSince === 0) st.inactiveSince = now;
   st.lastActiveAt = 0;
-  st.status = "none";
   if (now - st.inactiveSince >= DRIFT_BREAK_GRACE_MS) {
+    st.status = "none";
     st.multiplier = 1;
     st.multiplierMs = 0;
   }
