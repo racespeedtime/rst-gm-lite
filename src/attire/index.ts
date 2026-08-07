@@ -79,6 +79,8 @@ interface VehEditState extends AttireEditState {
   prevKeys: number;
   /** 本次会话的偏移工作副本：微调改这里，保存时才写 DB（对齐原版：DB 仅在保存时落） */
   work: { x: number; y: number; z: number; rX: number; rY: number; rZ: number };
+  /** 开始编辑时的虚拟世界：传送/换世界会退出编辑（还原），防轮询/dialog 残留 */
+  worldId: number;
 }
 const playerEditing = new Map<number, AttireEditState>();
 const vehicleEditing = new Map<number, VehEditState>();
@@ -1340,6 +1342,7 @@ async function startEditVehicleAttire(
       rY: Number(item.rY),
       rZ: Number(item.rZ),
     },
+    worldId: player.getVirtualWorld(),
   });
   // 轮询微调键：小键盘 4/6（keys 位集 ANALOG_*）与方向键 ←/→（leftRight 参数）
   // 是两套独立按键——SA 键位里方向键走 GetPlayerKeys 的 leftRight/updown 参数，
@@ -1350,6 +1353,13 @@ async function startEditVehicleAttire(
     const p = Player.getInstance(player.id);
     if (!st2 || !p || !p.isConnected()) {
       stopVehEditPoll(player.id);
+      return;
+    }
+    // 传送/换世界兜底：世界变化即退出编辑（还原 DB 原状）——防轮询/dialog
+    // 在异世界残留（玩家传送/进战局后编辑上下文已失效）。进比赛由 joinRoom
+    // 主动 cleanupAttireEditing（与本兜底互补，进比赛常先切世界两者都覆盖）
+    if (p.getVirtualWorld() !== st2.worldId) {
+      endVehicleAttireEdit(p, true);
       return;
     }
     const k = p.getKeys();
@@ -1592,9 +1602,9 @@ async function confirmDeletePreset(
 /**
  * 编辑态兜底清理（死亡/重生时调用）：编辑期间玩家死亡/离开/车辆被销毁等
  * 导致回调不来 → 编辑态残留，下次菜单点"实时编辑"会沿用旧状态。onSpawn
- * 时清一次（死亡重生挂件由 spawn 流程重应用）。
- */
-function cleanupAttireEditing(playerId: number): void {
+ * 时清一次（死亡重生挂件由 spawn 流程重应用）。导出供比赛系统在进比赛时
+ * 清理（编辑中进赛道：挂件/轮询/dialog 全部退出，防残留）。 */
+export function cleanupAttireEditing(playerId: number): void {
   playerEditing.delete(playerId);
   stopVehEditPoll(playerId); // 停按键微调轮询（编辑态随断线/重生清除）
   vehicleEditing.delete(playerId);

@@ -27,7 +27,7 @@ import {
   type CpScriptContext,
 } from "./scripts";
 import { isEditing } from "./editor";
-import { reapplyCurrentPlayerPreset } from "@/attire";
+import { reapplyCurrentPlayerPreset, cleanupAttireEditing } from "@/attire";
 import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import {
@@ -794,6 +794,9 @@ export async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   // 进比赛：停止玩家正在播放的回放 + 影子挑战（比赛中 /rp 被白名单拦截无法
   // 主动停，挑战世界与比赛世界隔离——不清理会留下挂机 ghost）
   stopReplayForPlayer(player.id);
+  // 装扮编辑中进比赛：退出编辑（挂件/微调轮询/dialog 全部清掉，对齐上述活动
+  // 状态清理；不还原——进比赛本就要按比赛流程处理车辆）
+  cleanupAttireEditing(player.id);
   // 观战中进比赛：退出观战（spectating 状态下 putPlayerIn/切世界均无效，
   // 否则整场比赛只能旁观无法开车，录制也采不到有效帧）
   if (isObserving(player.id)) {
