@@ -96,9 +96,9 @@ function stepColor(from: number, target: number): number {
   return (r << 24) | (g << 16) | (b << 8) | a;
 }
 
-/** 分数纯数字（用户明确不要千分位逗号分隔） */
+/** 分数千分位逗号分隔（123456 → 123,456） */
 function fmtScore(n: number): string {
-  return String(Math.max(0, Math.floor(n)));
+  return Math.max(0, Math.floor(n)).toLocaleString("en-US");
 }
 
 /** 刷新漂移积分 TD（按玩家当前状态/分数；无活动且分数 0 隐藏，文本 diff 去重） */

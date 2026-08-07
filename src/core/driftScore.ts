@@ -33,7 +33,7 @@ const DRIFT_ANGLE_MIN = 12;
 const DRIFT_ANGLE_MAX = 80;
 const DRIFT_SPEED_MIN = 45;
 /** 单次漂移积分上限（加到上限停止累加，数字不再变大） */
-const SCORE_CAP = 99999;
+const SCORE_CAP = 999999;
 
 export type DriftStatus = "drift" | "none";
 
