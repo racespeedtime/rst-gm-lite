@@ -116,9 +116,8 @@ export const DOOR_SOUND_ID = 6401;
 // 1. LS 大楼电梯（原 ls_elevator，21 层）
 // ---------------------------------------------------------------------------
 const lsElevatorFloorZ = [
-  0.0, 8.5479, 13.99945, 19.451, 24.90255, 30.3541, 35.80565, 41.2572, 46.70875, 52.1603,
-  57.61185, 63.0634, 68.51495, 73.9665, 79.41805, 84.8696, 90.32115, 95.7727, 101.22425,
-  106.6758, 112.12735,
+  0.0, 8.5479, 13.99945, 19.451, 24.90255, 30.3541, 35.80565, 41.2572, 46.70875, 52.1603, 57.61185,
+  63.0634, 68.51495, 73.9665, 79.41805, 84.8696, 90.32115, 95.7727, 101.22425, 106.6758, 112.12735,
 ];
 const lsElevatorLabelZ = Array.from({ length: 21 }, (_, i) =>
   i === 0 ? 13.4713 : 13.4713 + 8.7396 + (i - 1) * 5.45155,
@@ -146,8 +145,29 @@ const LS_ELEVATOR: ElevatorConfig = {
   },
   doorClosedCheck: { axis: "x", closedPos: 1786.627685, margin: 1.1 },
   elevatorRotation: 270,
-  floors: ["地面层", "2层", "3层", "4层", "5层", "6层", "7层", "8层", "9层", "10层",
-    "11层", "12层", "13层", "14层", "15层", "16层", "17层", "18层", "19层", "20层", "顶层"],
+  floors: [
+    "地面层",
+    "2层",
+    "3层",
+    "4层",
+    "5层",
+    "6层",
+    "7层",
+    "8层",
+    "9层",
+    "10层",
+    "11层",
+    "12层",
+    "13层",
+    "14层",
+    "15层",
+    "16层",
+    "17层",
+    "18层",
+    "19层",
+    "20层",
+    "顶层",
+  ],
   floorZOffsets: lsElevatorFloorZ,
   floorLabelZ: lsElevatorLabelZ,
   floorLabelOffset: { x: -2.6982, y: 2.6935 },
@@ -250,8 +270,22 @@ const LS_BEACH_SIDE: ElevatorConfig = {
   },
   doorClosedCheck: { axis: "y", closedPos: BEACH_Y_CLOSED, margin: 0.01 },
   elevatorRotation: 80,
-  floors: ["地下停车场", "地面层", "2层", "3层", "4层", "5层", "6层", "7层", "8层", "9层", "10层",
-    "11层", "12层", "13层"],
+  floors: [
+    "地下停车场",
+    "地面层",
+    "2层",
+    "3层",
+    "4层",
+    "5层",
+    "6层",
+    "7层",
+    "8层",
+    "9层",
+    "10层",
+    "11层",
+    "12层",
+    "13层",
+  ],
   floorZOffsets: lsBeachFloorZ,
   floorLabelZ: lsBeachLabelZ,
   floorLabelOffset: { x: 2, y: -3 },
@@ -325,3 +359,12 @@ export const ELEVATOR_CONFIGS: readonly ElevatorConfig[] = [
 
 /** 电梯实体所在世界（公共大世界，与玩家战局隔离无关：建筑在 world 0） */
 export const ELEVATOR_WORLD_ID = PUBLIC_WORLD_ID;
+
+/** 电梯建筑/实体可见的全部虚拟世界（0 + 战局 1..1000 + 比赛 1001..2000 + 回放
+ *  2001..2100）：电梯建筑移除原版后靠 extraObjects 补，removeBuilding 对任何世界
+ *  生效——若实体只在 world 0，比赛/回放世界会"原版被移除但补建不可见"成空白。
+ *  交互不受影响：比赛中电梯系统禁用（onKeyStateChange 的 isInRace 守卫） */
+export const ELEVATOR_ALL_WORLDS: number[] = [
+  PUBLIC_WORLD_ID,
+  ...Array.from({ length: 2100 }, (_, i) => i + 1),
+];

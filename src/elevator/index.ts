@@ -29,10 +29,11 @@ import {
   ELEVATOR_STATE_MOVING,
   ELEVATOR_STATE_WAITING,
   ELEVATOR_WAIT_TIME,
-  ELEVATOR_WORLD_ID,
+  ELEVATOR_ALL_WORLDS,
   INVALID_FLOOR,
   type ElevatorConfig,
 } from "./config";
+import { isInRace } from "@/race/room";
 
 /**
  * 电梯系统（通用引擎，移植自 infernus filterscript 的 4 个电梯脚本，
@@ -274,7 +275,7 @@ function createElevatorLabel(el: ElevatorInstance, z: number): void {
     y: cfg.y + cfg.elevatorLabelOffset.y,
     z,
     drawDistance: 4.0,
-    worldId: ELEVATOR_WORLD_ID,
+    worldId: -1, // 所有世界可见（电梯建筑多世界可见，标签同步；streamer -1 = 全部）
     testLOS: true,
     charset: DEFAULT_CHARSET, // 3D 标签中文必须与玩家默认字符集一致否则乱码
   });
@@ -304,7 +305,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
       rx: 0,
       ry: 0,
       rz: config.elevatorRotation,
-      worldId: ELEVATOR_WORLD_ID,
+      worldId: ELEVATOR_ALL_WORLDS,
     }),
     carDoors: [
       new DynamicObject({
@@ -315,7 +316,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
         rx: 0,
         ry: 0,
         rz: config.elevatorRotation,
-        worldId: ELEVATOR_WORLD_ID,
+        worldId: ELEVATOR_ALL_WORLDS,
       }),
       new DynamicObject({
         modelId: 18756, // 右门
@@ -325,7 +326,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
         rx: 0,
         ry: 0,
         rz: config.elevatorRotation,
-        worldId: ELEVATOR_WORLD_ID,
+        worldId: ELEVATOR_ALL_WORLDS,
       }),
     ],
     floorDoors: [],
@@ -353,7 +354,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
         rx: 0,
         ry: 0,
         rz: config.elevatorRotation,
-        worldId: ELEVATOR_WORLD_ID,
+        worldId: ELEVATOR_ALL_WORLDS,
       }),
       new DynamicObject({
         modelId: 18756,
@@ -363,7 +364,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
         rx: 0,
         ry: 0,
         rz: config.elevatorRotation,
-        worldId: ELEVATOR_WORLD_ID,
+        worldId: ELEVATOR_ALL_WORLDS,
       }),
     ];
     el.floorDoors[i][0].create();
@@ -376,7 +377,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
       y: config.y + config.floorLabelOffset.y,
       z: config.floorLabelZ[i],
       drawDistance: 10.5,
-      worldId: ELEVATOR_WORLD_ID,
+      worldId: -1, // 楼层标签同样所有世界可见（Dynamic3DTextLabel 只支持单值，-1=全部）
       testLOS: true,
       charset: DEFAULT_CHARSET,
     });
@@ -393,7 +394,7 @@ function createInstance(config: ElevatorConfig): ElevatorInstance {
       rx: o.rx,
       ry: o.ry,
       rz: o.rz,
-      worldId: ELEVATOR_WORLD_ID,
+      worldId: ELEVATOR_ALL_WORLDS,
     });
     obj.create();
     el.extraObjects.push(obj);
@@ -596,9 +597,11 @@ export function initElevators(): void {
     // NPC/未认证玩家不响应；未按 Y 直接放行（面板等后续 handler 继续）
     if (player.isNpc() || !getAuthState(player.id)) return next();
     if (!isHolding(newKeys, KeysEnum.YES)) return next();
-    // 只处理玩家当前所在世界的电梯（战局/比赛世界看不到这些建筑）
-    const world = player.getVirtualWorld();
-    if (world !== ELEVATOR_WORLD_ID) return next();
+    // 比赛中禁用电梯交互（建筑可见但系统不可用——比赛世界由比赛系统控制，
+    // 电梯移动/轿厢会把玩家拖离赛道/干扰比赛）
+    if (isInRace(player.id)) return next();
+    // 建筑任何世界可见，交互同样任何世界可用（世界坐标一致，玩家站在电梯旁
+    // 按 Y 即触发；不设世界限制——只在比赛中禁用）
     for (const el of instances.values()) {
       if (handleKeyState(el, player, newKeys, oldKeys)) {
         // 电梯消费了 Y 键（楼层呼叫/轿厢内选层）：同步 return false 终止事件链，
