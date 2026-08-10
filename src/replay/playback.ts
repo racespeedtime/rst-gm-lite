@@ -187,8 +187,9 @@ interface Ghost {
   warnedEmulateFail: boolean;
   /** 已播完（playTime 到终点）：停止 emulate 驱动标志（seek 回看时重置） */
   stopped: boolean;
-  /** 上次补氮气时刻（SA 氮气有容量，按录制者按键补，500ms 节流防高频 addComponent） */
-  lastNitroAt: number;
+  /** 上一帧录制按键是否按着氮气（SPRINT 上升沿检测——补氮气只在按下瞬间做一次，
+   *  不边喷边装组件，防打断客户端正在进行的喷射） */
+  nitroWasOn: boolean;
   /** 分身编号（1..N，头车=1；标签显示用） */
   labelNo: number;
   /** 当前标签显示的在线状态（掉线时标签追加红字"掉线"；变化时 updateText） */
@@ -735,14 +736,18 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     const now = Date.now();
     if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS && !atEnd) return;
     ghost.lastEmulateAt = now;
-    // 氮气跟随录制者按键：SA 氮气有容量、喷完即消失，录制时由 vehicleAuto
-    // 定时补充，回放 NPC 车无人补——检测到 keys.SPRINT 置位就给车补一个氮气
-    // 组件（500ms 节流防高频 addComponent），保证该喷的时刻有氮气可喷
-    // （否则氮气耗尽后 keys 仍按住却不喷，表现断断续续像点按；播完不再补）。
-    if (s.keys & KeysEnum.SPRINT && !atEnd && now - ghost.lastNitroAt >= 500) {
-      ghost.lastNitroAt = now;
+    // 氮气跟随录制者按键：SA 氮气是**客户端单管容量**（安装 1010 给满一管，喷射
+    // 时持续消耗，喷完即消失）。录制时由 vehicleAuto 定时补充，回放 NPC 车无人补。
+    // 关键：组件重装会**打断客户端正在进行的喷射**——原实现每 500ms 补一次组件，
+    // 喷射被反复掐断，观感就是"氮气 1 秒就没了"。改为**上升沿补满**：录制者每
+    // 按下一次氮气 → 补一管，该段喷射全程不再动组件、整段连续喷；长按超出一管
+    // 后速度仍由帧 velocity 承载（与录制时玩家自身一致——原版玩家的管也是有限的）。
+    // 播完（atEnd）不再补。
+    const nitroOn = (s.keys & KeysEnum.SPRINT) !== 0;
+    if (nitroOn && !atEnd && !ghost.nitroWasOn) {
       addNitro(ghost.vehicle);
     }
+    ghost.nitroWasOn = nitroOn;
     // 血量由 emulate 的 vehicleHealth 处理，无需显式 setHealth（重复操作）
     emulateDriverSync(ghost.npcPlayerId, ghost.vehicle, s, atEnd);
   } catch (e) {
@@ -1101,7 +1106,7 @@ export async function spawnReplay(
           lastEmulateAt: 0,
           warnedEmulateFail: false,
           stopped: false,
-          lastNitroAt: 0,
+          nitroWasOn: false,
           labelNo,
           online: true,
         });

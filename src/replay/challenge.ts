@@ -59,8 +59,9 @@ interface ChallengeGhost {
   lastEmulateAt: number;
   /** emulate/send 失败是否已警告过（一次性防刷屏） */
   warnedEmulateFail: boolean;
-  /** 上次补氮气时刻（SA 氮气有容量，按录制者按键补，500ms 节流防高频 addComponent） */
-  lastNitroAt: number;
+  /** 上一帧录制按键是否按着氮气（SPRINT 上升沿检测——补氮气只在按下瞬间做一次，
+   *  不边喷边装组件，防打断客户端正在进行的喷射） */
+  nitroWasOn: boolean;
   /** 当前标签显示的在线状态（录制者掉线时标签追加红字"掉线"；变化时 updateText） */
   online: boolean;
 }
@@ -213,14 +214,17 @@ function renderGhost(ch: ChallengeSession): void {
     const now = Date.now();
     if (now - ch.ghost.lastEmulateAt < 33) return;
     ch.ghost.lastEmulateAt = now;
-    // 氮气跟随录制者按键：SA 氮气有容量、喷完即消失，录制时由 vehicleAuto
-    // 定时补充，挑战影子车无人补——检测到 keys.SPRINT 置位就补一个氮气
-    // 组件（500ms 节流防高频 addComponent），保证该喷的时刻有氮气可喷
-    // （与回放 playback renderGhost 同一套逻辑；起始/播完后 atEnd 不再补）
-    if (s.keys & KeysEnum.SPRINT && !atEnd && now - ch.ghost.lastNitroAt >= 500) {
-      ch.ghost.lastNitroAt = now;
+    // 氮气跟随录制者按键：SA 氮气是**客户端单管容量**（安装 1010 给满一管，喷射
+    // 时持续消耗，喷完即消失）。录制时由 vehicleAuto 定时补充，挑战影子车无人补。
+    // 关键：组件重装会**打断客户端正在进行的喷射**——原实现每 500ms 补一次组件，
+    // 喷射被反复掐断，观感就是"氮气 1 秒就没了"。改为**上升沿补满**：录制者每
+    // 按下一次氮气 → 补一管，该段喷射全程不再动组件、整段连续喷（与回放 playback
+    // 同一套逻辑）；起始/播完后 atEnd 不再补。
+    const nitroOn = (s.keys & KeysEnum.SPRINT) !== 0;
+    if (nitroOn && !atEnd && !ch.ghost.nitroWasOn) {
       addNitro(ch.ghost.vehicle);
     }
+    ch.ghost.nitroWasOn = nitroOn;
     emulateDriverSync(ch.ghost.npcPlayerId, ch.ghost.vehicle, s, atEnd);
   } catch (e) {
     // 一次性 warn 防刷屏；实体失效由清理兜底
@@ -937,7 +941,7 @@ async function startChallengeCore(
       npcPlayerId: shadowPlayer.id,
       lastEmulateAt: 0,
       warnedEmulateFail: false,
-      lastNitroAt: 0,
+      nitroWasOn: false,
       online: true, // 起始帧在线（掉线重连回放才可能翻转为 false）
     };
     // NPC 连接建立是异步的：刚 create 后立即 putInVehicle 可能未生效（NPC 未就绪
