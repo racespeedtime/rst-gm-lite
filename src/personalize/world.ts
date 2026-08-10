@@ -256,8 +256,9 @@ async function openTimeWeatherFlow(player: Player): Promise<void> {
       return;
     }
     await updateSetting(player, { timeHour: hour, timeMinute: minute });
-    // 立即重建冻结定时器：applyWorldEnv 会清除旧 60s interval 并按新时刻重设
-    //（否则冻结模式下旧定时器把刚设的时间回退成旧值）
+    // 立即重建时间定时器：applyWorldEnv 会清除旧的流逝(1s)/冻结(60s) interval 并按
+    // 新时刻重设（否则冻结模式旧定时器把刚设的时间回退成旧值、流逝模式旧定时器
+    // 从旧时刻起算继续 +1 分钟）
     await applyWorldEnv(player);
     notifySaved(player, `个人时间已设为 ${pad2(hour)}:${pad2(minute)}`);
     return;

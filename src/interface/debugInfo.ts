@@ -128,7 +128,10 @@ const p2 = (n: number): string => String(n).padStart(2, "0");
 
 /**
  * 玩家当前应显示的时间（按个性化设置推算实际值，与 applyWorldEnv 同口径）：
- * - syncGameTime=true → 服务器现实时间（new Date 时分）；false → 设置 timeHour:timeMinute
+ * - syncGameTime=true → 服务器现实时间（new Date 时分）
+ * - syncGameTime=false + timeFlow=false → 固定设定 timeHour:timeMinute（个人时间冻结）
+ * - syncGameTime=false + timeFlow=true → 服务器每秒推进的实际游戏时间 getTime
+ *   （个人时间流逝：现实 1 秒 = 游戏 1 分钟，服务器 setTime 驱动）
  * - 比赛中（房间统一时间由 beginRace 按房主设置 setTime）/ 回放观看（每帧 setTime
  *   录制赛道时间）/ 影子挑战中：画面时钟 ≠ 设置推算值——回退玩家实际 getTime
  *   （服务器已 setTime 后的结果），保证右上角时间与画面一致
@@ -139,6 +142,9 @@ const p2 = (n: number): string => String(n).padStart(2, "0");
  */
 export function getDisplayTime(player: Player): string {
   const setting = getCachedSetting(player);
+  const tm = player.getTime();
+  const actualHour = tm.ret ? tm.hour : 12;
+  const actualMinute = tm.ret ? tm.minute : 0;
   // 比赛中/回放观看/影子挑战/时间过渡中画面时钟被 setTime 覆盖，回退实际时间
   const overridden =
     isInRace(player.id) ||
@@ -148,12 +154,23 @@ export function getDisplayTime(player: Player): string {
   let hour: number;
   let minute: number;
   if (setting && !overridden) {
-    hour = setting.syncGameTime ? new Date().getHours() : setting.timeHour;
-    minute = setting.syncGameTime ? new Date().getMinutes() : setting.timeMinute;
+    if (setting.syncGameTime) {
+      // 跟随大世界时间：显示现实时钟（服务器每分钟 setTime 到现实时刻，
+      // 用 new Date 直接显示当前现实时分，避免客户端冻结值最多滞后 1 分钟）
+      hour = new Date().getHours();
+      minute = new Date().getMinutes();
+    } else if (setting.timeFlow) {
+      // 个人时间流逝：服务器每秒推进 1 游戏分钟——显示推进后的实际游戏时间
+      hour = actualHour;
+      minute = actualMinute;
+    } else {
+      // 个人时间冻结：固定显示设定时刻
+      hour = setting.timeHour;
+      minute = setting.timeMinute;
+    }
   } else {
-    const tm = player.getTime();
-    hour = tm.ret ? tm.hour : 12;
-    minute = tm.ret ? tm.minute : 0;
+    hour = actualHour;
+    minute = actualMinute;
   }
   return `${p2(hour)}:${p2(minute)}`;
 }
@@ -161,6 +178,7 @@ export function getDisplayTime(player: Player): string {
 /**
  * 玩家当前应显示的时间/天气（按个性化设置推算实际值，与 applyWorldEnv 同口径）：
  * - syncGameTime=true → 服务器现实时间（new Date 时分）；false → 设置 timeHour:timeMinute
+ * - timeFlow=true（个人时间流逝）→ 显示服务器推进后的实际游戏时间（getTime）
  * - syncWorldWeather=true → 服务器当前天气（getWorldWeather）；false → 设置 weather
  * 设置缓存未命中（未登录/尚未缓存）→ 回退玩家实际 getTime/getWeather（服务器
  * 按设置 setTime 后的结果）。5Hz 刷新读内存缓存不查库。
@@ -182,8 +200,19 @@ function displayTimeWeather(player: Player): string {
     isTimeTransitioning(player.id) ||
     !!getReplayDebugState(player.id);
   if (setting && !overridden) {
-    hour = setting.syncGameTime ? new Date().getHours() : setting.timeHour;
-    minute = setting.syncGameTime ? new Date().getMinutes() : setting.timeMinute;
+    if (setting.syncGameTime) {
+      // 跟随大世界时间：显示现实时钟（与 getDisplayTime 同口径，见其注释）
+      hour = new Date().getHours();
+      minute = new Date().getMinutes();
+    } else if (setting.timeFlow) {
+      // 个人时间流逝：显示服务器推进后的实际游戏时间
+      hour = actualHour;
+      minute = actualMinute;
+    } else {
+      // 个人时间冻结：固定显示设定时刻
+      hour = setting.timeHour;
+      minute = setting.timeMinute;
+    }
     weather = setting.syncWorldWeather ? getWorldWeather() : setting.weather;
   } else {
     hour = actualHour;
