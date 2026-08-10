@@ -110,6 +110,13 @@ export function cleanupVehicleAuto(playerId: number): void {
   autoFixSet.delete(playerId);
 }
 
+/** 切换氮气方式（timer/hold）时重置计数：nitroCount 两种模式共用同一 Map——
+ *  timer 的"满 15 补一次"累计值会串成 hold 的冷却剩余（反之亦然），不重置则
+ * 切换后补充时机错乱（"切换没区别"的元凶之一） */
+export function resetNitroCount(playerId: number): void {
+  nitroCount.delete(playerId);
+}
+
 /** 单玩家车辆自动 tick（1 秒一次，对齐原版 addNitro/autoFix/randomVehColor/autoFlip） */
 async function vehicleTick(player: Player): Promise<void> {
   if (!player.isInAnyVehicle()) return;

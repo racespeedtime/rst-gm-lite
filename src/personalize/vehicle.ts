@@ -3,7 +3,7 @@ import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { getSetting, updateSetting, pickOption, notifySaved, toggleText } from "./settings";
 import { COLOR_ERROR } from "@/utils/colors";
-import { syncVehicleAutoState, syncNoCollisionState } from "@/core/vehicleAuto";
+import { syncVehicleAutoState, syncNoCollisionState, resetNitroCount } from "@/core/vehicleAuto";
 import { getOwnedVehicle } from "@/vehicles";
 import { applyVehiclePreset } from "@/attire";
 import type { MenuBack } from "@/core/panel";
@@ -123,6 +123,9 @@ export async function openVehicleMenu(player: Player, back?: MenuBack): Promise<
       if (nitroIndex < 0) return again();
       const next = nitroIndex === 1 ? "timer" : "hold";
       await updateSetting(player, { nitroType: next });
+      // 重置氮气计数：两种模式共用 nitroCount，timer 的累计会串成 hold 的冷却
+      //（反之亦然）——切换后补充时机从零开始，行为才是所选模式本来的样子
+      resetNitroCount(player.id);
       notifySaved(player, `氮气方式已设为：${next === "timer" ? "定时器" : "点按"}`);
       return again();
     }
