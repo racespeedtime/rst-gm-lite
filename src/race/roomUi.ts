@@ -132,7 +132,8 @@ async function fetchEnabledRaces(
 /**
  * /r 无参数 → 赛道列表对话框（对齐原版 Race_ShowGameMainSel 分页列表）。
  * 排序与面板「赛道列表」对齐：先选排序字段（创建时间/名称/总长度）→ 方向。
- * 首行「全部随机」→ 随机抽一张赛道创建房间；其余选中直接创建。
+ * 首行「全部随机」→ 随机抽一张赛道创建房间；其余选中进赛道详情（与面板
+ * 「赛道列表」一致：先看详情再决定开始比赛/回放/挑战/排行榜）。
  */
 async function openRaceListDialog(player: Player): Promise<void> {
   // 排序选择（对齐面板 raceListFlow：字段 + 方向，取消则返回不弹列表）
@@ -162,17 +163,21 @@ async function openRaceListDialog(player: Player): Promise<void> {
             `${race.laps ?? 1}`,
             race.sysUser?.username ?? "?",
           ],
-    button1: "开始",
+    button1: "查看",
     button2: "取消",
   });
   if (!r) return;
-  const room =
-    r.item.id === RANDOM_RACE_ID
-      ? await createRaceRoom(player, null)
-      : await createRaceRoom(player, r.item.id);
-  if (room) {
-    sysMsg(player, "race", "再输入 /r s 开始比赛", "info");
+  // 选中普通赛道 → 赛道详情（与面板「赛道列表」一致：先看详情再决定开始比赛/
+  // 回放/挑战/排行榜，不再直接建房跳层）；「全部随机」无详情可言，保持直接
+  // 随机建房。详情取消直接关闭，不弹回本列表（详情即目标面板）
+  if (r.item.id === RANDOM_RACE_ID) {
+    const room = await createRaceRoom(player, null);
+    if (room) {
+      sysMsg(player, "race", "再输入 /r s 开始比赛", "info");
+    }
+    return;
   }
+  await openRaceDetailPanel(player, r.item.id);
 }
 
 /** 赛道选择器（换赛道/创建共用）：先选排序再分页选择返回选中赛道，取消返回 null */
