@@ -385,8 +385,11 @@ export function isTimeTransitioning(playerId: number): boolean {
  * - 跨度 ≤ 60 分钟 → 按 1 分钟/步（真正的分针转动，逐分钟平滑）
  * - 更大跨度 → 60 步均摊（时针转动，每步十几~几十分钟）
  * 50ms 一帧，总时长 = 步数 × 50ms（1 分钟跨度 ≈ 0.1s，12 小时跨度 ≈ 3s）。
- * 方向取较短回绕路径（≤12h，避免绕远一整圈）。目标与当前相同直接设置（无
- * 动画）。断线自动停止（每步检查 isConnected）；重设前须先 cancelTimeTransition。
+ * 时间一维向前：只沿正向（分钟递增）推进，不逆时针回绕——即使目标在当前
+ * 时刻"倒退侧"更近，也绕完整圈正向走（分针/时针永远向前转，符合"时间流逝"
+ * 的直觉；原"较短回绕路径"会让时钟倒转，玩家看到分针逆走）。目标与当前
+ * 相同直接设置（无动画）。断线自动停止（每步检查 isConnected）；重设前须先
+ * cancelTimeTransition。
  */
 function animateTimeTo(player: Player, targetHour: number, targetMinute: number): void {
   const cur = player.getTime();
@@ -396,18 +399,18 @@ function animateTimeTo(player: Player, targetHour: number, targetMinute: number)
     player.setTime(((targetHour % 24) + 24) % 24, ((targetMinute % 60) + 60) % 60);
     return;
   }
-  // 较短方向：正向 N 分钟 vs 回绕 24h-N 取小的；step 为有符号增量（负 = 回绕倒退）
+  // 正向分钟数（恒正）：目标在当前时刻"倒退侧"也不取负增量——时间一维向前，
+  // 逆时针回绕会让分针倒转
   const fwd = (((target - start) % 1440) + 1440) % 1440;
-  const step = fwd <= 720 ? fwd : fwd - 1440;
-  // 步数自适应：|step| ≤ 60 按 1 分钟一步（分针转动）；更大按 60 步均摊（时针转动）
-  const steps = Math.min(60, Math.max(1, Math.abs(step)));
+  // 步数自适应：fwd ≤ 60 按 1 分钟一步（分针转动）；更大按 60 步均摊（时针转动）
+  const steps = Math.min(60, Math.max(1, fwd));
   let i = 1;
   const tick = () => {
     if (!player.isConnected()) {
       timeTransitionTimers.delete(player.id);
       return;
     }
-    const now = (((start + (step * i) / steps) % 1440) + 1440) % 1440;
+    const now = (((start + (fwd * i) / steps) % 1440) + 1440) % 1440;
     // 先对总分钟取整再拆小时/分钟：分钟满 60 直接进位到小时
     //（Math.round(now%60)%60 会让 12:59.5 显示成 12:00 回绕）
     const total = Math.floor(now);
