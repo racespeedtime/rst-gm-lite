@@ -452,11 +452,10 @@ async function groupDetailFlow(player: Player, groupId: string, back?: MenuBack)
   const isOp = isSuperAdmin(player);
   const rows: { label: string; run: () => Promise<void> }[] = group.races.map((gr) => ({
     label: `比赛: ${gr.race.name}`,
-    run: async () => {
-      await createRaceRoom(player, gr.raceId);
-      // 开赛后回到上一层（分组列表），与原来"返回 back"行为一致
-      await back?.();
-    },
+    // 与赛道列表一致：双击进赛道详情（开始比赛/回放/挑战/排行榜自选），不再
+    // 直接开赛。详情取消直接关闭、不弹回赛道分组面板——分组只是入口，
+    // 详情就是目标面板（不再多弹一层"返回分组"的步骤）
+    run: () => openRaceDetailPanel(player, gr.raceId),
   }));
   if (isOp) {
     const toThis = () => groupDetailFlow(player, groupId, back);
