@@ -142,12 +142,15 @@ export async function spawnVehicle(
   }
   try {
     const { uv, colors } = await getOrCreateUserVehicle(player, modelId);
-    // 一人一车：先销毁旧车
-    destroyPlayerVehicle(player.id);
+    // 刷车位置/朝向必须在销毁旧车**之前**读取：旧车一销毁玩家即被弹下车，
+    // isInAnyVehicle() 变 false 会落进 getFacingAngle()（actor 朝向——车内不随
+    // 车头实时更新，取到陈旧值），新刷的车朝向就和开车时的朝向对不上。
     const pos = player.getPos();
     const angle = player.isInAnyVehicle()
       ? player.getVehicle()!.getZAngle().angle
       : player.getFacingAngle().angle;
+    // 一人一车：先销毁旧车
+    destroyPlayerVehicle(player.id);
     const veh = new Vehicle({
       modelId,
       x: pos.x,
