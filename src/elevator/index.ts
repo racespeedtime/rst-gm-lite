@@ -494,8 +494,11 @@ function handleKeyState(
     if (isPressed(newKeys, oldKeys, KeysEnum.YES) && !isPlayerLocked(player.id)) {
       lockPlayer(player.id);
       void showFloorDialog(el, player).finally(() => unlockPlayer(player.id));
+      return true;
     }
-    return true;
+    // 未弹窗（非按下瞬间 / 流程锁定中）：不消费 Y 键，放行给万能面板
+    //（对齐楼层按钮区的处理——否则流程锁定中站在轿厢内按 Y，面板永远打不开）
+    return false;
   }
   // 楼层按钮：按 Y 呼叫当前层。面板流程中放行 Y 键给万能面板（否则站在按钮
   // 区旁永远打不开面板）

@@ -122,7 +122,11 @@ export async function getOrCreateUserVehicle(
       where: { id: uv.defaultPresetId },
       select: { color1: true, color2: true },
     });
-    if (preset) colors = [preset.color1, preset.color2];
+    if (preset) {
+      // 懒创建预设 color1/color2 默认 0（未设色），必须 >0 才视为用户选色——
+      // 与 applyVehiclePreset 的守卫同口径，否则 0 号色（纯黑）会覆盖刷车初始色
+      colors = [preset.color1 > 0 ? preset.color1 : -1, preset.color2 > 0 ? preset.color2 : -1];
+    }
   }
   return { uv, colors };
 }

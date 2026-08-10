@@ -65,6 +65,9 @@ interface ChallengeGhost {
   /** 上次自动补氮气时刻（timer 模式录制者 15 秒自动补、帧里无按键信号——影子
    *  每 15 秒自动补一管兜底，保证 timer 玩家录像的影子氮气不断档） */
   lastAutoNitroAt: number;
+  /** 播放中发现过 KEY_FIRE 位（点按模式录制）→ 停用 15s 自动补氮气兜底
+   *  （FIRE 上升沿已覆盖补给，兜底反而会在喷射中打断） */
+  nitroFireSeen: boolean;
   /** 当前标签显示的在线状态（录制者掉线时标签追加红字"掉线"；变化时 updateText） */
   online: boolean;
 }
@@ -217,21 +220,20 @@ function renderGhost(ch: ChallengeSession): void {
     const now = Date.now();
     if (now - ch.ghost.lastEmulateAt < 33) return;
     ch.ghost.lastEmulateAt = now;
-    // 氮气跟随录制者按键：SA 氮气是**客户端单管容量**（安装 1010 给满一管，喷射
-    // 时持续消耗，喷完即消失）。录制时由 vehicleAuto 补充，挑战影子车无人补。
-    // 关键：组件重装会**打断客户端正在进行的喷射**——原实现每 500ms 补一次组件，
     // 喷射被反复掐断，观感就是"氮气 1 秒就没了"。两路补给、都不打断喷射：
     // 1) KEY_FIRE 上升沿补满：录制者（点按模式）每按下一次 FIRE → 补一管，该段
     //    喷射全程不再动组件、整段连续喷。
     // 2) 每 15 秒自动补一管兜底：timer 模式录制者自动补、帧里没有按键信号——
-    //    不自动补则其录像的影子氮气会断档。与回放 playback renderGhost 同一套。
-    // 起始/播完后 atEnd 不再补。
+    //    不自动补则其录像的影子氮气会断档。兜底只对"帧里从未出现 FIRE 位"的
+    //    录像生效（timer 录制）：一旦发现 FIRE 位就停用兜底，防 15s 边界撞上
+    //    喷射重新打断。与回放 playback renderGhost 同一套。起始/播完后 atEnd 不再补。
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
     if (nitroOn && !atEnd && !ch.ghost.nitroWasOn) {
+      ch.ghost.nitroFireSeen = true;
       addNitro(ch.ghost.vehicle);
     }
     ch.ghost.nitroWasOn = nitroOn;
-    if (!atEnd && now - ch.ghost.lastAutoNitroAt >= 15_000) {
+    if (!atEnd && !ch.ghost.nitroFireSeen && now - ch.ghost.lastAutoNitroAt >= 15_000) {
       ch.ghost.lastAutoNitroAt = now;
       addNitro(ch.ghost.vehicle);
     }
@@ -351,6 +353,10 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
     const spawned = await spawnVehicle(player, ch.data.header.vehicleModelId, true).finally(() => {
       pendingRespawn.delete(player.id);
     });
+    // await 期间会话可能已被清理（/challenge stop / 断线）：cleanupChallenge
+    // 已恢复玩家世界并回收世界 id——此时再挪车/切世界会把新车挪进已回收的
+    // 独立世界（可能正被新挑战复用），且把玩家从恢复好的世界拉走。直接放弃
+    if (challenges.get(player.id) !== ch) return;
     // 无爱车分支：spawnVehicle 在玩家当前世界/位置刷车（旧世界），车不随人走——
     // 显式挪到起点 + 切挑战世界（对齐有车分支的 owned.setPos/setVirtualWorld）。
     // spawnVehicle 内部已把玩家放入车内（vehicles spawnVehicle 末尾 putPlayerIn），
@@ -391,11 +397,18 @@ function standbyAtStart(player: Player, ch: ChallengeSession): void {
   // 影子重置到录制起点（车就位 + 修复），强制重渲染起始帧
   ch.ghost.playTime = 0;
   ch.ghost.lastEmulateAt = 0;
+  // 重置氮气补给状态并补一管：上一轮可能停在 FIRE 按住态（nitroWasOn=true 会吞掉
+  // 重开后的起始帧上升沿）或喷完空管（lastAutoNitroAt 未复位）——不重置则重开后
+  // 影子一管都没有
+  ch.ghost.nitroWasOn = false;
+  ch.ghost.lastAutoNitroAt = 0;
+  ch.ghost.nitroFireSeen = false;
   try {
     ch.ghost.vehicle.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
     ch.ghost.vehicle.setZAngle(0);
     ch.ghost.vehicle.setHealth(1000);
     ch.ghost.vehicle.repair();
+    addNitro(ch.ghost.vehicle); // 起始补一管（与第一次进挑战一致）
   } catch {
     /* 已失效，清理兜底 */
   }
@@ -660,7 +673,10 @@ const CHALLENGE_RESULT_TIMEOUT_MS = 60_000;
 async function finishChallenge(player: Player, ch: ChallengeSession): Promise<void> {
   // 真实时间差（从 GO 起跑，不用帧数累计防漂移）
   const playerMs = Math.max(0, Date.now() - ch.goAt);
-  const ghostMs = ch.data.header.durationMs;
+  // 影子用时 = 影子实际播放终点（末帧时间戳），与 tickChallenge 的播完边界
+  // frameTimeAt(last) 一致——不能用 header.durationMs（录制墙钟时长，断线尾段
+  // 缺失时末帧早于停止时刻，会出现"结算显示 2:05、影子停在 1:58"的错位）
+  const ghostMs = frameTimeAt(ch.data, ch.data.header.frameCount - 1);
   const diff = playerMs - ghostMs;
   const verdict = diff <= -500 ? "你赢了！" : diff >= 500 ? "影子赢了" : "势均力敌！";
   // 超时兜底：race 超时后 resolve null（视同玩家没点按钮 → 走退出分支清理）；
@@ -953,6 +969,7 @@ async function startChallengeCore(
       warnedEmulateFail: false,
       nitroWasOn: false,
       lastAutoNitroAt: 0,
+      nitroFireSeen: false,
       online: true, // 起始帧在线（掉线重连回放才可能翻转为 false）
     };
     // NPC 连接建立是异步的：刚 create 后立即 putInVehicle 可能未生效（NPC 未就绪
@@ -1025,8 +1042,13 @@ async function startChallengeCore(
   // /challenge go 触发倒计时 → GO（首次进入与局内重开同一套交互）
   standbyAtStart(player, ch);
   await seatPlayerAtStart(player, ch);
-  if (!player.isConnected()) {
-    cleanupChallenge(player.id); // await 期间断线 → 清理 ghost
+  // await 期间断线或会话被清理（/challenge stop）→ 不再发成功提示（seatPlayerAtStart
+  // 内部已按会话存续守卫跳过挪车，cleanupChallenge 已恢复玩家世界）。断线且会话
+  // 仍在（在途续体先于断线链执行）→ 显式清理，防 ghost/世界 id 残留
+  if (!player.isConnected() || challenges.get(player.id) !== ch) {
+    if (!player.isConnected() && challenges.get(player.id) === ch) {
+      cleanupChallenge(player.id);
+    }
     return false;
   }
   player.setFacingAngle(ch.cps[0]?.angle ?? 0);

@@ -475,6 +475,10 @@ export async function applyWorldEnv(player: Player): Promise<void> {
       // 从过渡动画终点（设定时刻）起算，每秒 +1 游戏分钟
       const timer = setIntervalSafe(() => {
         if (!player.isConnected()) {
+          // 断线：自清 interval（对齐冻结定时器分支的自清行为——不依赖
+          // clearWorldEnvForPlayer 兜底，防清理顺序变化时 1s 空转）
+          const t = timeAdvanceTimers.get(player.id);
+          if (t) clearIntervalSafe(t);
           timeAdvanceTimers.delete(player.id);
           return;
         }

@@ -86,8 +86,10 @@ export async function openVehicleMenu(player: Player, back?: MenuBack): Promise<
                 select: { color1: true, color2: true },
               });
               if (preset) {
-                color1 = preset.color1;
-                color2 = preset.color2;
+                // 懒创建预设 0 = 未设色，>0 才是用户选色（与 getOrCreateUserVehicle/
+                // applyVehiclePreset 同口径，防 0 号色黑车覆盖）
+                color1 = preset.color1 > 0 ? preset.color1 : -1;
+                color2 = preset.color2 > 0 ? preset.color2 : -1;
               }
             }
             veh.changeColors(color1, color2);

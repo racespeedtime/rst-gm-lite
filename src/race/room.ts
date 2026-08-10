@@ -1058,7 +1058,9 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
 
 /** 比赛结束：最终排名结算 + 成员收尾 + 房间销毁（结束宽限到点/全员完成/重连窗口清空） */
 function endRoom(room: RaceRoom): void {
-  if (room.state === "FINISHED") return;
+  // FINISHED 幂等；WAITING 也要跳过——restartRace 已把 state 置回 WAITING（20s 宽限
+  // 定时器恰在 restart 的 await 期间触发时，若不拦会销毁刚重开的房间）
+  if (room.state === "FINISHED" || room.state === "WAITING") return;
   room.state = "FINISHED";
   for (const m of room.members.values()) cancelCountdownFx(m.id);
   if (room.endTimer) {
@@ -1447,7 +1449,7 @@ export function initRaceSystem(): void {
     if (!isInRace(player.id)) return next();
     const main = (strictMainCmd || command.split(/\s+/)[0] || "").toLowerCase();
     if (isRaceCommandAllowed(main)) return next();
-    sysMsg(player, "match", "比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生", "error");
+    sysMsg(player, "race", "比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生", "error");
     return false;
   }, true); // unshift 优先执行（在限频之前，避免双提示）
 

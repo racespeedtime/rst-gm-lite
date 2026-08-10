@@ -258,6 +258,9 @@ export interface ReplaySession {
   /** 比赛赛道 CP 坐标（race 回放从 raceCp 表加载；观战者 3D 箭头/图标渲染用；
    *  ghost 回放无赛道为 undefined） */
   cps?: { x: number; y: number; z: number; size: number }[];
+  /** 播放中发现过 KEY_FIRE 位（点按模式录制）→ 停用 15s 自动补氮气兜底（FIRE
+   *  上升沿已覆盖补给，兜底反而会在喷射中打断，见 renderGhost） */
+  nitroFireSeen: boolean;
   /** 上次渲染的 ghost CP 进度（过 CP 检测：cpProgress 前进 → 观战者音效 + 箭头推进） */
   cpProgressLast?: number;
 }
@@ -637,9 +640,9 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
  *   open.mp 的 Player::streamedFor_ 对 NPC 从不置位（源码确认 streamInForPlayer
  *   只在 Actor/Pickup/TextLabel/Vehicle 调用），isStreamedIn(npc) 恒 false →
  *   一个玩家都收不到。用车辆维度 Vehicle.isStreamedIn（服务器按世界+距离维护）。
- * - atEnd（播完/影子到达终点）：速度与按键（keys/lrKey/udKey/additionalKey）
- *   清零——尾帧非零速度会让车辆在停发后继续滑行/终点抖动，按键清零防原地
- *   转向抖动。
+ * - atEnd（播完/影子到达终点）：速度、按键与警笛/起落架清零——尾帧非零速度
+ *   会让车辆在停发后继续滑行/终点抖动，按键清零防原地转向抖动，警笛/起落架
+ *   不清会让停在终点的影子一直亮警笛/放起落架。
  */
 export function emulateDriverSync(
   npcPlayerId: number,
@@ -654,7 +657,7 @@ export function emulateDriverSync(
       vehicleId: vehicle.id,
       lrKey: atEnd ? 0 : s.lrKey,
       udKey: atEnd ? 0 : s.udKey,
-      keys: atEnd ? 0 : s.keys, // SPRINT=氮气，客户端据此在对应时刻喷氮
+      keys: atEnd ? 0 : s.keys, // 键位含 FIRE=氮气触发（点按模式），客户端据此喷氮
       quaternion: [s.qw, s.qx, s.qy, s.qz], // InCarSync quaternion 序 = [w,x,y,z]
       position: [s.x, s.y, s.z],
       velocity: atEnd ? [0, 0, 0] : [s.vx, s.vy, s.vz],
@@ -663,8 +666,8 @@ export function emulateDriverSync(
       armour: 0,
       additionalKey: atEnd ? 0 : s.additionalKey,
       weaponId: 0,
-      sirenState: s.sirenState,
-      landingGearState: s.landingGearState,
+      sirenState: atEnd ? false : s.sirenState,
+      landingGearState: atEnd ? false : s.landingGearState,
       trailerId: s.trailerId,
       trainSpeed: s.trainSpeed,
     });
@@ -748,13 +751,17 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     //    与录制时玩家自身一致——原版玩家的管也是有限的）。
     // 2) 每 15 秒自动补一管兜底：timer 模式录制者自动补、帧里没有按键信号——
     //    不自动补则其录像的 ghost 氮气会断档（"回放里没氮气"）。
+    // 兜底只对"帧里从未出现 FIRE 位"的录像生效（timer 录制）：一旦发现 FIRE 位
+    // （点按录制，FIRE 上升沿已覆盖补给）就停用兜底——否则 15s 边界撞上正在
+    // 喷射的影子会重新打断（复现"氮气 1 秒就没了"）。
     // 播完（atEnd）不再补。
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
     if (nitroOn && !atEnd && !ghost.nitroWasOn) {
+      session.nitroFireSeen = true;
       addNitro(ghost.vehicle);
     }
     ghost.nitroWasOn = nitroOn;
-    if (!atEnd && now - ghost.lastAutoNitroAt >= 15_000) {
+    if (!atEnd && !session.nitroFireSeen && now - ghost.lastAutoNitroAt >= 15_000) {
       ghost.lastAutoNitroAt = now;
       addNitro(ghost.vehicle);
     }
@@ -1218,6 +1225,7 @@ export async function spawnReplay(
     lastCpText: "",
     lastTimeText: "",
     lastRankText: "", // 首帧 syncObserverTds 即写入实时名次（v8 文件）
+    nitroFireSeen: false,
     lastHour: -1,
     cps: raceCps, // 赛道 CP 坐标（ghost 回放 undefined）
     lastMinute: -1,

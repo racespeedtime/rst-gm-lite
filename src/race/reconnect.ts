@@ -3,7 +3,7 @@ import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
 import { applyWorldEnv } from "@/core/worldenv";
 import { applyRaceNoCollision, getDefaultRaceModel } from "./vehicle";
-import { createRaceTd, updateBestTd, setRaceTdText, rankSuffix, destroyRaceTds } from "./raceTd";
+import { createRaceTd, updateBestTd, setRaceTdText, destroyRaceTds } from "./raceTd";
 import {
   showNextCheckpoint,
   syncCpToObservers,
@@ -344,8 +344,11 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     // 只 setSpawnInfo 不设 pendingSpawnPos：比赛中 onSpawn 的 respawnBySetting 对
     // isInRace 玩家提前 return（不会随机定位），setSpawnInfo 即权威；而 pendingSpawnPos
     // 若残留会在**之后的死亡重生**被 onSpawn 误消费（把玩家 setPos 回掉线点并弹出车）。
+    // 掉线位置恢复：三轴任一非零即认为有坐标快照。掉线瞬间 getPos 失效且
+    // tickRooms 尚未采样过（RACING 前 200ms 内掉线）时 slot 为 0,0,0——此时
+    // 跳过 setPos（落在房间世界默认点），避免"设到原点把玩家塞进海/地下"
     player.setVirtualWorld(room.worldId);
-    if (slot && slot.x !== 0) {
+    if (slot && (slot.x !== 0 || slot.y !== 0 || slot.z !== 0)) {
       const angle = room.cps[Math.max(0, slot.cpIndex)]?.angle ?? 0;
       player.setSpawnInfo(0, player.getSkin(), slot.x, slot.y, slot.z, angle, 0, 0, 0, 0, 0, 0);
       player.setPos(slot.x, slot.y, slot.z);
@@ -366,15 +369,17 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
         });
       }
       const tds = createRaceTd(player, room);
-      // 立即写入 TIME/RANK（含初始化 tdTextCache）：否则下一个 tickRooms（≤200ms）
+      // 立即写入 TIME（含初始化 tdTextCache）：否则下一个 tickRooms（≤200ms）
       // 前 syncRaceTds 无 cache 跳过、TD 停在创建时的 "00:00:00 / 1 st"，显示
-      // 从 0 跳变到掉线前累计时间。TIME 用 startTime 起算（slot 恢复的掉线前计时）
+      // 从 0 跳变到掉线前累计时间。TIME 用 startTime 起算（slot 恢复的掉线前计时）。
+      // RANK 不写死 "1 st"（重连玩家实际名次可能是第 5 名，显示错误名次闪烁）——
+      // 留创建时的占位，≤200ms 后 tickRooms 写入真实名次
       const rstart = playerRaces.get(player.id)?.startTime ?? Date.now();
       setRaceTdText(
         room,
         player.id,
         `TIME / ${formatRaceTimeCs(Date.now() - rstart)}`,
-        `RANK / 1 ${rankSuffix(0)}`,
+        `RANK / 1 st`,
       );
       // 恢复 BEST TD（房间缓存已有，无则查询）
       void updateBestTd(player, room, tds);

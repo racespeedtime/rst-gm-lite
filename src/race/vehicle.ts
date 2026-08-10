@@ -43,10 +43,10 @@ export function getDefaultRaceModel(cps: { scripts: string[] }[]): number {
 const START_ANGLE_CORRECT_THRESHOLD = 45;
 
 /**
- * 起点朝向：优先用 CP1→CP2 方向计算的理论朝向（标准 SA 朝向公式 atan2(Ax-Bx, Ay-By)，
- * 0=北/90=西/180=南/270=东）。CP1 记录角度（作者放置时的 getFacingAngle 快照）与
- * 计算值偏差 > 阈值 → 返回 corrected=true，调用方用计算值并提示。
- * 只有 1 个 CP（无方向可算）→ 沿用记录角度。
+ * 起点朝向：优先用 CP1→CP2 方向计算的理论朝向（标准 SA 朝向公式 atan2(Ay-By, Ax-Bx)+90，
+ * 0=北/90=西/180=南/270=东；与 scripts.ts #ncpa 的朝向约定同口径）。CP1 记录角度
+ * （作者放置时的 getFacingAngle 快照）与计算值偏差 > 阈值 → 返回 corrected=true，
+ * 调用方用计算值并提示。只有 1 个 CP（无方向可算）→ 沿用记录角度。
  */
 export function getFirstCpStartAngle(cps: { x: number; y: number; angle: number }[]): {
   angle: number;
@@ -56,8 +56,8 @@ export function getFirstCpStartAngle(cps: { x: number; y: number; angle: number 
   if (!first) return { angle: 0, corrected: false };
   const second = cps[1];
   if (!second) return { angle: first.angle, corrected: false };
-  const rad = Math.atan2(first.x - second.x, first.y - second.y);
-  const computed = ((((rad * 180) / Math.PI) % 360) + 360) % 360;
+  const rad = Math.atan2(first.y - second.y, first.x - second.x);
+  const computed = ((((rad * 180) / Math.PI + 90) % 360) + 360) % 360;
   const d = Math.abs(((first.angle - computed) % 360) + 360) % 360;
   const diff = Math.min(d, 360 - d); // 环形角度差（0 与 359 差 1°）
   if (diff > START_ANGLE_CORRECT_THRESHOLD) {

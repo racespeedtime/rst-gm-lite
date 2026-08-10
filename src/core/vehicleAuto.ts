@@ -20,7 +20,8 @@ import { logger } from "@/logger";
  * - vehicleAutoFix 自动修复：onWeaponShot 拦截打向自己车辆的子弹 + 每秒 repair 兜底
  * - vehicleColorCycle 定时换色（变色龙）：每秒随机换色
  * - nitroType 氮气：timer=每 tick 计数、满 15 秒自动补一管；hold（点按）= 按
- *   KEY_FIRE（鼠标左键）即补一管、无冷却，按键和时间无关
+ *   KEY_FIRE（鼠标左键）即补一管、无冷却，按键和时间无关（TS 移植新增的氮气
+ *   交互，原版 pawn 纯 15s 定时无 FIRE 触发）
  * - showStunt 特技显示：按人调用原生 EnableStuntBonusForPlayer（游戏内建特技
  *   奖励，对齐原版 /stunt 开关——不再自造 GameText 提示）
  *
@@ -111,9 +112,8 @@ export function cleanupVehicleAuto(playerId: number): void {
   autoFixSet.delete(playerId);
 }
 
-/** 切换氮气方式（timer/hold）时重置计数：nitroCount 两种模式共用同一 Map——
- *  timer 的"满 15 补一次"累计值会串成 hold 的冷却剩余（反之亦然），不重置则
- * 切换后补充时机错乱（"切换没区别"的元凶之一） */
+/** 切换氮气方式（timer/hold）时重置计数：nitroCount 只服务 timer 模式的"满 15 补
+ *  一次"累计——从 hold 切回 timer 不重置会继承旧计数，可能立即触发一次补充 */
 export function resetNitroCount(playerId: number): void {
   nitroCount.delete(playerId);
 }
@@ -215,7 +215,8 @@ export function initVehicleAuto(): void {
 
   // hold 氮气（点按）：按 KEY_FIRE（鼠标左键）即补一管氮气，无冷却——点按
   // 模式的语义是"按键 = 喷一次"，和时间无关（对齐原版：FIRE 键触发氮气，
-  // 连点鼠标持续喷；按住只触发一次上升沿 = 一管，松手再按再补）
+  // 连点鼠标持续喷；按住只触发一次上升沿 = 一管，松手再按再补）。
+  // 仅司机有效：副驾/乘客按 FIRE 不补氮气（对齐 timer 分支的 isDriver 口径）
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
     const pressed = isPressed(newKeys, oldKeys, KeysEnum.FIRE); // KEY_FIRE 按下瞬间
@@ -223,6 +224,7 @@ export function initVehicleAuto(): void {
     void (async () => {
       const setting = await getSetting(player);
       if (!setting || setting.nitroType !== "hold") return;
+      if (player.getState() !== PlayerStateEnum.DRIVER) return; // 仅司机位
       const veh = player.getVehicle();
       if (!veh || !isOwnVehicle(player, veh)) return;
       addNitro(veh); // 按键即补一管（无冷却；点按频率由玩家自己控制）
