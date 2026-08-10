@@ -21,6 +21,7 @@ import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
 import { syncVehicleAutoState } from "@/core/vehicleAuto";
 import { setIntervalSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
+import { showModelSelectionMenu } from "@/utils/eSelection";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { VEHICLE_CATEGORIES, vehicleName, isValidVehicleModel } from "./catalog";
 import type { UserVehicleModel } from "@/prisma/generated/prisma/models/UserVehicle";
@@ -672,28 +673,24 @@ async function showVehicleCategoryMenu(player: Player): Promise<void> {
   await showVehicleSelection(player, cat);
 }
 
-/** e-selection 图片选车（3D 预览车辆模型），选中后刷车 */
+/** e-selection 图片选车（3D 预览车辆模型），选中后刷车。
+ *  每页 18 个（6 列 × 3 行铺满）+ 分页页码记忆（per 分类：刷完/关闭再开回到上次页） */
 async function showVehicleSelection(
   player: Player,
   cat: { label: string; menuTitle: string; models: number[] },
 ): Promise<void> {
-  const { ModelSelectionMenu } = await import("@infernus/e-selection");
-  const menu = new ModelSelectionMenu({
-    player,
+  const model = await showModelSelectionMenu(player, `veh:${cat.label}`, {
     models: cat.models.map((modelId) => ({
       modelId,
       modelText: `${vehicleName(modelId)} [${modelId}]`,
     })),
     headerText: cat.menuTitle,
-    // 一页 14 个（e-selection 布局：第一行 6 + 第二行 8，两行铺满）
-    maxItemPerPage: 14,
     bannerColor: "#333",
     menuBgColor: "#222",
     menuTextColor: "#fff",
     itemBgColor: "#444",
     itemTextColor: "#0f0",
   });
-  const model = await menu.show();
   if (model) {
     await spawnVehicle(player, model.modelId);
   }

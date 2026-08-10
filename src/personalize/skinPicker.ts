@@ -3,6 +3,7 @@ import { getAuthState } from "@/auth/auth";
 import { updateSetting, notifySaved } from "./settings";
 import { COLOR_ERROR } from "@/utils/colors";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
+import { showModelSelectionMenu } from "@/utils/eSelection";
 
 /**
  * 皮肤选择工具：
@@ -37,22 +38,18 @@ export async function applySkin(player: Player, skinId: number): Promise<boolean
   return true;
 }
 
-/** e-selection 3D 选皮肤：分页预览玩家模型（无背景/带旋转调节），选中应用并写库 */
+/** e-selection 3D 选皮肤：分页预览玩家模型（无背景/带旋转调节），选中应用并写库。
+ *  每页 18 个（6 列 × 3 行铺满）+ 分页页码记忆（关掉再开回到上次页） */
 export async function showSkinPicker(player: Player): Promise<void> {
-  const { ModelSelectionMenu } = await import("@infernus/e-selection");
-  const menu = new ModelSelectionMenu({
-    player,
+  const model = await showModelSelectionMenu(player, "skin", {
     models: PICKABLE_SKINS.map((id) => ({ modelId: id, modelText: `Skin ${id}` })),
     headerText: "Select Skin",
-    // 一页 14 个（e-selection 布局：第一行 6 + 第二行 8，两行铺满）
-    maxItemPerPage: 14,
     bannerColor: "#333",
     menuBgColor: "#222",
     menuTextColor: "#fff",
     itemBgColor: "#444",
     itemTextColor: "#0f0",
   });
-  const model = await menu.show();
   if (model) {
     await applySkin(player, model.modelId);
   }
