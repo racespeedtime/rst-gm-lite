@@ -1,13 +1,7 @@
 import { Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
-import {
-  getSetting,
-  updateSetting,
-  pickOption,
-  notifySaved,
-  toggleText,
-} from "./settings";
+import { getSetting, updateSetting, pickOption, notifySaved, toggleText } from "./settings";
 import { COLOR_ERROR } from "@/utils/colors";
 import { syncVehicleAutoState, syncNoCollisionState } from "@/core/vehicleAuto";
 import { getOwnedVehicle } from "@/vehicles";
@@ -37,10 +31,15 @@ export async function openVehicleMenu(player: Player, back?: MenuBack): Promise<
     { name: "氮气方式", value: setting.nitroType === "timer" ? "定时器" : "点按" },
     { name: "翻车自动翻正", value: toggleText(setting.vehicleFlip) },
   ];
-  const index = await pickOption(player, "车辆个性化", rows.map((r) => r.name), {
-    headers: ["设置", "当前"],
-    format: (_o, i) => [rows[i].name, rows[i].value],
-  });
+  const index = await pickOption(
+    player,
+    "车辆个性化",
+    rows.map((r) => r.name),
+    {
+      headers: ["设置", "当前"],
+      format: (_o, i) => [rows[i].name, rows[i].value],
+    },
+  );
   if (index < 0) return back?.();
 
   const again = () => openVehicleMenu(player, back);
@@ -68,6 +67,33 @@ export async function openVehicleMenu(player: Player, back?: MenuBack): Promise<
     case 1: {
       const next = !setting.vehicleColorCycle;
       await updateSetting(player, { vehicleColorCycle: next });
+      if (!next) {
+        // 关闭定时换颜色：恢复爱车默认颜色——变色龙每秒随机换色，关掉后车色
+        // 会停在最后一次随机色。默认色 = 爱车默认预设存的颜色（未存则 [-1,-1]
+        // 游戏默认色，与 getOrCreateUserVehicle/applyVehiclePreset 同口径）
+        const veh = getOwnedVehicle(player.id);
+        if (veh && veh.isValid()) {
+          const auth = getAuthState(player.id);
+          if (auth) {
+            const uv = await prisma.userVehicle.findUnique({
+              where: { userId_modelId: { userId: auth.userId, modelId: veh.getModel() } },
+            });
+            let color1 = -1;
+            let color2 = -1;
+            if (uv?.defaultPresetId) {
+              const preset = await prisma.vehiclePreset.findUnique({
+                where: { id: uv.defaultPresetId },
+                select: { color1: true, color2: true },
+              });
+              if (preset) {
+                color1 = preset.color1;
+                color2 = preset.color2;
+              }
+            }
+            veh.changeColors(color1, color2);
+          }
+        }
+      }
       notifySaved(player, `定时换颜色已${next ? "开启" : "关闭"}`);
       return again();
     }
