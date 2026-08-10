@@ -187,9 +187,12 @@ interface Ghost {
   warnedEmulateFail: boolean;
   /** 已播完（playTime 到终点）：停止 emulate 驱动标志（seek 回看时重置） */
   stopped: boolean;
-  /** 上一帧录制按键是否按着氮气（SPRINT 上升沿检测——补氮气只在按下瞬间做一次，
+  /** 上一帧录制按键是否按着氮气（KEY_FIRE 上升沿检测——点按模式按 FIRE 补一管，
    *  不边喷边装组件，防打断客户端正在进行的喷射） */
   nitroWasOn: boolean;
+  /** 上次自动补氮气时刻（timer 模式录制者 15 秒自动补、帧里无按键信号——回放
+   *  每 15 秒自动补一管兜底，保证 timer 玩家录像的 ghost 氮气不断档） */
+  lastAutoNitroAt: number;
   /** 分身编号（1..N，头车=1；标签显示用） */
   labelNo: number;
   /** 当前标签显示的在线状态（掉线时标签追加红字"掉线"；变化时 updateText） */
@@ -737,17 +740,24 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS && !atEnd) return;
     ghost.lastEmulateAt = now;
     // 氮气跟随录制者按键：SA 氮气是**客户端单管容量**（安装 1010 给满一管，喷射
-    // 时持续消耗，喷完即消失）。录制时由 vehicleAuto 定时补充，回放 NPC 车无人补。
+    // 时持续消耗，喷完即消失）。录制时由 vehicleAuto 补充，回放 NPC 车无人补。
     // 关键：组件重装会**打断客户端正在进行的喷射**——原实现每 500ms 补一次组件，
-    // 喷射被反复掐断，观感就是"氮气 1 秒就没了"。改为**上升沿补满**：录制者每
-    // 按下一次氮气 → 补一管，该段喷射全程不再动组件、整段连续喷；长按超出一管
-    // 后速度仍由帧 velocity 承载（与录制时玩家自身一致——原版玩家的管也是有限的）。
+    // 喷射被反复掐断，观感就是"氮气 1 秒就没了"。两路补给、都不打断喷射：
+    // 1) KEY_FIRE 上升沿补满：录制者（点按模式）每按下一次 FIRE → 补一管，该段
+    //    喷射全程不再动组件、整段连续喷（长按超出一管后速度仍由帧 velocity 承载，
+    //    与录制时玩家自身一致——原版玩家的管也是有限的）。
+    // 2) 每 15 秒自动补一管兜底：timer 模式录制者自动补、帧里没有按键信号——
+    //    不自动补则其录像的 ghost 氮气会断档（"回放里没氮气"）。
     // 播完（atEnd）不再补。
-    const nitroOn = (s.keys & KeysEnum.SPRINT) !== 0;
+    const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
     if (nitroOn && !atEnd && !ghost.nitroWasOn) {
       addNitro(ghost.vehicle);
     }
     ghost.nitroWasOn = nitroOn;
+    if (!atEnd && now - ghost.lastAutoNitroAt >= 15_000) {
+      ghost.lastAutoNitroAt = now;
+      addNitro(ghost.vehicle);
+    }
     // 血量由 emulate 的 vehicleHealth 处理，无需显式 setHealth（重复操作）
     emulateDriverSync(ghost.npcPlayerId, ghost.vehicle, s, atEnd);
   } catch (e) {
@@ -1107,6 +1117,7 @@ export async function spawnReplay(
           warnedEmulateFail: false,
           stopped: false,
           nitroWasOn: false,
+          lastAutoNitroAt: 0,
           labelNo,
           online: true,
         });

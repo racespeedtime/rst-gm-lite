@@ -19,7 +19,8 @@ import { logger } from "@/logger";
  * - vehicleFlip 翻车自动翻正：四元数换算 bank 角 >160° 且车速接近 0 → 原位重置（物理重新落正）
  * - vehicleAutoFix 自动修复：onWeaponShot 拦截打向自己车辆的子弹 + 每秒 repair 兜底
  * - vehicleColorCycle 定时换色（变色龙）：每秒随机换色
- * - nitroType 氮气：timer=每 tick 计数、满 15 秒补一次；hold=按加速键补充
+ * - nitroType 氮气：timer=每 tick 计数、满 15 秒自动补一管；hold（点按）= 按
+ *   KEY_FIRE（鼠标左键）即补一管、无冷却，按键和时间无关
  * - showStunt 特技显示：按人调用原生 EnableStuntBonusForPlayer（游戏内建特技
  *   奖励，对齐原版 /stunt 开关——不再自造 GameText 提示）
  *
@@ -140,7 +141,8 @@ async function vehicleTick(player: Player): Promise<void> {
     new GameText("~w~vehicle ~g~fl~h~ip~h~pe~h~d", 2000, 4).forPlayer(player);
     return;
   }
-  // nitro（timer 模式）：每秒计数，满 15 秒补一次——仅自己的车
+  // nitro（timer 模式）：每秒计数，满 15 秒补一次——仅自己的车。
+  // hold（点按）不在此处理：FIRE 键事件按键即补，无冷却（见 onKeyStateChange）
   if (setting.nitroType === "timer" && isDriver && isOwnVehicle(player, veh)) {
     const n = (nitroCount.get(player.id) ?? 0) + 1;
     if (n >= NITRO_TICK_LIMIT) {
@@ -149,12 +151,6 @@ async function vehicleTick(player: Player): Promise<void> {
     } else {
       nitroCount.set(player.id, n);
     }
-  }
-  // nitro（hold 模式）冷却递减：SPRINT 补氮气后置 15 占位，这里每秒 -1，
-  // 15 秒后归零才允许再次补充——否则占位永远不清零，hold 氮气一次上车只能用一次
-  if (setting.nitroType === "hold") {
-    const n = nitroCount.get(player.id) ?? 0;
-    if (n > 0) nitroCount.set(player.id, n - 1);
   }
 }
 
@@ -217,19 +213,19 @@ export function initVehicleAuto(): void {
     return next();
   });
 
-  // hold 氮气：按加速键（SPRINT/W）补氮气（有 15 秒冷却）
+  // hold 氮气（点按）：按 KEY_FIRE（鼠标左键）即补一管氮气，无冷却——点按
+  // 模式的语义是"按键 = 喷一次"，和时间无关（对齐原版：FIRE 键触发氮气，
+  // 连点鼠标持续喷；按住只触发一次上升沿 = 一管，松手再按再补）
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
-    const pressed = isPressed(newKeys, oldKeys, KeysEnum.SPRINT); // 按下瞬间
+    const pressed = isPressed(newKeys, oldKeys, KeysEnum.FIRE); // KEY_FIRE 按下瞬间
     if (!pressed || !player.isInAnyVehicle()) return next();
     void (async () => {
       const setting = await getSetting(player);
       if (!setting || setting.nitroType !== "hold") return;
-      if ((nitroCount.get(player.id) ?? 0) > 0) return;
       const veh = player.getVehicle();
       if (!veh || !isOwnVehicle(player, veh)) return;
-      nitroCount.set(player.id, NITRO_TICK_LIMIT); // 占位：15 秒内不重复补
-      addNitro(veh);
+      addNitro(veh); // 按键即补一管（无冷却；点按频率由玩家自己控制）
     })();
     return next();
   });
