@@ -31,8 +31,11 @@ export function allocRaceWorld(): number {
 }
 
 export function freeRaceWorld(worldId: number): void {
-  // 只回收本模块分配的 id（防误收外部世界；RACE_WORLD_BASE 之上都属本模块）
-  if (worldId >= RACE_WORLD_BASE) freedRaceWorlds.push(worldId);
+  // 只回收本模块分配的 id（比赛世界区间 RACE_WORLD_BASE..REPLAY_WORLD_BASE-1，
+  // 即 1001..2000——回放/挑战世界从 2001 起，绝不能回收进比赛池复用，否则
+  // 比赛新房会撞上回放/挑战世界互相可见。REPLAY_WORLD_BASE 内联（对齐
+  // src/replay/playback.ts），避免引入 race→replay 依赖）
+  if (worldId >= RACE_WORLD_BASE && worldId < 2001) freedRaceWorlds.push(worldId);
 }
 
 /** 赛道名/ID 查重共用（roomUi 命令层也用：/r s /r info /r edit 按名或 id 查赛道） */

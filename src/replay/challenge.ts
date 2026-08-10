@@ -88,8 +88,6 @@ export interface ChallengeSession {
   recorderName: string;
   data: ReplayData;
   ghost: ChallengeGhost;
-  /** 影子起始播放帧（= 录制发车帧；倒计时期间停在起始帧，GO 后从这里开始播） */
-  startFrame: number;
   cps: { x: number; y: number; z: number; angle: number; size: number }[];
   /** 赛道圈数（多圈挑战：玩家累计跑 laps×一圈CP 个检查点才结算） */
   laps: number;
@@ -206,11 +204,11 @@ function renderGhost(ch: ChallengeSession): void {
   }
   // 影子播完边界 = 播放终点（v7 末帧时间戳 / 旧文件均匀间隔——对齐 playback）
   const maxTime = frameTimeAt(ch.data, ch.data.header.frameCount - 1);
-  // 倒计时期间：playTime 停在起始帧（startFrame=录制发车帧）→ 按静止帧渲染
+  // 倒计时期间：playTime 停在录制起始帧（文件第 0 帧）→ 按静止帧渲染
   //（速度/按键清零，影子停在起点等发车；GO 后 tick 推进 playTime 才离开
-  // startFrame，恢复正常驱动）。起始帧如果是换车帧，ensureGhostVehicle 只在
+  // 起点，恢复正常驱动）。起始帧如果是换车帧，ensureGhostVehicle 只在
   // 创建渲染时执行一次，不会反复换车。
-  const atStart = ch.ghost.playTime <= ch.startFrame;
+  const atStart = ch.ghost.playTime <= 0;
   // 影子播完（playTime 到最后一帧）→ 速度/按键清零：影子停在终点，挑战者
   // 仍要看见它作参照（不能停发）。否则尾帧非零速度会让影子在终点持续滑行
   // 抖动，按键残留还会原地转向抖动（emulateDriverSync 的 atEnd 分支处理）。
@@ -1015,7 +1013,6 @@ async function startChallengeCore(
     recorderName: replay.recorderName,
     data,
     ghost,
-    startFrame: 0, // 录制发车帧（倒计时期间停在起始帧，GO 后从这里播）
     cps: cps.map((c) => ({
       x: Number(c.x),
       y: Number(c.y),

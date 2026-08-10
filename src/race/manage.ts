@@ -193,15 +193,16 @@ export async function openRaceDetailPanel(
     "查看排行榜",
     ...(mine ? ["编辑赛道", "删除赛道（二次验证）"] : []),
   ];
-  // 详情信息头占 4 行（名称/长度/圈数+作者+纪录/分隔空行），其后才是操作
-  const INFO_LINES = 4;
-  const info = [
+  // 详情信息头（名称/长度/作者）后接分隔空行，其后才是操作项。
+  // INFO_LINES = 信息头行数 + 1（分隔空行）：按结构计算而非魔法数 4——
+  // 未来加信息头行时偏移自动跟随，不会错位
+  const headerLines = [
     `{FFD700}${race.name}`,
     `长度 ${Math.round(Number(race.totalLength))}m · ${race.laps ?? 1} 圈`,
     `作者 ${race.sysUser?.username ?? "?"} · 纪录 ${recs} 条`,
-    "",
-    ...actions.map((o, i) => `${i + 1}. ${o}`),
-  ].join("\n");
+  ];
+  const INFO_LINES = headerLines.length + 1;
+  const info = [...headerLines, "", ...actions.map((o, i) => `${i + 1}. ${o}`)].join("\n");
   const res = await showDialog(
     player,
     new Dialog({

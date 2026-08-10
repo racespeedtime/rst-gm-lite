@@ -1,6 +1,6 @@
 import { Player, TextDraw } from "@infernus/core";
 import { getObserveTarget } from "@/core/observe";
-import { getReplayDebugState } from "@/replay/playback";
+import { getReplayDebugState, getReplaySession } from "@/replay/playback";
 import { getCachedSetting } from "@/personalize/settings";
 import { getWorldWeather, isTimeTransitioning } from "@/core/worldenv";
 import { isInRace } from "@/race/room";
@@ -145,12 +145,14 @@ export function getDisplayTime(player: Player): string {
   const tm = player.getTime();
   const actualHour = tm.ret ? tm.hour : 12;
   const actualMinute = tm.ret ? tm.minute : 0;
-  // 比赛中/回放观看/影子挑战/时间过渡中画面时钟被 setTime 覆盖，回退实际时间
+  // 比赛中/回放观看/影子挑战/时间过渡中画面时钟被 setTime 覆盖，回退实际时间。
+  // 回放判定统一用 getReplaySession（与 worldenv 三态跳过同口径）——getReplayDebugState
+  // 是调试信息用途，只在有 ghosts 时才非空，两者当前等价但语义应一致
   const overridden =
     isInRace(player.id) ||
     isInChallenge(player.id) ||
     isTimeTransitioning(player.id) ||
-    !!getReplayDebugState(player.id);
+    !!getReplaySession(player.id);
   let hour: number;
   let minute: number;
   if (setting && !overridden) {
@@ -193,12 +195,12 @@ function displayTimeWeather(player: Player): string {
   let weather: number;
   // 比赛中（房间统一时间天气）/回放观看（每帧 setTime+setWeather）/时间过渡
   //（时钟快转中）→ 回退实际值，与 getDisplayTime 同口径（画面时钟 ≠ 设置推算值）；
-  // 天气只被比赛/回放覆盖，时间过渡不动天气
+  // 天气只被比赛/回放覆盖，时间过渡不动天气。回放判定用 getReplaySession（同口径）
   const overridden =
     isInRace(player.id) ||
     isInChallenge(player.id) ||
     isTimeTransitioning(player.id) ||
-    !!getReplayDebugState(player.id);
+    !!getReplaySession(player.id);
   if (setting && !overridden) {
     if (setting.syncGameTime) {
       // 跟随大世界时间：显示现实时钟（与 getDisplayTime 同口径，见其注释）
