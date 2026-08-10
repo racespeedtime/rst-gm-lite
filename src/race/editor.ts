@@ -5,7 +5,7 @@ import { getAuthState } from "@/auth/auth";
 import { isSuperAdmin } from "@/admin/op";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
-import { spawnRaceVehicleAt, getDefaultRaceModel } from "./vehicle";
+import { spawnRaceVehicleAt, getDefaultRaceModel, getFirstCpStartAngle } from "./vehicle";
 import { cleanupScriptVehicle } from "./scripts";
 import { isInRace } from "./state";
 import { UUID_RE } from "./state";
@@ -102,15 +102,27 @@ export async function enterRaceEdit(player: Player, raceId: string): Promise<voi
       cps.map((c) => ({ scripts: c.raceCpScripts.map((s) => s.script) })),
     );
     if (cps.length > 0) {
-      // 已有 CP：车放到第一个 CP（起点），玩家上车
+      // 已有 CP：车放到第一个 CP（起点），玩家上车。起点朝向用 CP1→CP2 走向校正
+      //（作者放置时 getFacingAngle 可能滞后/放歪，见 getFirstCpStartAngle）
+      const startAngle = getFirstCpStartAngle(
+        cps.map((c) => ({ x: Number(c.x), y: Number(c.y), angle: Number(c.angle) })),
+      );
       spawnRaceVehicleAt(
         player,
         model,
         Number(cps[0].x),
         Number(cps[0].y),
         Number(cps[0].z),
-        Number(cps[0].angle),
+        startAngle.angle,
       );
+      if (startAngle.corrected) {
+        sysMsg(
+          player,
+          "race",
+          `起点朝向与赛道走向不符，已按走向校正车头（${Number(cps[0].angle).toFixed(0)}° → ${startAngle.angle.toFixed(0)}°）`,
+          "warn",
+        );
+      }
       sysMsg(player, "race", "已刷出测试车辆并传送到赛道起点", "info");
     } else {
       // 新赛道还没有 CP：在当前位置发车，放置第一个 CP 后可从起点测试
@@ -682,14 +694,27 @@ async function testRace(player: Player): Promise<void> {
     orderBy: { index: "asc" },
     include: { raceCpScripts: { orderBy: { index: "asc" } } },
   });
+  // 起点朝向用 CP1→CP2 走向校正（作者放置时 getFacingAngle 可能滞后/放歪，
+  // 见 getFirstCpStartAngle）
+  const startAngle = getFirstCpStartAngle(
+    cps.map((c) => ({ x: Number(c.x), y: Number(c.y), angle: Number(c.angle) })),
+  );
   spawnRaceVehicleAt(
     player,
     getDefaultRaceModel(cps.map((c) => ({ scripts: c.raceCpScripts.map((s) => s.script) }))),
     Number(first.x),
     Number(first.y),
     Number(first.z),
-    Number(first.angle),
+    startAngle.angle,
   );
+  if (startAngle.corrected) {
+    sysMsg(
+      player,
+      "race",
+      `起点朝向与赛道走向不符，已按走向校正车头（${Number(first.angle).toFixed(0)}° → ${startAngle.angle.toFixed(0)}°）`,
+      "warn",
+    );
+  }
   sysMsg(player, "race", "已刷出测试车辆并传送到赛道起点（测试模式）", "info");
 }
 

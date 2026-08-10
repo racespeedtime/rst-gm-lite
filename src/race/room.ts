@@ -22,7 +22,12 @@ import {
 } from "./scripts";
 import { isEditing } from "./editor";
 import { cleanupAttireEditing } from "@/attire";
-import { applyRaceNoCollision, restorePersonalNoCollision, getDefaultRaceModel } from "./vehicle";
+import {
+  applyRaceNoCollision,
+  restorePersonalNoCollision,
+  getDefaultRaceModel,
+  getFirstCpStartAngle,
+} from "./vehicle";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 import {
   raceRecordingStart,
@@ -514,6 +519,17 @@ export async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
 async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<void> {
   const first = room.cps[0];
   if (!first) return;
+  // 起点朝向校正：作者放置 CP1 时的 getFacingAngle 可能滞后/放歪，导致车头朝向
+  // 与赛道走向不符——用 CP1→CP2 方向算理论朝向，偏差过大时覆盖并提示
+  const startAngle = getFirstCpStartAngle(room.cps);
+  if (startAngle.corrected) {
+    sysMsg(
+      player,
+      "race",
+      `起点朝向与赛道走向不符，已按走向校正车头（${first.angle.toFixed(0)}° → ${startAngle.angle.toFixed(0)}°）`,
+      "warn",
+    );
+  }
   // 换赛道时该成员已有旧赛道 TD → 先销毁重建（joinRoom 无旧 TD，天然跳过）
   const oldTds = room.raceTextTds.get(player.id);
   if (oldTds) {
@@ -535,25 +551,25 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
     const veh = getOwnedVehicle(player.id);
     if (veh && veh.isValid()) {
       veh.setPos(first.x, first.y, first.z);
-      veh.setZAngle(first.angle);
+      veh.setZAngle(startAngle.angle);
       veh.putPlayerIn(player, 0);
-      player.setFacingAngle(first.angle); // putPlayerIn 后视角跟随车辆朝向的兜底
+      player.setFacingAngle(startAngle.angle); // putPlayerIn 后视角跟随车辆朝向的兜底
     }
   } else if (player.isInAnyVehicle()) {
     // 没爱车但人在某辆车里：若是标准车型 → 挪当前车；否则也以标准车型刷爱车
     const veh = player.getVehicle()!;
     if (veh.getModel() === defaultModel) {
       veh.setPos(first.x, first.y, first.z);
-      veh.setZAngle(first.angle);
-      player.setFacingAngle(first.angle); // 车内旋转车辆后玩家朝向同步（防视角没跟上）
+      veh.setZAngle(startAngle.angle);
+      player.setFacingAngle(startAngle.angle); // 车内旋转车辆后玩家朝向同步（防视角没跟上）
     } else {
       await spawnVehicle(player, defaultModel, true);
       sysMsg(player, "race", `本赛道标准车型为 ${defaultModel}，已刷为对应爱车`, "info");
       const v = getOwnedVehicle(player.id);
       if (v && v.isValid()) {
         v.setPos(first.x, first.y, first.z);
-        v.setZAngle(first.angle);
-        player.setFacingAngle(first.angle);
+        v.setZAngle(startAngle.angle);
+        player.setFacingAngle(startAngle.angle);
       }
     }
   } else {
@@ -563,8 +579,8 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
     const veh = getOwnedVehicle(player.id);
     if (veh && veh.isValid()) {
       veh.setPos(first.x, first.y, first.z);
-      veh.setZAngle(first.angle);
-      player.setFacingAngle(first.angle);
+      veh.setZAngle(startAngle.angle);
+      player.setFacingAngle(startAngle.angle);
     }
   }
   // await spawnVehicle 期间玩家可能已离开（/r l）/断线、房间可能已被销毁
