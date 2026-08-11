@@ -6,9 +6,15 @@ import { sysMsg } from "@/utils/msg";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import { isSuperAdmin } from "@/admin/op";
 import { deleteRecordingFile } from "./storage";
-import { spawnReplay, controlReplay, getReplaySession, REPLAY_SPEEDS } from "./playback";
+import {
+  spawnReplay,
+  controlReplay,
+  getReplaySession,
+  REPLAY_SPEEDS,
+  toggleReplayLabels,
+} from "./playback";
 import { startRecording, stopRecording, isRecording } from "./recorder";
-import { isInChallenge, startChallengeWithReplay } from "./challenge";
+import { isInChallenge, startChallengeWithReplay, toggleChallengeShadowLabel } from "./challenge";
 import { isInRace } from "@/race/room";
 import { formatDuration, formatShortDate } from "@/utils/format";
 import type { MenuBack } from "@/core/panel";
@@ -317,7 +323,7 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
   }
 }
 
-/** 回放控制菜单（播放/暂停/倍速/跳转/停止；回放只支持正放） */
+/** 回放控制菜单（播放/暂停/倍速/跳转/停止/标签显隐；回放只支持正放） */
 export async function openReplayControlMenu(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
@@ -330,7 +336,8 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
         "3. 倍速（0.5 / 0.75 / 1 / 1.25 / 1.5 / 2 / 4）",
         "4. 跳转时间（秒）",
         "5. 观看视角",
-        "6. 停止回放",
+        "6. 显示/隐藏 ghost 标签",
+        "7. 停止回放",
       ].join("\n"),
       button1: "执行",
       button2: "关闭",
@@ -339,7 +346,9 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
   if (!res) return;
   if (res.response !== 1) return back?.();
   const session = getReplaySession(player.id);
-  if (!session && res.listItem !== 5) {
+  // label（切换标签偏好）与停止无需会话：label 可预切（下次播放按偏好显示）、
+  // stop 在无会话时给出提示而非报错
+  if (!session && res.listItem !== 5 && res.listItem !== 6) {
     sysMsg(player, "replay", "你不在播放回放中，先在「我的录制」选择播放", "error");
     return back?.();
   }
@@ -385,7 +394,14 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
     case 4:
       controlReplay(player, "watch");
       return back?.();
-    case 5:
+    case 5: {
+      // 显示/隐藏 ghost 标签（对齐 /rp label：回放 ghost 与挑战影子共用偏好）
+      const visible = toggleReplayLabels(player);
+      toggleChallengeShadowLabel(player.id);
+      sysMsg(player, "replay", `回放 ghost 标签已${visible ? "显示" : "隐藏"}`, "info");
+      return back?.();
+    }
+    case 6:
       controlReplay(player, "stop");
       return back?.();
   }
