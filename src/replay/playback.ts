@@ -783,23 +783,15 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     const now = Date.now();
     if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS && !atEnd) return;
     ghost.lastEmulateAt = now;
-    // 氮气补给：节流基准用**播放时间**（ghost.playTime）对齐录制节奏——
-    // 录制时 vehicleAuto 按现实时间补（timer 每 15 秒 / 点按按键即补），回放
-    // 按播放时间补 = 复现"录制者补氮气的那段路线"。慢放 0.5x 时录制 15 秒 =
-    // 播放 15 秒 = 现实 30 秒，按播放时间 15 秒补正好落在录制者补管的时段
-    //（按墙钟 15 秒补会落在录制者根本没喷的时段——"补了也没用"）。
-    // **补组件的同时要模拟玩家按下氮气键**：SA 喷氮气 = 车有组件 + 按住 FIRE
-    //（左键）或 W（SPRINT）。我们的点按交互是 FIRE/ACTION（vehicleAuto hold），
-    // 补组件那帧的采样可能恰好落在录制者松键/刹车的瞬间（帧 keys 无 FIRE）——
-    // 补了组件客户端也不喷。故补组件起一段墙钟窗口内强制 FIRE|ACTION（点按氮气
-    // 键；不用 SPRINT——W 是油门会干扰录制速度物理），客户端持续收到"按着氮气
-    // 键"即喷；窗口结束恢复录制按键（其余时段不强制喷，保持录制原始操作）。
-    // timer 录制（帧无 FIRE 位）→ 播放 15s 自动兜底；点按录制（帧 FIRE 按住）
-    // → 播放每 1s 补一管（对齐点按"按住持续喷"的录制节奏）。**兜底始终生效**：
-    // 不因录像某帧带过 FIRE 位而停用（会话级 nitroFireSeen 误判后 0.5x 下非
-    // FIRE 段会完全不补——"补了也没用/根本没补"）。点按补与兜底互斥（一个
-    // tick 只走一条：FIRE 按住走 1s 补，否则走 15s 兜底），不会同帧双重补
-    // 组件打断喷射。播完（atEnd）不再补。
+    // 氮气补给：按**播放时间**（ghost.playTime）节流，而非墙钟——回放慢放/
+    // 快进时补管时机始终对齐录制者补氮气的路线时段（0.5x 下录制 15s = 播放
+    // 15s = 现实 30s，按播放时间补正好落在录制者补管处；按墙钟会错位）。
+    // 双模式互斥（一个 tick 只走一条，防同帧双补打断喷射）：
+    // - 点按补：帧 keys 带 FIRE（录制者点按喷氮气）→ 每 NITRO_REFILL_MS(1s) 一管
+    // - 兜底补：其余时段（timer 录制帧无 FIRE / 点按松键段）→ 每 15s 一管；
+    //   **始终生效**——不因录像某帧带过 FIRE 位而停用（会话级 nitroFireSeen
+    //   误判会让非 FIRE 段完全不补，0.5x 下尤其明显）
+    // 播完（atEnd）不再补
     const pt = ghost.playTime;
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
     if (nitroOn && !atEnd) {
@@ -813,12 +805,12 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
       ghost.nitroSimUntil = now + NITRO_SIM_MS;
       addNitro(ghost.vehicle);
     }
-    // 补氮气后的模拟窗口内：强制 FIRE/ACTION（模拟玩家按下点按氮气键）——
-    // SA 客户端喷氮气 = 车有组件 + 按住 FIRE（左键）或 W（SPRINT）。我们的点按
-    // 交互是 FIRE/ACTION 键（vehicleAuto hold），补组件那帧采样可能恰好是录制者
-    // 松键瞬间（帧 keys 无 FIRE）——补了组件客户端也不喷。窗口内强制 FIRE|ACTION
-    //（正是点按模式的氮气键，不影响油门物理——不用 SPRINT，W 是油门会干扰录制
-    // 速度）；窗口结束恢复录制按键
+    // 补组件后的模拟窗口内：强制 FIRE|ACTION（点按氮气键）——SA 客户端喷氮气 =
+    // 车有组件 + 按住 FIRE（左键）/W（SPRINT），而补组件那帧的采样可能恰好是
+    // 录制者松键瞬间（帧 keys 无 FIRE），不按下去客户端就不会喷。窗口期内持续
+    // 伪造"按着氮气键"让客户端喷，窗口结束恢复录制按键（保持录制原始操作）。
+    // 用 FIRE|ACTION 而非 SPRINT：W 是油门会干扰录制速度物理。窗口用墙钟——
+    // 客户端喷氮气的物理按现实时间消耗，播放时间会随倍速失真
     if (!atEnd && now < ghost.nitroSimUntil) {
       s.keys |= KeysEnum.FIRE | KeysEnum.ACTION;
     } // 血量由 emulate 的 vehicleHealth 处理，无需显式 setHealth（重复操作）
