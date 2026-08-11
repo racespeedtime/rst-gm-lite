@@ -169,7 +169,8 @@ CP 进度与实时名次不走缓存：由 `noteCpProgress`（room 过 CP）/ `n
 - 同一文件最多 5 辆（`npcCount` 默认 1，`staggerMs` 自定义或自动等分总时长）；
 - 每 ghost 独立 `playTime`（错峰起始 = `i × baseGap`），编号**反序**（头车 playTime 最大 = ghost 1/N，与视觉顺序一致）；
 - seek 时叠加各自 `staggerMs` 保持错峰（否则 seek 后全部分身重合）；
-- 创建数少于请求数时统一重编号（防显示 "ghost 3/2"）。
+- 创建数少于请求数时统一重编号（防显示 "ghost 3/2"）；
+- **观战切换方向与编号一致**：观战切换候选按视觉顺序注册（头车 ghost 1/N 在前、尾车 N/N 在后，创建顺序是 playTime 升序需显式排序），初始观战/副驾目标 = 视觉头车（`leadGhost`）——方向键 → 切编号 +1、← 切编号 -1。
 
 ### 4.7 倍速
 

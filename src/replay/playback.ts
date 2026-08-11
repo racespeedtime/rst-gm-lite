@@ -940,18 +940,18 @@ function tickSession(session: ReplaySession): void {
   syncObserverTds(session);
 }
 
-/** 观战者比赛信息 TD + 时间/天气：从"第一个 ghost 的当前帧状态"渲染（事件无关）。
- * CP 进度在帧里（录制时过 CP 采样写入）→ seek/回退 TD 自动一致。
+/** 观战者比赛信息 TD + 时间/天气：从"视觉头车（leadGhost）的当前帧状态"渲染
+ * （事件无关）。CP 进度在帧里（录制时过 CP 采样写入）→ seek/回退 TD 自动一致。
  * 内容无变化时跳过（省 60Hz 无用调用）。 */
 function syncObserverTds(session: ReplaySession): void {
   if (session.tds.size === 0 || session.ghosts.length === 0) return;
-  const s = sampleAt(session.data, session.ghosts[0].playTime);
+  const s = sampleAt(session.data, leadGhost(session).playTime);
   if (!s) return;
   // TD 时间 = 当前播放时间（v7 帧时间戳模式按真实时间轴，与 sampleAt 一致；
   // 旧文件回退均匀间隔 idx×interval）
   const timeMs = Math.min(
     frameTimeAt(session.data, session.data.header.frameCount - 1),
-    session.ghosts[0].playTime,
+    leadGhost(session).playTime,
   );
   const cpText = `C  P / ~p~${s.cpProgress}~w~/~y~${session.data.header.totalCp || 1}`;
   const timeText = `TIME / ${formatRaceTimeCs(timeMs)}`;
@@ -1028,6 +1028,17 @@ function syncObserverTds(session: ReplaySession): void {
       }
     }
   }
+}
+
+/** 视觉头车：playTime 最大的 ghost（同文件同速播放，playTime 越大位置越靠前）。
+ * 初始观战/副驾目标用头车——视觉跑最前 = 比赛回放的"主角"；且候选注册按视觉
+ * 顺序（头车在前），从头车出发 →/← 切换方向与 ghost 编号（1/N→N/N）一致。 */
+function leadGhost(session: ReplaySession): Ghost {
+  let lead = session.ghosts[0];
+  for (const g of session.ghosts) {
+    if (g.playTime > lead.playTime) lead = g;
+  }
+  return lead;
 }
 
 /**
@@ -1180,8 +1191,8 @@ export async function spawnReplay(
         // 登记 NPC playerId：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
         // 但 NPC 自身/残留状态可能发真实 sync 会冲突）；同时记录 em
         registerReplayNpc(npcPlayer.id);
-        // 登记为观战切换候选：回放/挑战玩家按左/右键可在各 ghost 车之间循环切换
-        registerObserveCandidate(vehicle.id, "vehicle");
+        // 注意：观战切换候选不在本循环注册——创建顺序是 playTime 升序（尾车先建），
+        // 直接按序注册会让切换方向与 ghost 编号相反。循环结束后统一按视觉顺序注册
         // 套玩家当前装扮（查库，不按回放当时存储）：NPC 皮肤 + 人物装扮预设；
         // ghost 车按玩家该车型爱车默认预设（颜色/改装件/挂件，挂件独立管理随车销毁）。
         // 注意：改装件含 1087 时会被黑名单过滤（观战中二次 addComponent 会导致
@@ -1247,6 +1258,15 @@ export async function spawnReplay(
           /* 标签已失效等，忽略 */
         }
       }
+    }
+    // 观战切换候选按**视觉顺序**注册（头车 ghost 1/N 在前、尾车 N/N 在后）：
+    // 创建顺序是 playTime 升序（尾车先建），若按创建顺序注册，按 →（next）
+    // 切到 labelNo 递减方向，与 ghost 标签编号（1/5→2/5→…）相反（实机反馈）。
+    // playTime 大的在沿赛道更前方（头车），降序 = 视觉从头到尾 = 编号 1..N，
+    // 这样 → 切编号 +1、← 切编号 -1，与标签方向一致
+    const visualOrder = [...ghosts].sort((a, b) => b.playTime - a.playTime);
+    for (const g of visualOrder) {
+      registerObserveCandidate(g.vehicle.id, "vehicle");
     }
   } catch (e) {
     logger.error(`[replay] 创建回放实体失败`, e);
@@ -1341,7 +1361,9 @@ export async function spawnReplay(
   // 玩家被扔回回放世界，且 tickSession 的"离开回放世界自动停止"判定永不触发
   //（owner 世界恒等于回放世界），回放一直播、玩家被困。
   try {
-    startObserveVehicle(player, ghosts[0].vehicle); // 内部会切到 ghost 车世界（worldId）
+    // 初始观战目标 = 视觉头车（leadGhost）：playTime 最大的 ghost 跑最前，
+    // 是回放的"主角"；从候选表头出发，→ 切编号 +1 与标签方向一致
+    startObserveVehicle(player, leadGhost(session).vehicle); // 内部会切到 ghost 车世界（worldId）
     session.watchers.add(player.id);
     // 观战者比赛信息 TD（事件无关，从帧状态渲染）——NPC 回放的 TextDraw 状态可见
     ensureObserverTds(session, player);
@@ -1477,7 +1499,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       // 已处于副驾模式（/rp ride 且仍在观战态）→ 视为"在看"，切走时统一由
       // stopReplaySession 下车，这里不重复处理
       if (!isObserving(player.id)) {
-        startObserveVehicle(player, session.ghosts[0].vehicle);
+        startObserveVehicle(player, leadGhost(session).vehicle); // 初始目标 = 视觉头车
         session.watchers.add(player.id); // 会话停止时统一退出观战
         if (session.replayType === "race") {
           ensureObserverTds(session, player);
@@ -1493,7 +1515,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       // 副驾模式：真实坐在 ghost 车里跟随（NPC 开车），而非镜头观战。
       // 切换下一个/上一个快捷键：方向键 ←/→（观战/副驾共用，见 observe.ts
       // pollObserveKeys）。多次调用幂等（同车同模式跳过）；已在别的车副驾 → 换车
-      startRideVehicle(player, session.ghosts[0].vehicle);
+      startRideVehicle(player, leadGhost(session).vehicle); // 初始目标 = 视觉头车
       session.watchers.add(player.id); // 会话停止时统一下车（stopReplaySession → stopObserve → removeFromVehicle）
       break;
     }
