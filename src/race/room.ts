@@ -469,8 +469,10 @@ export async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
     stopObserve(player);
   }
   // 进比赛：快照个人时间（个人时间流逝进度——比赛期间房间统一时间覆盖 + 1s
-  // 定时器三态跳过不推进，出赛道按快照延续，否则跳回设定时刻重新流逝）
-  void snapshotPersonalTime(player);
+  // 定时器三态跳过不推进，出赛道按快照延续，否则跳回设定时刻重新流逝）。
+  // 必须 await：玩家"进→立即退出"时，leaveRace 的恢复会抢在快照写入前执行，
+  // 快照丢失则无法延续进度（恢复从当前时间续而非进赛道前的进度）
+  await snapshotPersonalTime(player);
   room.members.set(player.id, player);
   room.raceMembersLast.set(player.id, getAuthState(player.id)?.userId ?? ""); // 登记本场录制成员（房间销毁作废用，userId 供离线作废）
   playerRaces.set(player.id, {
