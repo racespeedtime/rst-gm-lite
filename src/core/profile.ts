@@ -165,40 +165,114 @@ async function showProfileByName(player: Player, username: string): Promise<bool
   return true;
 }
 
-/** 分页列出全部玩家（在线优先，含离线），选中查看信息 */
-async function listAllPlayers(player: Player, back?: MenuBack): Promise<void> {
+/** 玩家列表排序（会话内记忆：详情返回时保持同排序 + 同页） */
+const playerListSortMem = new Map<number, number>();
+
+/**
+ * 分页列出全部玩家（含离线），选中查看信息。
+ * - 排序选择：在线优先（默认）/ 名称↑↓ / 注册时间↑↓ / 最后在线↑↓
+ * - 全量拉取（不设 take 上限——历史玩家多，分页由 showPagedDialog 承担）
+ * - skipSort=true：从详情返回，跳过排序选择直接用记忆排序 + 页码记忆回到同页
+ */
+async function listAllPlayers(player: Player, back?: MenuBack, skipSort = false): Promise<void> {
+  // 排序选择（单步列表，含方向；取消返回上一层）
+  let sortIndex = skipSort ? (playerListSortMem.get(player.id) ?? 0) : -1;
+  if (!skipSort) {
+    const sortOptions = [
+      "在线优先（默认）",
+      "名称 升序",
+      "名称 降序",
+      "注册时间 升序",
+      "注册时间 降序",
+      "最后在线 升序",
+      "最后在线 降序",
+    ];
+    sortIndex = await pickOption(player, "玩家列表 · 排序", sortOptions);
+    if (sortIndex < 0) return back?.();
+    playerListSortMem.set(player.id, sortIndex);
+  }
+  // 全量玩家（select 仅取排序/展示所需字段，避免全行拉取）
   const users = await prisma.sysUser.findMany({
     where: { deletedAt: null },
-    orderBy: { username: "asc" },
-    take: 200, // 上限防全表拉取；名字升序便于浏览
-    select: { id: true, username: true },
+    select: { id: true, username: true, createdAt: true },
   });
   if (users.length === 0) {
     player.sendClientMessage(COLOR_ERROR, "暂无玩家");
     return back?.();
   }
-  // 在线集（status=ONLINE 的会话）：在线优先排序，列表标注状态
+  // 在线集（status=ONLINE 的会话）
   const onlineSessions = await prisma.sysUserGameSession.findMany({
     where: { status: "ONLINE" },
     select: { userId: true },
   });
   const online = new Set(onlineSessions.map((s) => s.userId));
-  users.sort((a, b) => {
-    const ao = online.has(a.id) ? 1 : 0;
-    const bo = online.has(b.id) ? 1 : 0;
-    return bo - ao || a.username.localeCompare(b.username, "zh-CN");
+  // 每用户最后在线时间（最后心跳；一次性 groupBy，供排序与展示列）
+  const lastSeen = new Map<string, Date>();
+  const heartbeats = await prisma.sysUserGameSession.groupBy({
+    by: ["userId"],
+    _max: { lastHeartbeatAt: true },
   });
+  for (const h of heartbeats) {
+    if (h._max.lastHeartbeatAt) lastSeen.set(h.userId, h._max.lastHeartbeatAt);
+  }
+  const sortKey = (u: (typeof users)[number]): string | number => {
+    switch (sortIndex) {
+      case 1:
+        return u.username.toLowerCase();
+      case 2:
+        return u.username.toLowerCase();
+      case 3:
+        return u.createdAt.getTime();
+      case 4:
+        return u.createdAt.getTime();
+      case 5:
+        return lastSeen.get(u.id)?.getTime() ?? 0; // 无记录视为最早
+      case 6:
+        return lastSeen.get(u.id)?.getTime() ?? 0;
+      default:
+        return online.has(u.id) ? 1 : 0; // 在线优先
+    }
+  };
+  const desc = sortIndex === 2 || sortIndex === 4 || sortIndex === 6 || sortIndex === 0;
+  users.sort((a, b) => {
+    const sa = sortKey(a);
+    const sb = sortKey(b);
+    if (sortIndex === 0) {
+      // 在线优先：在线在前，同组内按名称 zh 排
+      if (sa !== sb) return Number(sb) - Number(sa);
+      return a.username.localeCompare(b.username, "zh-CN");
+    }
+    if (sa < sb) return desc ? 1 : -1;
+    if (sa > sb) return desc ? -1 : 1;
+    return 0;
+  });
+  const sortLabels = [
+    "在线优先",
+    "名称升序",
+    "名称降序",
+    "注册升序",
+    "注册降序",
+    "最后在线升序",
+    "最后在线降序",
+  ];
   const r = await showPagedDialog(player, {
-    caption: `玩家列表（${users.length}，在线优先）`,
+    caption: `玩家列表（${users.length} · ${sortLabels[sortIndex]}）`,
     data: users,
-    headers: ["玩家", "状态"],
-    format: (u) => [u.username, online.has(u.id) ? "{00FF00}在线" : "{808080}离线"],
+    headers: ["玩家", "状态", "最后在线"],
+    format: (u) => [
+      u.username,
+      online.has(u.id) ? "{00FF00}在线" : "{808080}离线",
+      lastSeen.has(u.id) ? formatDate(lastSeen.get(u.id)!) : "—",
+    ],
     button1: "查看信息",
     button2: "返回",
+    // 页码记忆：详情返回时回到刚刚浏览的那一页（排序也经 playerListSortMem 记忆）
+    cacheKey: "profile:all",
   });
   if (!r) return back?.();
   await showProfile(player, r.item.id, `${r.item.username} 的信息`);
-  return back?.();
+  // 详情关闭后回到玩家列表同页（skipSort=true：用记忆排序 + cacheKey 页码）
+  await listAllPlayers(player, back, true);
 }
 
 /** 查看任意玩家信息（全员可用，不要求在线）：输入用户名，或留空列出全部玩家分页选。
