@@ -45,7 +45,7 @@ import {
   dropRecording,
 } from "@/replay/recorder";
 import { startObservePlayer, stopObserve, isObserving, getObserverIdsOf } from "@/core/observe";
-import { getWorldWeather } from "@/core/worldenv";
+import { getWorldWeather, snapshotPersonalTime } from "@/core/worldenv";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { formatTime, formatRaceTimeCs } from "@/utils/format";
 import { sysMsg } from "@/utils/msg";
@@ -468,6 +468,9 @@ export async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   if (isObserving(player.id)) {
     stopObserve(player);
   }
+  // 进比赛：快照个人时间（个人时间流逝进度——比赛期间房间统一时间覆盖 + 1s
+  // 定时器三态跳过不推进，出赛道按快照延续，否则跳回设定时刻重新流逝）
+  void snapshotPersonalTime(player);
   room.members.set(player.id, player);
   room.raceMembersLast.set(player.id, getAuthState(player.id)?.userId ?? ""); // 登记本场录制成员（房间销毁作废用，userId 供离线作废）
   playerRaces.set(player.id, {

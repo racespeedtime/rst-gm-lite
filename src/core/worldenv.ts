@@ -468,61 +468,9 @@ export async function applyWorldEnv(player: Player): Promise<void> {
   } else {
     player.setWeather(setting.weather);
   }
-  // 个人时间（syncGameTime=false）两种模式互斥，先清旧定时器再按模式挂载：
-  // - timeFlow=true → 每秒推进 1 游戏分钟（现实 1 秒 = 游戏 1 分钟）
-  // - timeFlow=false → 每分钟重置回设定时刻（时间冻结）
-  const prevFreeze = timeFlowTimers.get(player.id);
-  if (prevFreeze) clearIntervalSafe(prevFreeze);
-  timeFlowTimers.delete(player.id);
-  const prevAdvance = timeAdvanceTimers.get(player.id);
-  if (prevAdvance) clearIntervalSafe(prevAdvance);
-  timeAdvanceTimers.delete(player.id);
-  if (!setting.syncGameTime) {
-    if (setting.timeFlow) {
-      // 从过渡动画终点（设定时刻）起算，每秒 +1 游戏分钟
-      const timer = setIntervalSafe(() => {
-        if (!player.isConnected()) {
-          // 断线：自清 interval（对齐冻结定时器分支的自清行为——不依赖
-          // clearWorldEnvForPlayer 兜底，防清理顺序变化时 1s 空转）
-          const t = timeAdvanceTimers.get(player.id);
-          if (t) clearIntervalSafe(t);
-          timeAdvanceTimers.delete(player.id);
-          return;
-        }
-        // 比赛中/回放观看/影子挑战中跳过：房间统一时间由 beginRace 定（CP 脚本
-        // 也会改）、回放每帧 setTime 录制赛道时间——个人时间推进会把房间/回放
-        // 画面时钟顶掉（回放画面时钟被硬切），对齐 syncWorldClock/rotateWeather
-        // 与 getDisplayTime 的跳过口径
-        if (isInRace(player.id) || isInChallenge(player.id) || !!getReplaySession(player.id))
-          return;
-        const tm = player.getTime();
-        const hour = tm.ret ? tm.hour : setting.timeHour;
-        const minute = tm.ret ? tm.minute : setting.timeMinute;
-        // 分钟 59→0 进位到小时
-        const nextMinute = (minute + 1) % 60;
-        const nextHour = nextMinute === 0 ? (hour + 1) % 24 : hour;
-        player.setTime(nextHour, nextMinute);
-      }, 1000);
-      timeAdvanceTimers.set(player.id, timer);
-    } else {
-      const timer = setIntervalSafe(() => {
-        if (!player.isConnected()) {
-          const t = timeFlowTimers.get(player.id);
-          if (t) clearIntervalSafe(t);
-          timeFlowTimers.delete(player.id);
-          return;
-        }
-        // 比赛中/回放观看/影子挑战中跳过：房间统一时间由 beginRace 定（CP 脚本
-        // 也会改）、回放每帧 setTime 录制赛道时间——冻结定时器把个人时间拉回
-        // 会覆盖房间/回放时间轴（回放画面时钟被硬切），对齐 syncWorldClock/
-        // rotateWeather 与 getDisplayTime 的跳过口径
-        if (isInRace(player.id) || isInChallenge(player.id) || !!getReplaySession(player.id))
-          return;
-        player.setTime(setting.timeHour, setting.timeMinute);
-      }, 60_000);
-      timeFlowTimers.set(player.id, timer);
-    }
-  }
+  // 个人时间（syncGameTime=false）：timeFlow=true 每秒推进 1 游戏分钟 /
+  // timeFlow=false 每分钟重置回设定时刻（冻结）——清旧定时器后按模式挂载
+  attachPersonalTimers(player, setting);
 }
 
 /** 清理玩家时间相关定时器（断线时调用）：冻结/流逝定时器 + 进行中的时间过渡动画 */
@@ -534,4 +482,104 @@ export function clearWorldEnvForPlayer(playerId: number): void {
   if (advance) clearIntervalSafe(advance);
   timeAdvanceTimers.delete(playerId);
   cancelTimeTransition(playerId);
+  personalTimeSnapshot.delete(playerId); // 断线：快照随玩家状态清除
+}
+
+/**
+ * 个人时间进比赛快照（playerId → 分钟数）：进比赛前个人时间流逝的进度——
+ * 比赛期间房间统一时间会覆盖玩家的 getTime、1s 流逝定时器被三态跳过（不推进），
+ * 出赛道若不恢复快照，getTime 停在房间时间；若只按 applyWorldEnv 会跳回设定
+ * 时刻重新流逝（"进/出赛道时间重新流逝一遍"）。快照让出赛道时间**延续**进赛道
+ * 前的进度。
+ */
+const personalTimeSnapshot = new Map<number, number>();
+
+/** 进比赛时快照当前个人时间（仅 syncGameTime=false 玩家；跟随世界时间无需延续） */
+export async function snapshotPersonalTime(player: Player): Promise<void> {
+  const auth = getAuthState(player.id);
+  if (!auth) return;
+  const setting = await getSetting(player);
+  if (!setting || setting.syncGameTime) return;
+  const tm = player.getTime();
+  personalTimeSnapshot.set(player.id, (tm.ret ? tm.hour : 12) * 60 + (tm.ret ? tm.minute : 0));
+}
+
+/**
+ * 出比赛/离开赛道后恢复个人时间：从进比赛快照**延续**流逝（不跳回设定时刻、
+ * 不重走过渡动画），并恢复天气 + 重挂流逝/冻结定时器。
+ * syncGameTime=true 玩家照常走 applyWorldEnv（跟随现实时间无延续概念）。
+ */
+export async function restorePersonalTimeAfterRace(player: Player): Promise<void> {
+  const auth = getAuthState(player.id);
+  if (!auth) return;
+  const setting = await getSetting(player);
+  if (!setting) return;
+  if (setting.syncGameTime) {
+    void applyWorldEnv(player);
+    return;
+  }
+  // 个人时间：恢复快照（延续进赛道前的进度），无快照则按当前值续（防御）
+  const snap = personalTimeSnapshot.get(player.id);
+  personalTimeSnapshot.delete(player.id);
+  if (snap != null) {
+    player.setTime(Math.floor(snap / 60), snap % 60);
+  }
+  // 天气恢复（同 applyWorldEnv 口径）
+  if (setting.syncWorldWeather) {
+    player.setWeather(getWorldWeather());
+  } else {
+    player.setWeather(setting.weather);
+  }
+  // 取消可能残留的过渡动画 + 重挂流逝/冻结定时器（从当前 getTime 续）
+  cancelTimeTransition(player.id);
+  attachPersonalTimers(player, setting);
+}
+
+/** 挂载个人时间定时器（清旧 + 按 timeFlow 挂 1s 流逝或 60s 冻结） */
+function attachPersonalTimers(
+  player: Player,
+  setting: Awaited<ReturnType<typeof getSetting>>,
+): void {
+  const prevFreeze = timeFlowTimers.get(player.id);
+  if (prevFreeze) clearIntervalSafe(prevFreeze);
+  timeFlowTimers.delete(player.id);
+  const prevAdvance = timeAdvanceTimers.get(player.id);
+  if (prevAdvance) clearIntervalSafe(prevAdvance);
+  timeAdvanceTimers.delete(player.id);
+  if (!setting || setting.syncGameTime) return;
+  if (setting.timeFlow) {
+    // 每秒 +1 游戏分钟（现实 1 秒 = 游戏 1 分钟），从当前 getTime 续
+    const timer = setIntervalSafe(() => {
+      if (!player.isConnected()) {
+        const t = timeAdvanceTimers.get(player.id);
+        if (t) clearIntervalSafe(t);
+        timeAdvanceTimers.delete(player.id);
+        return;
+      }
+      // 比赛中/回放观看/影子挑战中跳过：房间统一时间由 beginRace 定（CP 脚本
+      // 也会改）、回放每帧 setTime 录制赛道时间——个人时间推进会把房间/回放
+      // 画面时钟顶掉（回放画面时钟被硬切），对齐 syncWorldClock/rotateWeather
+      // 与 getDisplayTime 的跳过口径
+      if (isInRace(player.id) || isInChallenge(player.id) || !!getReplaySession(player.id)) return;
+      const tm = player.getTime();
+      const hour = tm.ret ? tm.hour : setting.timeHour;
+      const minute = tm.ret ? tm.minute : setting.timeMinute;
+      const nextMinute = (minute + 1) % 60;
+      const nextHour = nextMinute === 0 ? (hour + 1) % 24 : hour;
+      player.setTime(nextHour, nextMinute);
+    }, 1000);
+    timeAdvanceTimers.set(player.id, timer);
+  } else {
+    const timer = setIntervalSafe(() => {
+      if (!player.isConnected()) {
+        const t = timeFlowTimers.get(player.id);
+        if (t) clearIntervalSafe(t);
+        timeFlowTimers.delete(player.id);
+        return;
+      }
+      if (isInRace(player.id) || isInChallenge(player.id) || !!getReplaySession(player.id)) return;
+      player.setTime(setting.timeHour, setting.timeMinute);
+    }, 60_000);
+    timeFlowTimers.set(player.id, timer);
+  }
 }

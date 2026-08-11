@@ -1,7 +1,7 @@
 import { Player } from "@infernus/core";
 import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
-import { applyWorldEnv } from "@/core/worldenv";
+import { restorePersonalTimeAfterRace } from "@/core/worldenv";
 import { applyRaceNoCollision, getDefaultRaceModel } from "./vehicle";
 import { createRaceTd, updateBestTd, setRaceTdText, destroyRaceTds } from "./raceTd";
 import {
@@ -219,8 +219,9 @@ export function restorePlayerAfterRace(player: Player, prevWorld: number): void 
   if (owned && owned.isValid() && owned !== player.getVehicle()) {
     owned.setVirtualWorld(prevWorld);
   }
-  // 按个人设置恢复时间天气（CP 脚本改过的 time/weather 在此重置）
-  void applyWorldEnv(player);
+  // 按个人设置恢复时间天气：个人时间从进比赛快照延续（不跳回设定时刻重新
+  // 流逝）；CP 脚本改过的 time/weather 在此重置
+  void restorePersonalTimeAfterRace(player);
 }
 
 /**

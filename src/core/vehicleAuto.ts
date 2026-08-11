@@ -142,14 +142,23 @@ async function vehicleTick(player: Player): Promise<void> {
     return;
   }
   // nitro（timer 模式）：每秒计数，满 15 秒补一次——仅自己的车。
-  // hold（点按）不在此处理：FIRE 键事件按键即补，无冷却（见 onKeyStateChange）
-  if (setting.nitroType === "timer" && isDriver && isOwnVehicle(player, veh)) {
-    const n = (nitroCount.get(player.id) ?? 0) + 1;
-    if (n >= NITRO_TICK_LIMIT) {
-      nitroCount.set(player.id, 0);
-      addNitro(veh);
-    } else {
-      nitroCount.set(player.id, n);
+  // hold（点按）：**按住持续补**——每秒检测 FIRE（左键）/ ACTION（右键）仍按住
+  // 就补一管（按下瞬间的即时反馈在 onKeyStateChange；SA 氮气一管约 3-4 秒，
+  // 每秒补维持连续喷射，松开停补）
+  if (isDriver && isOwnVehicle(player, veh)) {
+    if (setting.nitroType === "timer") {
+      const n = (nitroCount.get(player.id) ?? 0) + 1;
+      if (n >= NITRO_TICK_LIMIT) {
+        nitroCount.set(player.id, 0);
+        addNitro(veh);
+      } else {
+        nitroCount.set(player.id, n);
+      }
+    } else if (setting.nitroType === "hold") {
+      const k = player.getKeys().keys & 0xffff;
+      if ((k & (KeysEnum.FIRE | KeysEnum.ACTION)) !== 0) {
+        addNitro(veh);
+      }
     }
   }
 }
@@ -214,13 +223,14 @@ export function initVehicleAuto(): void {
     return next();
   });
 
-  // hold 氮气（点按）：按 KEY_FIRE（鼠标左键）即补一管氮气，无冷却——点按
-  // 模式的语义是"按键 = 喷一次"，和时间无关（对齐原版：FIRE 键触发氮气，
-  // 连点鼠标持续喷；按住只触发一次上升沿 = 一管，松手再按再补）。
-  // 仅司机有效：副驾/乘客按 FIRE 不补氮气（对齐 timer 分支的 isDriver 口径）
+  // hold 氮气（点按）：按 KEY_FIRE（左键）或 KEY_ACTION（右键）补氮气——
+  // 按下瞬间补一管（即时反馈），**按住持续补**（vehicleTick 每秒检测按住继续补，
+  // 松开停补；对齐"点按 = 按住持续喷"的语义，SA 氮气一管约 3-4 秒、每秒补维持
+  // 连续喷射）。仅司机有效：副驾/乘客按不补（对齐 timer 分支的 isDriver 口径）
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
-    const pressed = isPressed(newKeys, oldKeys, KeysEnum.FIRE); // KEY_FIRE 按下瞬间
+    const pressed =
+      isPressed(newKeys, oldKeys, KeysEnum.FIRE) || isPressed(newKeys, oldKeys, KeysEnum.ACTION);
     if (!pressed || !player.isInAnyVehicle()) return next();
     void (async () => {
       const setting = await getSetting(player);
@@ -228,7 +238,7 @@ export function initVehicleAuto(): void {
       if (player.getState() !== PlayerStateEnum.DRIVER) return; // 仅司机位
       const veh = player.getVehicle();
       if (!veh || !isOwnVehicle(player, veh)) return;
-      addNitro(veh); // 按键即补一管（无冷却；点按频率由玩家自己控制）
+      addNitro(veh); // 按下瞬间补一管（即时反馈）
     })();
     return next();
   });
