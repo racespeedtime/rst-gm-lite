@@ -13,6 +13,7 @@ import {
 
 import { setIntervalSafe } from "@/core/timers";
 import { sysMsg } from "@/utils/msg";
+import { logger } from "@/logger";
 
 /** 观察状态 */
 interface ObserveState {
@@ -182,6 +183,11 @@ export function startObservePlayer(observer: Player, target: Player): void {
   } else {
     // 保留已有 prevWorld/prevInterior（重跟踪时不覆盖最初值）
     const existing = observeStates.get(observer.id);
+    // 诊断：spectatePlayer 是否被反复调用（onStateChange → retracePlayer 反复
+    // 触发 startObservePlayer → 重设镜头）
+    logger.info(
+      `[observe] spectatePlayer player=${observer.getName().name}(${observer.id}) target=${target.getName().name}(${target.id}) prev=${existing ? `${existing.kind}:${existing.targetId}` : "无"}`,
+    );
     observeStates.set(observer.id, {
       targetId: target.id,
       kind: "player",
@@ -206,6 +212,13 @@ export function startObserveVehicle(
 ): void {
   if (!target.isValid()) return;
   const existing = observeStates.get(observer.id);
+  // 诊断：观战期间 spectateVehicle 是否被反复调用（onStreamOut/onStateChange/
+  // 轮询都可能反复触发 startObserveVehicle → 每次重设镜头）。对比"回放 ghost"
+  // 与"tv drift NPC"两条路径的调用频率，定位视角抖动根因。
+  logger.info(
+    `[observe] spectateVehicle player=${observer.getName().name}(${observer.id}) ` +
+      `veh=${target.id} model=${target.getModel()} prev=${existing ? `${existing.kind}:${existing.targetId}` : "无"} → 重设镜头`,
+  );
   observeStates.set(observer.id, {
     targetId: target.id,
     kind: "vehicle",
