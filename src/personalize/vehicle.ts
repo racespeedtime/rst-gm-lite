@@ -125,8 +125,8 @@ export async function openVehicleMenu(player: Player, back?: MenuBack): Promise<
       if (nitroIndex < 0) return again();
       const next = nitroIndex === 1 ? "timer" : "hold";
       await updateSetting(player, { nitroType: next });
-      // 重置氮气计数：两种模式共用 nitroCount，timer 的累计会串成 hold 的冷却
-      //（反之亦然）——切换后补充时机从零开始，行为才是所选模式本来的样子
+      // 重置氮气计数：nitroCount 只服务 timer 模式（hold 走 KEY_FIRE 无冷却不碰它），
+      // 从 hold 切回 timer 不清零会继承旧累计、立即触发一次补充——切换后从零开始
       resetNitroCount(player.id);
       notifySaved(player, `氮气方式已设为：${next === "timer" ? "定时器" : "点按"}`);
       return again();

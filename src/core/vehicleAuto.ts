@@ -208,7 +208,8 @@ export function initVehicleAuto(): void {
     const veh = player.getVehicle();
     if (!veh || !isOwnVehicle(player, veh)) return next();
     addNitro(veh); // 氮气
-    // 重置计时：上车即补，之后的 15 秒计数从上车时刻重新开始（timer/hold 共用）
+    // 重置 timer 计数：上车即补一管，之后的 15 秒累计从上车时刻重新开始
+    //（hold 点按模式不碰 nitroCount——KEY_FIRE 无冷却，这里写 0 无副作用）
     nitroCount.set(player.id, 0);
     return next();
   });

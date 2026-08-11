@@ -2,7 +2,7 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { showDialog } from "@/utils/dialog";
-import { COLOR_SUCCESS } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import type { SysUserSettingModel } from "@/prisma/generated/prisma/models/SysUserSetting";
 
 // 注：各 personalize 模块统一从 @/utils/colors 导入颜色（不再从这里 re-export，
@@ -111,9 +111,10 @@ export async function pickOption(
   return res.listItem;
 }
 
-/** 提示设置已保存 */
+/** 提示设置已保存（统一走 sysMsg 带 [设置] 前缀——此前裸 COLOR_SUCCESS 无前缀，
+ *  与消息规范 6b 不符） */
 export function notifySaved(player: Player, message: string): void {
-  player.sendClientMessage(COLOR_SUCCESS, message);
+  sysMsg(player, "settings", message, "success");
 }
 
 /** 开关状态的红绿双色文本（对齐原版 ShowCustomSettings 风格） */

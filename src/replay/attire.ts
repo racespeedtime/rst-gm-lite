@@ -7,13 +7,15 @@ import { applyPlayerPreset } from "@/attire";
 import { MAX_VEHICLE_ATTIRE } from "@/attire/state";
 
 /**
- * 回放/挑战 ghost 的装扮应用（按玩家**当前**设置查库，不按回放当时存储——装扮变动
+ * 回放 ghost 的装扮应用（按玩家**当前**设置查库，不按回放当时存储——装扮变动
  * 无所谓，每次进回放用最新设置套）。
  * - 车辆：user_vehicle.defaultPresetId → vehiclePreset（颜色/paintjob/改装件 + 挂件）
  * - 人物（NPC）：sysUserSetting.skinId + defaultPlayerPresetId → applyPlayerPreset
  * 关键约束：ghost 车挂件**独立管理**（返回数组、调用方随车销毁），不登记进玩家的
  * 爱车挂件 map（appliedVehicleObjs/vehicleObjMap 按 playerId 键控——登记进去会把
  * 玩家自己爱车的挂件 destroy 掉）。
+ * 注：目前仅回放（playback）接入；挑战影子（challenge.ts）不套装扮，若要让影子
+ * 与回放一致可在此复用。
  */
 
 /** 销毁 ghost 车挂件对象数组（换车型/会话销毁时清理挂件实体，车 destroy 不会带挂件） */

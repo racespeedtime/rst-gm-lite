@@ -477,7 +477,8 @@ export interface SampledState {
   rank: number;
 }
 
-/** 播放时长（毫秒）：v7 起用帧时间戳精确（末帧-首帧）；旧文件回退帧数×间隔。
+/** 播放时长（毫秒）：末帧时间戳（首帧 offset 通常≈0，不单独减首帧——
+ *  seek 上限与 renderGhost 的 maxTime 同口径）。旧文件回退帧数×间隔。
  *  与 sampleAt 的 maxTime / seek 上限统一（renderGhost/tickSession/challenge 复用）。 */
 export function replayDurationMs(data: ReplayData): number {
   const { header } = data;
@@ -633,16 +634,26 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
     ghost.vehicle = v;
     registerObserveCandidate(v.id, "vehicle"); // 新车登记进观战切换候选（否则该 ghost 无法被切到）
     // 换车型后异步套玩家当前爱车装扮（查库异步不能阻塞 60fps tick）：
-    // 竞态守卫——只接收"仍挂在这辆车上"的结果（换车 tick 内可能又换）
+    // 竞态守卫——只接收"仍挂在这辆车上"的结果；若 await 期间又换车（60fps tick
+    // vs 多次查库可能发生），旧结果的对象已 create+attach 到已销毁旧车，必须销毁
+    //（否则成为漂浮在回放世界的孤儿挂件，且不进 ghost.attireObjs 永远清不到）
     void applyReplayVehicleAttire(v, model, session.ownerId).then((objs) => {
-      if (ghost.vehicle === v) ghost.attireObjs = objs;
+      if (ghost.vehicle === v) {
+        ghost.attireObjs = objs;
+      } else {
+        destroyAttireObjs(objs);
+      }
     });
     // 重挂到新车：副驾保持副驾（再上车），镜头观战保留 originPlayerId 重跟踪
     for (const { playerId, originPlayerId, mode } of reattach) {
       const w = Player.getInstance(playerId);
       if (w && w.isConnected()) {
         if (mode === "ride") {
-          startRideVehicle(w, v);
+          // 副驾重挂失败（座位被占等）→ 兜底回镜头观战（保留可 /tv off 的退出路径，
+          // 否则玩家无观察态站在回放世界）
+          if (!startRideVehicle(w, v)) {
+            startObserveVehicle(w, v, originPlayerId);
+          }
         } else {
           startObserveVehicle(w, v, originPlayerId);
         }
@@ -1091,10 +1102,15 @@ export async function spawnReplay(
       }
       // 迭代内 try：创建中途（putInVehicle/label.create/register 等）抛异常时
       // 清理本次已建实体（外层 catch 只覆盖已 push 进 ghosts 的，循环局部变量
-      // 不清理会泄漏 NPC 槽位 + 车辆实体）
+      // 不清理会泄漏 NPC 槽位 + 车辆实体）。vehicle/label/attireObjs 提升到迭代级：
+      // 新增的套装扮 await 可能因 DB 异常抛到 catch，此时它们已创建未 push 进
+      // ghosts，必须在本迭代销毁
+      let vehicle: Vehicle | undefined;
+      let label: Dynamic3DTextLabel | undefined;
+      let attireObjs: DynamicObject[] = [];
       try {
         const npcPlayer = npc.getPlayer();
-        const vehicle = new Vehicle({
+        vehicle = new Vehicle({
           modelId: data.header.vehicleModelId,
           x: data.header.startX,
           y: data.header.startY,
@@ -1117,7 +1133,7 @@ export async function spawnReplay(
         //（头车）；创建顺序 i=0 是 playTime 最小（视觉尾车）。故编号取 total-已建数：
         // 头车（playTime 最大）= ghost 1/N，尾车 = ghost N/N，与视觉顺序一致
         const labelNo = count - ghosts.length;
-        const label = new Dynamic3DTextLabel({
+        label = new Dynamic3DTextLabel({
           text: ghostLabelText(npc.getName(), replay.recorderName, labelNo, count, true),
           color: "#ffffff",
           x: 0,
@@ -1138,11 +1154,7 @@ export async function spawnReplay(
         // 套玩家当前装扮（查库，不按回放当时存储）：NPC 皮肤 + 人物装扮预设；
         // ghost 车按玩家该车型爱车默认预设（颜色/改装件/挂件，挂件独立管理随车销毁）
         await applyReplayPlayerAttire(npcPlayer, player.id);
-        const attireObjs = await applyReplayVehicleAttire(
-          vehicle,
-          data.header.vehicleModelId,
-          player.id,
-        );
+        attireObjs = await applyReplayVehicleAttire(vehicle, data.header.vehicleModelId, player.id);
         ghosts.push({
           npc,
           vehicle,
@@ -1161,11 +1173,16 @@ export async function spawnReplay(
           online: true,
         });
       } catch (e) {
-        // 本次迭代部分实体已建：销毁 npc/车辆（label 附 NPC 随 destroy 清理），
-        // 注销已登记的 sync 屏蔽/观战候选，再上抛交外层统一处理
+        // 本次迭代部分实体已建：销毁 npc/车辆/标签/挂件（新增的套装扮 await 可能
+        // 因 DB 异常在这里抛——vehicle/label 已创建未 push 进 ghosts，必须在本
+        // 迭代销毁，否则实体泄漏），注销已登记的 sync 屏蔽/观战候选，再上抛交
+        // 外层统一处理
         try {
           unregisterReplayNpc(npc.getPlayer().id);
+          destroyAttireObjs(attireObjs);
+          if (label?.isValid()) label.destroy();
           npc.destroy();
+          if (vehicle?.isValid()) vehicle.destroy();
         } catch {
           /* 已失效 */
         }
@@ -1341,7 +1358,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
           /* 暂停帧失败不影响：恢复播放后下一帧会重发 */
         }
       }
-      sysMsg(player, "replay", "回放已暂停", "warn");
+      sysMsg(player, "replay", "回放已暂停", "info");
       break;
     }
     case "play": {
@@ -1352,19 +1369,19 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         sysMsg(player, "replay", "回放已播完（/rp seek 可回看）", "warn");
         break;
       }
-      sysMsg(player, "replay", `回放继续 ×${session.speed}`, "warn");
+      sysMsg(player, "replay", `回放继续 ×${session.speed}`, "info");
       break;
     }
     case "speed": {
       if (!arg) {
         // 不填参数：只显示当前倍速（对齐命令帮助的提示逻辑）
-        sysMsg(player, "replay", `当前倍速 ×${session.speed}`, "warn");
+        sysMsg(player, "replay", `当前倍速 ×${session.speed}`, "info");
         break;
       }
       const n = Number(arg);
       if (REPLAY_SPEEDS.includes(n)) {
         session.speed = n;
-        sysMsg(player, "replay", `倍速 ×${session.speed}`, "warn");
+        sysMsg(player, "replay", `倍速 ×${session.speed}`, "info");
       } else {
         session.speed = 1;
         player.sendClientMessage(
@@ -1407,7 +1424,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       cancelCountdownFx(player.id); // 取消进行中的开场倒计时动画（TD 一并销毁）
       for (const g of session.ghosts) renderGhost(session, g);
       syncObserverTds(session); // seek 后 TD 状态与时间线一致
-      sysMsg(player, "replay", `已跳转到 ${(target / 1000).toFixed(1)}s`, "warn");
+      sysMsg(player, "replay", `已跳转到 ${(target / 1000).toFixed(1)}s`, "info");
       break;
     }
     case "watch": {
@@ -1421,7 +1438,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
           ensureObserverTds(session, player);
           syncObserverTds(session);
         }
-        sysMsg(player, "replay", "已切换为观看回放视角", "warn");
+        sysMsg(player, "replay", "已切换为观看回放视角", "info");
       } else if (!session.watchers.has(player.id)) {
         session.watchers.add(player.id); // 副驾已在看：登记统一清理
       }

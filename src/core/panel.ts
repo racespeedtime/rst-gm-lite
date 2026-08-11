@@ -451,11 +451,11 @@ export function initPanel(): void {
   // 时不打开，避免覆盖当前对话框或把别人的流程锁解开）
   const openPanelByCommand = (player: Player): void => {
     if (!getAuthState(player.id)) {
-      sysMsg(player, "race", "请先完成登录", "error");
+      sysMsg(player, "system", "请先完成登录", "error");
       return;
     }
     if (isPlayerLocked(player.id)) {
-      sysMsg(player, "race", "当前正在其他流程中，请稍后再试", "info");
+      sysMsg(player, "system", "当前正在其他流程中，请稍后再试", "info");
       return;
     }
     void openPanel(player); // openPanel 内部自行 lock/unlock
@@ -475,11 +475,11 @@ export function initPanel(): void {
   // 称号=名字前缀、小尾巴=名字后缀（人物菜单内）；全部复用面板现有子菜单。
   const openMySettings = (player: Player): void => {
     if (!getAuthState(player.id)) {
-      sysMsg(player, "race", "请先完成登录", "error");
+      sysMsg(player, "system", "请先完成登录", "error");
       return;
     }
     if (isPlayerLocked(player.id)) {
-      sysMsg(player, "race", "当前正在其他流程中，请稍后再试", "info");
+      sysMsg(player, "system", "当前正在其他流程中，请稍后再试", "info");
       return;
     }
     void openMySettingsMenu(player);

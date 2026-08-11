@@ -1449,7 +1449,7 @@ export function initRaceSystem(): void {
     if (!isInRace(player.id)) return next();
     const main = (strictMainCmd || command.split(/\s+/)[0] || "").toLowerCase();
     if (isRaceCommandAllowed(main)) return next();
-    sysMsg(player, "race", "比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生", "error");
+    sysMsg(player, "match", "比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生", "error");
     return false;
   }, true); // unshift 优先执行（在限频之前，避免双提示）
 

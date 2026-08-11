@@ -54,8 +54,9 @@ export function unregisterObserveCandidate(targetId: number, kind: "player" | "v
 
 /** 观战左/右键切换：循环切换下一个/上一个可观战目标。
  *  open.mp 无现成的"观战目标切换"事件。触发源：
- *  - 左键（FIRE）→ 下一个；LOOK_RIGHT/A → 下一个
- *  - LOOK_LEFT/A → 上一个；键盘 ←/→ 由 getKeys() 轮询（pollObserveKeys）
+ *  - 左键（FIRE）→ 下一个；LOOK_RIGHT（E）→ 下一个
+ *  - LOOK_LEFT（Q）→ 上一个；键盘 ←/→ 由 getKeys() 轮询（pollObserveKeys）
+ *  - 副驾模式（mode=ride）只切车辆目标，切换仍保持副驾（见函数内分支）
  *  鼠标右键（SECONDARY_ATTACK/瞄准）在观战模式下客户端不发送，不可用。 */
 function cycleObserveTarget(observer: Player, forward: boolean): void {
   const st = observeStates.get(observer.id);
@@ -277,15 +278,19 @@ export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
   emitObserveStop(player.id);
 }
 
-/** 找车辆的空闲乘客座位（跳过 0 号司机位——NPC/司机占用）。无空闲返回 null */
+/**
+ * 找车辆的空闲乘客座位（跳过 0 号司机位——NPC/司机占用）。
+ * infernus 的 putPlayerIn 只支持 seat 0-4（seat>4 抛异常），多座车（bus/train
+ * getSeats>5）只枚举到 4。无空闲返回 null。
+ */
 function findFreePassengerSeat(veh: Vehicle): number | null {
-  const total = veh.getSeats();
+  const maxSeat = Math.min(veh.getSeats(), 5); // 0-4 共 5 座（0=司机）
   const occupied = new Set<number>();
   for (const p of Player.getInstances()) {
     if (!p.isConnected()) continue;
     if (p.getVehicle() === veh) occupied.add(p.getVehicleSeat());
   }
-  for (let seat = 1; seat < total; seat++) {
+  for (let seat = 1; seat < maxSeat; seat++) {
     if (!occupied.has(seat)) return seat;
   }
   return null;
@@ -296,13 +301,20 @@ function findFreePassengerSeat(veh: Vehicle): number | null {
  * 与 startObserveVehicle 共用同一 observeStates/循环切换键（FIRE/Q/E/方向键）。
  * 锁定车门不阻塞 PutPlayerInVehicle（服务端直接入座，锁只挡 on-foot 自然上车）——
  * ghost 车全程保持锁门，他人无法中途挤上车，座位上的副驾不受影响。
+ * 返回 true=已在车上；false=失败（座位满/上车异常，状态未改，调用方可兜底）。
  */
-export function startRideVehicle(observer: Player, target: Vehicle): void {
-  if (!target.isValid()) return;
+export function startRideVehicle(observer: Player, target: Vehicle): boolean {
+  if (!target.isValid()) return false;
   const existing = observeStates.get(observer.id);
   // 已在骑这辆车（同目标同模式）→ 幂等跳过
-  if (existing?.mode === "ride" && existing.targetId === target.id) return;
-  // 从别的车副驾切来：先下车（player 只能在一辆车里，但显式下车更稳）
+  if (existing?.mode === "ride" && existing.targetId === target.id) return true;
+  // 先找座再下车：座位满直接拒绝，保持旧车副驾不动（否则玩家被晾在车外）
+  const seat = findFreePassengerSeat(target);
+  if (seat == null) {
+    sysMsg(observer, "observe", "该车座位已满，无法副驾跟随", "warn");
+    return false;
+  }
+  // 从别的车副驾切来：确定有新座才下车
   if (existing?.mode === "ride") {
     try {
       observer.removeFromVehicle();
@@ -310,27 +322,44 @@ export function startRideVehicle(observer: Player, target: Vehicle): void {
       /* 已不在车里 */
     }
   }
-  const seat = findFreePassengerSeat(target);
-  if (seat == null) {
-    sysMsg(observer, "observe", "该车座位已满，无法副驾跟随", "warn");
-    return;
+  // 比赛回放主路径：先 /rp watch（spectate 已开）再 /rp ride——副驾必须关闭
+  // 观战模式，否则客户端镜头停在观战态、不发正常 sync，按 F/切车全失效
+  try {
+    observer.toggleSpectating(false);
+  } catch {
+    /* 已非观战态 */
   }
+  const prevWorld = existing?.prevWorld ?? observer.getVirtualWorld();
+  const prevInterior = existing?.prevInterior ?? observer.getInterior();
   observeStates.set(observer.id, {
     targetId: target.id,
     kind: "vehicle",
-    prevWorld: existing?.prevWorld ?? observer.getVirtualWorld(),
-    prevInterior: existing?.prevInterior ?? observer.getInterior(),
+    prevWorld,
+    prevInterior,
     mode: "ride",
   });
   observer.setVirtualWorld(target.getVirtualWorld());
   observer.setInterior(target.getInterior());
-  if (!target.putPlayerIn(observer, seat)) {
+  try {
+    if (!target.putPlayerIn(observer, seat)) {
+      throw new Error("putPlayerIn false");
+    }
+  } catch {
+    // 上车失败（座位竞争/实体异常）：回滚状态 + 恢复原世界，防玩家被扔在回放
+    // 世界地面且无观战态（/tv off 报"不在观战状态"、tickSession 自动停止永不触发）
     observeStates.delete(observer.id);
+    try {
+      observer.setVirtualWorld(prevWorld);
+      observer.setInterior(prevInterior);
+    } catch {
+      /* 忽略 */
+    }
     sysMsg(observer, "observe", "副驾上车失败，请重试", "error");
-    return;
+    return false;
   }
   emitObserveStart(observer.id);
   sysMsg(observer, "observe", `已切换为副驾（坐在车辆 #${target.id} 里跟随）`, "info");
+  return true;
 }
 
 /** 摘除所有正在观战指定车辆实体的观察者（换车/实体销毁前调用，防 onStreamOut 触发

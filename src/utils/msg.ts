@@ -22,11 +22,13 @@ export const PREFIX = {
   observe: "[TV]",
   /** 战局 / 公共大世界 */
   session: "[战局]",
-  /** 聊天 / 全局喊话 */
-  chat: "[全局]",
-  /** 私聊（对齐原版 /pm 前缀 [pm]） */
-  pm: "[pm]",
-  /** 比赛内通用提示（房间广播/命令隔离等，与 [赛车] 并存——[赛车] 用于玩家消息） */
+  /**
+   * 聊天 / 全局喊话与私聊刻意不走 sysMsg（聊天转发是消息**内容**格式而非模块
+   * 提示，且用各自聊天色）：手写 [全局]/[战局]/[pm] 保留在 chat/index.ts。
+   * 无敌攻击者提示用金色特殊色（invincible.ts 手写 [无敌]）同理。
+   * 此三者不登记 PREFIX（登记了也是死登记，误导后续维护）。
+   */
+  /** 比赛内通用提示（命令隔离/比赛中禁止类，与 [赛车] 并存——[赛车] 用于玩家消息） */
   match: "[比赛]",
   /** 装扮 / 挂件 */
   attire: "[装扮]",
@@ -48,12 +50,12 @@ export const PREFIX = {
   action: "[动作]",
   /** 账号 / 认证 / 登录 */
   auth: "[账号]",
-  /** 无敌状态 */
-  invincible: "[无敌]",
   /** 倒计时（/djs 等） */
   countdown: "[倒计时]",
   /** 通用系统 */
   system: "[系统]",
+  /** 个性化设置（notifySaved 统一用） */
+  settings: "[设置]",
 } as const;
 export type MsgTag = keyof typeof PREFIX;
 
