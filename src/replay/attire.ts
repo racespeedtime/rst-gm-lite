@@ -2,7 +2,6 @@ import { DynamicObject, Player, Vehicle } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
-import { addVehicleComponentIfPossible } from "@/vehicles";
 import { applyPlayerPreset } from "@/attire";
 import { MAX_VEHICLE_ATTIRE } from "@/attire/state";
 
@@ -30,7 +29,7 @@ export function destroyAttireObjs(objs: DynamicObject[] | undefined): void {
 }
 
 /**
- * 给 ghost 车套玩家当前爱车装扮：颜色/paintjob/改装件 + 挂件（DynamicObject attach）。
+ * 给 ghost 车套玩家当前爱车装扮：颜色/paintjob/挂件（DynamicObject attach）。
  * 挂件返回数组由调用方随车销毁。无该车型爱车或未设默认预设 → 不套（保持默认外观）。
  */
 export async function applyReplayVehicleAttire(
@@ -53,12 +52,11 @@ export async function applyReplayVehicleAttire(
     veh.changeColors(Number(preset.color1), Number(preset.color2));
   }
   if (preset.paintjob != null) veh.changePaintjob(Number(preset.paintjob));
-  if (preset.modComponents) {
-    for (const c of preset.modComponents.split(" ")) {
-      const id = Number(c);
-      if (Number.isInteger(id) && id > 0) addVehicleComponentIfPossible(veh, id);
-    }
-  }
+  // 不套预设的 modComponents（改装件/氮气）：观战中给被观战车**再次**
+  // addComponent（ghost 车创建时已 addNitro）会触发客户端车辆状态变化 →
+  // spectate 镜头跟着重置 → 观战上下转一抽一抽（实机二分定位的根因）。
+  // 换色/涂装/挂件在观战中安全（实测不抽）；创建时的一次 addNitro 也无害
+  //（drift NPC 车同样创建时加氮气，观战正常）。
   const objs: DynamicObject[] = [];
   let slot = 0;
   for (const item of preset.items) {
