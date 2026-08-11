@@ -372,20 +372,34 @@ function resetChallengeCheckpoint(player: Player, ch: ChallengeSession): void {
   RaceCheckpoint.set(player, 0, first.x, first.y, first.z, nxt2.x, nxt2.y, nxt2.z, first.size);
 }
 
+/** 四元数（SA 车辆 sync：车头从 +X 起、绕 Z 右手逆时针）→ GTA 车辆朝向角。
+ * GTA 角度系 0=北、90=西、180=南、270=东（AGENTS.md 约定），车头方向向量
+ * = (-sinθ, -cosθ)；四元数 yaw 车头 = (cos yaw, sin yaw)。两者相等：
+ * cos yaw = -sinθ、sin yaw = -cosθ ⇒ θ = yaw - 90°。 */
+function quatToZAngle(qw: number, qx: number, qy: number, qz: number): number {
+  const yaw = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
+  return ((((yaw * 180) / Math.PI - 90) % 360) + 360) % 360;
+}
+
 /** 玩家位置挪到录制起点（车就位 + 放回车里；restart 与首进共用）。
  * 起点 = 回放录制者的**录制起点**（data.header.startX/Y/Z），与影子车同位置——
  * 玩家与影子并排起步，公平对齐（此前用第一个 CP cps[0]，与影子起点分离，
- * 玩家起步位置与影子错位）。restart 与首进共用。
+ * 玩家起步位置与影子错位）。起步朝向 = 录制首帧四元数转出的车头方向
+ *（quatToZAngle(sampleAt(data,0))），与影子车同一朝向；header 未存角度，须
+ * 从首帧 sync 状态取。
  * async：无车时刷车是异步的，调用方 await 后需自行做断线检查。
  * 入口 pendingRespawn 短路：restart↔go 交错时（restart 的 seatPlayerAtStart 不 await
  * 就 go），在途刷车未完成则跳过本次——车由在途那次刷到位，防双 spawnVehicle 并发
  * 销毁对方刚建的车/残留孤儿实体。 */
 async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<void> {
   if (pendingRespawn.has(player.id)) return; // 刷车在途 → 跳过（在途那次会就位）
+  // 录制起点朝向：首帧四元数 → GTA 角度（录制的车头方向，影子车同款）
+  const s0 = sampleAt(ch.data, 0);
+  const startAngle = s0 ? quatToZAngle(s0.qw, s0.qx, s0.qy, s0.qz) : 0;
   const owned = getOwnedVehicle(player.id);
   if (owned && owned.isValid()) {
     owned.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
-    owned.setZAngle(0); // 朝向 0 对齐影子车（header 未存录制起点角度）
+    owned.setZAngle(startAngle);
     owned.setVirtualWorld(ch.worldId);
     owned.setHealth(1000);
     owned.repair();
@@ -411,7 +425,7 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
       const veh = getOwnedVehicle(player.id);
       if (veh && veh.isValid()) {
         veh.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
-        veh.setZAngle(0);
+        veh.setZAngle(startAngle);
         veh.setVirtualWorld(ch.worldId);
       }
     }
