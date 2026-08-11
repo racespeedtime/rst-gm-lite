@@ -71,9 +71,6 @@ interface ChallengeGhost {
    *  采样可能恰好是录制者松油门瞬间（帧 keys 无 SPRINT），客户端有组件没按键
    *  不喷——窗口内强制 SPRINT 保证喷起来；窗口结束恢复录制按键 */
   nitroSimUntil: number;
-  /** 播放中发现过 KEY_FIRE 位（点按模式录制）→ 停用 15s 自动补氮气兜底
-   *  （按住持续补已覆盖补给，兜底反而会在喷射中打断） */
-  nitroFireSeen: boolean;
   /** 当前标签显示的在线状态（录制者掉线时标签追加红字"掉线"；变化时 updateText） */
   online: boolean;
 }
@@ -262,14 +259,12 @@ function renderGhost(ch: ChallengeSession): void {
     const pt = ch.ghost.playTime;
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
     if (nitroOn && !atEnd) {
-      ch.ghost.nitroFireSeen = true;
       if (pt - ch.ghost.lastNitroAt >= NITRO_REFILL_MS) {
         ch.ghost.lastNitroAt = pt;
         ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
         addNitro(ch.ghost.vehicle);
       }
-    }
-    if (!atEnd && !ch.ghost.nitroFireSeen && pt - ch.ghost.lastAutoNitroAt >= 15_000) {
+    } else if (!atEnd && pt - ch.ghost.lastAutoNitroAt >= 15_000) {
       ch.ghost.lastAutoNitroAt = pt;
       ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
       addNitro(ch.ghost.vehicle);
@@ -448,7 +443,6 @@ function standbyAtStart(player: Player, ch: ChallengeSession): void {
   ch.ghost.lastAutoNitroAt = 0;
   ch.ghost.lastNitroAt = 0;
   ch.ghost.nitroSimUntil = -1;
-  ch.ghost.nitroFireSeen = false;
   try {
     ch.ghost.vehicle.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
     ch.ghost.vehicle.setZAngle(0);
@@ -1017,7 +1011,6 @@ async function startChallengeCore(
       lastAutoNitroAt: 0,
       lastNitroAt: 0,
       nitroSimUntil: -1,
-      nitroFireSeen: false,
       online: true, // 起始帧在线（掉线重连回放才可能翻转为 false）
     };
     // NPC 连接建立是异步的：刚 create 后立即 putInVehicle 可能未生效（NPC 未就绪

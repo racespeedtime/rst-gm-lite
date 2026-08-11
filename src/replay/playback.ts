@@ -280,9 +280,6 @@ export interface ReplaySession {
   /** 比赛赛道 CP 坐标（race 回放从 raceCp 表加载；观战者 3D 箭头/图标渲染用；
    *  ghost 回放无赛道为 undefined） */
   cps?: { x: number; y: number; z: number; size: number }[];
-  /** 播放中发现过 KEY_FIRE 位（点按模式录制）→ 停用 15s 自动补氮气兜底（FIRE
-   *  上升沿已覆盖补给，兜底反而会在喷射中打断，见 renderGhost） */
-  nitroFireSeen: boolean;
   /** 上次渲染的 ghost CP 进度（过 CP 检测：cpProgress 前进 → 观战者音效 + 箭头推进） */
   cpProgressLast?: number;
 }
@@ -798,19 +795,20 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     // 客户端持续收到"按着油门"即喷；窗口结束恢复录制按键（其余时段不强制喷，
     // 保持录制原始操作）。
     // timer 录制（帧无 FIRE 位）→ 播放 15s 自动兜底；点按录制（帧 FIRE 按住）
-    // → 播放每 1s 补一管（对齐点按"按住持续喷"的录制节奏）。发现 FIRE 位停用
-    // 15s 兜底。播完（atEnd）不再补。
+    // → 播放每 1s 补一管（对齐点按"按住持续喷"的录制节奏）。**兜底始终生效**：
+    // 不因录像某帧带过 FIRE 位而停用（会话级 nitroFireSeen 误判后 0.5x 下非
+    // FIRE 段会完全不补——"补了也没用/根本没补"）。点按补与兜底互斥（一个
+    // tick 只走一条：FIRE 按住走 1s 补，否则走 15s 兜底），不会同帧双重补
+    // 组件打断喷射。播完（atEnd）不再补。
     const pt = ghost.playTime;
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
     if (nitroOn && !atEnd) {
-      session.nitroFireSeen = true;
       if (pt - ghost.lastNitroAt >= NITRO_REFILL_MS) {
         ghost.lastNitroAt = pt;
         ghost.nitroSimUntil = now + NITRO_SIM_MS; // 模拟窗口用墙钟（客户端物理按现实时间跑）
         addNitro(ghost.vehicle);
       }
-    }
-    if (!atEnd && !session.nitroFireSeen && pt - ghost.lastAutoNitroAt >= 15_000) {
+    } else if (!atEnd && pt - ghost.lastAutoNitroAt >= 15_000) {
       ghost.lastAutoNitroAt = pt;
       ghost.nitroSimUntil = now + NITRO_SIM_MS;
       addNitro(ghost.vehicle);
@@ -1300,7 +1298,6 @@ export async function spawnReplay(
     lastCpText: "",
     lastTimeText: "",
     lastRankText: "", // 首帧 syncObserverTds 即写入实时名次（v8 文件）
-    nitroFireSeen: false,
     lastHour: -1,
     cps: raceCps, // 赛道 CP 坐标（ghost 回放 undefined）
     lastMinute: -1,
