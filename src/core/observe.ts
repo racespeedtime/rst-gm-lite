@@ -583,15 +583,21 @@ export function initObserve(): void {
   PlayerEvent.onSpawn(({ player: target, next }) => {
     // 观察者自己重生（服务器 spawn 路径，如比赛强制重生，绕过 RequestSpawn
     // 闸门）：兜底退出观战——否则 observeStates 残留，速度表仍读被观战
-    // 对象的速度而非自己的
-    if (observeStates.has(target.id)) {
+    // 对象的速度而非自己的。
+    // **副驾（mode=ride）除外**：startRideVehicle 里 toggleSpectating(false)
+    //（关闭观战以便真实入座）会触发重生活动 → 同步 onSpawn——此时 observeStates
+    // 仍是旧的 spectate 状态，若不跳过会被 stopObserve 误清（removeFromVehicle
+    // 弹出车 + setVirtualWorld(prevWorld) 挪回回放前世界 → tickSession 判定
+    // "离开回放世界" → 直接退出回放）
+    const st = observeStates.get(target.id);
+    if (st && st.mode !== "ride") {
       stopObserve(target);
     }
     // 被观战者重生：通知观察者重跟踪
-    for (const [pid, st] of observeStates) {
-      if (st.kind === "player" && st.targetId === target.id) {
+    for (const [pid, obs] of observeStates) {
+      if (obs.kind === "player" && obs.targetId === target.id) {
         const observer = Player.getInstance(pid);
-        if (observer && observer.isConnected()) retracePlayer(observer, st);
+        if (observer && observer.isConnected()) retracePlayer(observer, obs);
       }
     }
     return next();

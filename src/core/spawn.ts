@@ -204,6 +204,11 @@ async function computeSpawnPos(
  */
 async function respawnBySetting(player: Player): Promise<void> {
   if (isInRace(player.id) || isEditing(player.id)) return;
+  // 回放/挑战独立世界（>= REPLAY_WORLD_BASE）：出生定位只应作用于公共大世界/
+  // 战局——回放世界里的玩家（观战/副驾/看回放）被 setPos 随机出生点会瞬移/弹出
+  // 车（副驾入座时 toggleSpectating(false) 触发的 onSpawn 就走到这）。与
+  // savePlayerPosition 的 world 守卫同口径
+  if (player.getVirtualWorld() >= REPLAY_WORLD_BASE) return;
   const auth = getAuthState(player.id);
   if (!auth) return;
   const setting = await getSetting(player); // 设置缓存，避免每次重生查库
