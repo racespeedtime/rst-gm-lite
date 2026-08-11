@@ -120,11 +120,11 @@ export const REPLAY_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4];
 /** emulate 发包节流：对齐 open.mp in_vehicle_sync_rate=30（30Hz）——60fps tick
  *  每 2 tick 发一个 DriverSync 模拟包（发太多服务器会合并/浪费） */
 const EMULATE_INTERVAL_MS = 33;
-/** 氮气按住持续补间隔（**播放时间**毫秒）：对齐点按模式 vehicleTick 的每秒补
- *  ——SA 氮气单管约 3-4 秒，每播放 1 秒补一管维持连续喷射（倍速下自动同频：
- *  快进补更频繁、慢放减频，见 renderGhost 注释） */
+/** 氮气按住持续补间隔（**墙钟**毫秒）：对齐点按模式 vehicleTick 的每秒补——
+ *  SA 氮气单管约 3-4 秒，墙钟每秒补一管维持连续喷射（倍速不影响节奏，客户端
+ *  喷氮气物理按现实时间消耗组件，补组件同墙钟频率即一致） */
 const NITRO_REFILL_MS = 1000;
-/** 补氮气后强制模拟 SPRINT 的时长（播放时间毫秒）：保证客户端喷起来且连续
+/** 补氮气后强制模拟 SPRINT 的时长（墙钟毫秒）：保证客户端喷起来且连续
  *  （SA 喷氮气 = 车有组件 + 按住 W；录制者那刻松油门则需模拟按键） */
 const NITRO_SIM_MS = 300;
 
@@ -206,14 +206,13 @@ interface Ghost {
   stopped: boolean;
   /** 当前车辆的装扮挂件（applyReplayVehicleAttire 套玩家当前爱车装扮；随车销毁） */
   attireObjs: DynamicObject[];
-  /** 上次自动补氮气**播放时间**（timer 录制 15s 兜底：与播放时间轴对齐，倍速下
-   *  自动同频——快进 4x 播放 15s = 墙钟 3.75s，补组件节奏随播放频率，组件不断档） */
+  /** 上次自动补氮气**墙钟时刻**（timer 录制 15s 兜底：对齐玩家现实开车节奏，
+   *  不管倍速固定墙钟 15s 补一管） */
   lastAutoNitroAt: number;
-  /** 上次氮气按住持续补**播放时间**（点按录制：帧 FIRE 位按住每播放 1s 补一管） */
+  /** 上次氮气按住持续补**墙钟时刻**（点按录制：帧 FIRE 位按住每墙钟 1s 补一管） */
   lastNitroAt: number;
-  /** 补氮气后强制模拟 SPRINT 的播放时间截止点（客户端喷氮气 = 车有组件 + 按 W；
-   *  补组件那帧若录制者松油门（帧 keys 无 SPRINT）客户端不喷——补后持续模拟
-   *  SPRINT 一小段，保证喷起来且不"喷一下断"） */
+  /** 补氮气后强制模拟 SPRINT 的墙钟截止点（客户端喷氮气 = 车有组件 + 按 W；
+   *  补组件那帧若录制者松油门客户端不喷——补后持续模拟 SPRINT 一小段保证喷） */
   nitroSimUntil: number;
   /** 分身编号（1..N，头车=1；标签显示用） */
   labelNo: number;
@@ -795,33 +794,32 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     //    与录制时玩家自身一致——原版玩家的管也是有限的）。
     // 2) 每 15 秒自动补一管兜底：timer 模式录制者自动补、帧里没有按键信号——
     //    不自动补则其录像的 ghost 氮气会断档（"回放里没氮气"）。
-    // 氮气：按住持续补，节流基准用**播放时间**（ghost.playTime）而非墙钟——
-    // 倍速下补组件节奏自动同频：快进 4x 播放 1s = 墙钟 0.25s（补组件更频繁，
-    // 组件常满）；慢放 0.5x 播放 1s = 墙钟 2s（减频，与录制节奏一致）。
-    // 只用墙钟会出问题：4x 下组件 3-4s（播放）耗尽、墙钟 1s 才补一次 = 播放
-    // 4s 才补 → 必然断档（"快进氮气严重"）；0.5x 下播放拉长但节流不变也断。
+    // 氮气：按住持续补，节流基准用**墙钟**（now）——SA 客户端喷氮气的物理按
+    // 现实时间消耗组件（收到 30Hz 包按墙钟跑），补组件也按墙钟固定节奏才对齐：
+    // timer 录制帧无 FIRE → 墙钟 15 秒自动补一管（对齐玩家现实开车的 timer
+    // 节奏，不管倍速）；点按录制帧 FIRE 位按住 → 墙钟每 1 秒补一管（对齐点按
+    // "按住持续喷"）。**倍速不影响补给节奏**（快进组件耗尽更快、但补组件也更
+    // 频繁同墙钟频率，客户端物理一致）。
     // 补组件时强制模拟 SPRINT（见 nitroSimUntil 注释）：SA 喷氮气 = 车有组件 +
     // 按 W 油门，补组件那帧若录制者松油门客户端不喷。
-    // timer 录制（帧无 FIRE 位）→ 播放 15s 自动兜底；发现 FIRE 位停用兜底。
-    // 播完（atEnd）不再补。
-    const pt = ghost.playTime;
+    // 发现 FIRE 位（点按录制）停用 15s 兜底。播完（atEnd）不再补。
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
     if (nitroOn && !atEnd) {
       session.nitroFireSeen = true;
-      if (pt - ghost.lastNitroAt >= NITRO_REFILL_MS) {
-        ghost.lastNitroAt = pt;
-        ghost.nitroSimUntil = pt + NITRO_SIM_MS;
+      if (now - ghost.lastNitroAt >= NITRO_REFILL_MS) {
+        ghost.lastNitroAt = now;
+        ghost.nitroSimUntil = now + NITRO_SIM_MS;
         addNitro(ghost.vehicle);
       }
     }
-    if (!atEnd && !session.nitroFireSeen && pt - ghost.lastAutoNitroAt >= 15_000) {
-      ghost.lastAutoNitroAt = pt;
-      ghost.nitroSimUntil = pt + NITRO_SIM_MS;
+    if (!atEnd && !session.nitroFireSeen && now - ghost.lastAutoNitroAt >= 15_000) {
+      ghost.lastAutoNitroAt = now;
+      ghost.nitroSimUntil = now + NITRO_SIM_MS;
       addNitro(ghost.vehicle);
     }
     // 补氮气后的模拟窗口内：强制 SPRINT（覆盖录制原始 keys）——客户端持续收到
     // "按着油门"，组件刚补上即喷且连续；窗口结束恢复录制按键。
-    if (!atEnd && pt < ghost.nitroSimUntil) {
+    if (!atEnd && now < ghost.nitroSimUntil) {
       s.keys |= KeysEnum.SPRINT;
     }
     // 血量由 emulate 的 vehicleHealth 处理，无需显式 setHealth（重复操作）
@@ -1445,10 +1443,10 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         // seek 后强制立即发包：重置节流时间戳，否则距上次发包 <33ms 时
         // renderGhost 会被节流跳过，ghost 位置延迟最多 1 tick
         g.lastEmulateAt = 0;
-        // seek 后重置氮气节流基准（playTime 跳变，旧基准会让首个 FIRE 帧判定
-        // "间隔未到"跳过补给）→ 首个 FIRE 帧立即补组件
-        g.lastNitroAt = g.playTime - NITRO_REFILL_MS;
-        g.lastAutoNitroAt = g.playTime - 15_000;
+        // seek 后重置氮气节流基准（墙钟）：跳转后首个 FIRE 帧/首个兜底时刻
+        // 立即补组件（旧墙钟基准会让"间隔未到"跳过补给）
+        g.lastNitroAt = 0;
+        g.lastAutoNitroAt = 0;
         g.nitroSimUntil = -1;
         // 恢复驱动：seek 回看重新开始发包（seek 到结尾会发一次尾帧后由
         // renderGhost 重新标记停发）
