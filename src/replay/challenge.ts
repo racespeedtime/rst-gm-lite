@@ -258,11 +258,16 @@ function renderGhost(ch: ChallengeSession): void {
       if (now - ch.ghost.lastNitroAt >= NITRO_REFILL_MS) {
         ch.ghost.lastNitroAt = now;
         addNitro(ch.ghost.vehicle);
+        // 手动模拟玩家按下氮气键：SA 客户端喷氮气 = 车有组件 + 按住 W（SPRINT）
+        // 油门。补组件同时把 SPRINT 写进该帧 keys，客户端收到即喷（否则补了
+        // 组件但帧无 SPRINT，客户端不喷组件闲置）
+        s.keys |= KeysEnum.SPRINT;
       }
     }
     if (!atEnd && !ch.ghost.nitroFireSeen && now - ch.ghost.lastAutoNitroAt >= 15_000) {
       ch.ghost.lastAutoNitroAt = now;
       addNitro(ch.ghost.vehicle);
+      s.keys |= KeysEnum.SPRINT; // 同点按补：兜底补组件时模拟玩家按键立即喷射
     }
     emulateDriverSync(ch.ghost.npcPlayerId, ch.ghost.vehicle, s, atEnd);
   } catch (e) {

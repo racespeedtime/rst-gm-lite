@@ -799,11 +799,18 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
       if (now - ghost.lastNitroAt >= NITRO_REFILL_MS) {
         ghost.lastNitroAt = now;
         addNitro(ghost.vehicle);
+        // 手动模拟玩家按下氮气键：SA 客户端喷氮气 = 车有组件 + 按住 W（SPRINT）
+        // 油门。补组件的同时把 SPRINT 位写进该帧 keys，客户端收到即喷——否则补了
+        // 组件但帧 keys 无 SPRINT（录制者松油门/刹车中），客户端不喷、组件闲置
+        //（0.5 倍速下该窗口放大 → "回放没氮气"）
+        s.keys |= KeysEnum.SPRINT;
       }
     }
     if (!atEnd && !session.nitroFireSeen && now - ghost.lastAutoNitroAt >= 15_000) {
       ghost.lastAutoNitroAt = now;
       addNitro(ghost.vehicle);
+      // 同点按补：15s 兜底补组件时模拟玩家按键，客户端立即喷射
+      s.keys |= KeysEnum.SPRINT;
     }
     // 血量由 emulate 的 vehicleHealth 处理，无需显式 setHealth（重复操作）
     emulateDriverSync(ghost.npcPlayerId, ghost.vehicle, s, atEnd);
