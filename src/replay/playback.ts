@@ -21,6 +21,7 @@ import { isInRace } from "@/race/room";
 import { isInChallenge } from "./challenge";
 import { getOwnedVehicle, addNitro } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
+import { skipNextRespawnBySetting } from "@/core/spawn";
 import {
   startObserveVehicle,
   stopObserve,
@@ -1042,6 +1043,33 @@ function leadGhost(session: ReplaySession): Ghost {
   return lead;
 }
 
+/** 把玩家（+爱车）传送到回放录制起点：位置 = header.startX/Y/Z，朝向 = 录制
+ * 首帧四元数转出的车头方向。起点与分身/挑战影子一致——/rp watch off 退出观战
+ * 后停在这个位置看车跑。配合 skipNextRespawnBySetting：公共世界 ghost 回放里
+ * toggleSpectating(false) 触发的 onSpawn 会走 respawnBySetting 随机/存档定位，
+ * 不标记会被覆盖（随机出生点/存档位置拉走）；回放独立世界本有 world 守卫跳过，
+ * 标记消费后即删不影响后续正常死亡重生。 */
+function teleportToReplayStart(session: ReplaySession, player: Player): void {
+  const s0 = sampleAt(session.data, 0);
+  const startAngle = s0 ? quatToZAngle(s0.qw, s0.qx, s0.qy, s0.qz) : 0;
+  skipNextRespawnBySetting(player.id); // 抑制随之而来的 respawnBySetting 覆盖定位
+  const owned = getOwnedVehicle(player.id);
+  if (owned && owned.isValid()) {
+    owned.setPos(
+      session.data.header.startX,
+      session.data.header.startY,
+      session.data.header.startZ,
+    );
+    owned.setZAngle(startAngle);
+  }
+  player.setPos(
+    session.data.header.startX,
+    session.data.header.startY,
+    session.data.header.startZ + 1,
+  );
+  player.setFacingAngle(startAngle);
+}
+
 /**
  * 创建回放会话并开始播放（发起人自动观战第一个 ghost）。
  * replayId 必须存在且未删除；文件损坏/不存在返回提示。
@@ -1348,26 +1376,9 @@ export async function spawnReplay(
   if (isGhost) {
     // 自由录制回放：ghost 放当前世界（不切世界、不观战），同世界玩家看得见
     // 可一起玩；控制只对自己会话生效（各看各的）；/rp watch 进入自己的观战视角。
-    // 发起人拉到**录制起点**（header.startX/Y/Z，朝向 = 录制首帧四元数）——
-    // 让玩家看分身从头重播，而不是站在自己当前/录制结束位置；挑战影子同款
-    // 起点（challenge seatPlayerAtStart）。若玩家开着爱车，连车一起挪过去。
-    const s0 = sampleAt(session.data, 0);
-    const startAngle = s0 ? quatToZAngle(s0.qw, s0.qx, s0.qy, s0.qz) : 0;
-    const owned = getOwnedVehicle(player.id);
-    if (owned && owned.isValid()) {
-      owned.setPos(
-        session.data.header.startX,
-        session.data.header.startY,
-        session.data.header.startZ,
-      );
-      owned.setZAngle(startAngle);
-    }
-    player.setPos(
-      session.data.header.startX,
-      session.data.header.startY,
-      session.data.header.startZ + 1,
-    );
-    player.setFacingAngle(startAngle);
+    // 发起人拉到**录制起点**（位置 + 首帧四元数朝向）——让玩家看分身从头重播，
+    // 而不是站在自己当前/录制结束位置；与挑战影子同款起点。
+    teleportToReplayStart(session, player);
     sysMsg(
       player,
       "replay",
@@ -1516,13 +1527,20 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       break;
     }
     case "watch": {
-      // /rp watch off：退出观战/副驾但**保留回放继续播放**——留在回放世界可
-      // 自由活动看车跑（stopObserve stayInWorld 不恢复 prevWorld，tickSession
-      // 的"owner 离开回放世界自动停止"判定不触发）；再 /rp watch 重新观战
+      // /rp watch off：退出观战/副驾但**保留回放继续播放**——玩家传回录制起点
+      // 看分身重播（stopObserve stayInWorld 不恢复 prevWorld；公共世界 ghost 回放
+      // 会触发 onSpawn → respawnBySetting 随机定位，teleportToReplayStart 内
+      // skipNextRespawnBySetting 抑制之）；再 /rp watch 重新观战
       if (arg === "off") {
         if (isObserving(player.id)) {
           stopObserve(player, { quiet: true, stayInWorld: true });
-          sysMsg(player, "replay", "已退出观战（回放继续播放，/rp watch 可重新观看）", "info");
+          teleportToReplayStart(session, player);
+          sysMsg(
+            player,
+            "replay",
+            "已退出观战并回到录制起点（回放继续播放，/rp watch 可重新观看）",
+            "info",
+          );
         } else {
           sysMsg(player, "replay", "你当前不在观战/副驾状态", "warn");
         }

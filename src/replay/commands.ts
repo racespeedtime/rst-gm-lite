@@ -136,7 +136,7 @@ export function initReplayCommands(): void {
                 `  speed [${REPLAY_SPEEDS.join("|")}]  倍速（不填则提示当前倍速）`,
                 "  seek <秒|mm:ss>  跳转（多分身保持错峰）",
                 "  watch     镜头观战（比赛回放带 CP/TIME/BEST）",
-                "  watch off 退出观战/副驾（回放继续播放，留在回放世界）",
+                "  watch off 退出观战/副驾并回到录制起点（回放继续播放）",
                 "  ride      副驾模式（坐进 ghost 车跟随 NPC 开车）",
                 "  label     显示/隐藏 ghost 身份标签（默认显示）",
                 "  stop      停止回放",

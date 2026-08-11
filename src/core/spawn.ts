@@ -195,6 +195,18 @@ async function computeSpawnPos(
   };
 }
 
+/** 跳过一次出生自动定位的玩家集合：观战/回放退出等场景（/rp watch off）先
+ *  setPos 到录制起点，但 toggleSpectating(false) 触发的 onSpawn 会走
+ *  respawnBySetting 把玩家随机/按存档位置定位覆盖掉——标记后下一次
+ *  respawnBySetting 直接跳过（消费一次即删，不影响后续正常死亡重生定位）。
+ * 回放独立世界（world ≥ REPLAY_WORLD_BASE）本就被 world 守卫跳过、不消费标记，
+ * 故标记在 respawnBySetting 开头无条件消费（无论走哪条分支都删除）。 */
+const skipRespawnLocate = new Set<number>();
+/** 请求跳过玩家下一次出生的自动定位（回放/观战退出前调用） */
+export function skipNextRespawnBySetting(playerId: number): void {
+  skipRespawnLocate.add(playerId);
+}
+
 /**
  * 大世界后续重生按设置自动定位（对齐原版 OnPlayerSpawn → SetPlayerPos_Birth）：
  * - spawnMode=LAST_POSITION 且最后位置有效 → 回到最后保存的位置
@@ -203,6 +215,7 @@ async function computeSpawnPos(
  * 用 setPos 直接定位（onSpawn 里不能再 spawn，避免递归触发）。
  */
 async function respawnBySetting(player: Player): Promise<void> {
+  if (skipRespawnLocate.delete(player.id)) return; // 消费跳过标记（观战/回放退出）
   if (isInRace(player.id) || isEditing(player.id)) return;
   // 回放/挑战独立世界（>= REPLAY_WORLD_BASE）：出生定位只应作用于公共大世界/
   // 战局——回放世界里的玩家（观战/副驾/看回放）被 setPos 随机出生点会瞬移/弹出
