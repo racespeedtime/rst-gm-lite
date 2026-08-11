@@ -34,6 +34,7 @@ import {
   parseReplayFile,
   decodeFrame,
   lerpFrame,
+  quatToZAngle,
   FRAME_BYTES_V7,
   FRAME_BYTES_V8,
   type ReplayData,
@@ -1346,11 +1347,31 @@ export async function spawnReplay(
 
   if (isGhost) {
     // 自由录制回放：ghost 放当前世界（不切世界、不观战），同世界玩家看得见
-    // 可一起玩；控制只对自己会话生效（各看各的）；/rp watch 进入自己的观战视角
+    // 可一起玩；控制只对自己会话生效（各看各的）；/rp watch 进入自己的观战视角。
+    // 发起人拉到**录制起点**（header.startX/Y/Z，朝向 = 录制首帧四元数）——
+    // 让玩家看分身从头重播，而不是站在自己当前/录制结束位置；挑战影子同款
+    // 起点（challenge seatPlayerAtStart）。若玩家开着爱车，连车一起挪过去。
+    const s0 = sampleAt(session.data, 0);
+    const startAngle = s0 ? quatToZAngle(s0.qw, s0.qx, s0.qy, s0.qz) : 0;
+    const owned = getOwnedVehicle(player.id);
+    if (owned && owned.isValid()) {
+      owned.setPos(
+        session.data.header.startX,
+        session.data.header.startY,
+        session.data.header.startZ,
+      );
+      owned.setZAngle(startAngle);
+    }
+    player.setPos(
+      session.data.header.startX,
+      session.data.header.startY,
+      session.data.header.startZ + 1,
+    );
+    player.setFacingAngle(startAngle);
     sysMsg(
       player,
       "replay",
-      `回放已开始：${ghosts.length} 台车在世界上重播 · /rp 控制（暂停/快进/倍速/seek）· /rp watch 观战`,
+      `回放已开始：${ghosts.length} 台车在世界上重播（已传送到录制起点）· /rp 控制（暂停/快进/倍速/seek）· /rp watch 观战`,
       "success",
     );
     return true;

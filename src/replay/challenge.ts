@@ -25,7 +25,7 @@ import {
 } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
-import type { ReplayData } from "./format";
+import { quatToZAngle, type ReplayData } from "./format";
 import {
   sampleAt,
   emulateDriverSync,
@@ -372,21 +372,12 @@ function resetChallengeCheckpoint(player: Player, ch: ChallengeSession): void {
   RaceCheckpoint.set(player, 0, first.x, first.y, first.z, nxt2.x, nxt2.y, nxt2.z, first.size);
 }
 
-/** 四元数（SA 车辆 sync：车头从 +X 起、绕 Z 右手逆时针）→ GTA 车辆朝向角。
- * GTA 角度系 0=北、90=西、180=南、270=东（AGENTS.md 约定），车头方向向量
- * = (-sinθ, -cosθ)；四元数 yaw 车头 = (cos yaw, sin yaw)。两者相等：
- * cos yaw = -sinθ、sin yaw = -cosθ ⇒ θ = yaw - 90°。 */
-function quatToZAngle(qw: number, qx: number, qy: number, qz: number): number {
-  const yaw = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
-  return ((((yaw * 180) / Math.PI - 90) % 360) + 360) % 360;
-}
-
 /** 玩家位置挪到录制起点（车就位 + 放回车里；restart 与首进共用）。
  * 起点 = 回放录制者的**录制起点**（data.header.startX/Y/Z），与影子车同位置——
  * 玩家与影子并排起步，公平对齐（此前用第一个 CP cps[0]，与影子起点分离，
  * 玩家起步位置与影子错位）。起步朝向 = 录制首帧四元数转出的车头方向
- *（quatToZAngle(sampleAt(data,0))），与影子车同一朝向；header 未存角度，须
- * 从首帧 sync 状态取。
+ *（quatToZAngle(sampleAt(data,0))，与影子车同一朝向；header 未存角度，须
+ * 从首帧 sync 状态取）。
  * async：无车时刷车是异步的，调用方 await 后需自行做断线检查。
  * 入口 pendingRespawn 短路：restart↔go 交错时（restart 的 seatPlayerAtStart 不 await
  * 就 go），在途刷车未完成则跳过本次——车由在途那次刷到位，防双 spawnVehicle 并发

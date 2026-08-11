@@ -368,6 +368,16 @@ function normalizeQuat(q: { x: number; y: number; z: number; w: number }): {
   return { x: q.x / n, y: q.y / n, z: q.z / n, w: q.w / n };
 }
 
+/** 车辆 sync 四元数（车头从 +X 起、绕 Z 右手逆时针 yaw）→ GTA 车辆朝向角。
+ * GTA 角度系 0=北、90=西、180=南、270=东（AGENTS.md 约定），车头方向向量 =
+ * (-sinθ, -cosθ)；四元数 yaw 车头 = (cos yaw, sin yaw)。两者相等：
+ * cos yaw = -sinθ、sin yaw = -cosθ ⇒ θ = yaw - 90°。挑战/回放起步把玩家爱车
+ * 朝向对齐到录制首帧方向用（header 未存起点角度，须从首帧 sync 状态取）。 */
+export function quatToZAngle(qw: number, qx: number, qy: number, qz: number): number {
+  const yaw = Math.atan2(2 * (qw * qz + qx * qy), 1 - 2 * (qy * qy + qz * qz));
+  return ((((yaw * 180) / Math.PI - 90) % 360) + 360) % 360;
+}
+
 /** 帧间线性插值（t∈[0,1]；离散状态字段取最近帧不做插值）。
  *  位置/速度直接插值；四元数插值后归一化（否则中间帧非单位四元数，欧拉换算乱）。 */
 export function lerpFrame(a: ReplayFrame, b: ReplayFrame, t: number): ReplayFrame {
