@@ -9,6 +9,8 @@ import { isInRace } from "@/race/room";
 import { isObserving } from "@/core/observe";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
+import { pickOption } from "@/personalize/settings";
+import { formatFullDate } from "@/utils/format";
 import type { MenuBack } from "@/core/panel";
 import { setIntervalSafe, setTimeoutSafe, clearTimeoutSafe } from "@/core/timers";
 
@@ -522,25 +524,85 @@ export async function openTeleportMenu(player: Player, back?: MenuBack): Promise
   await rows[res.listItem].run();
 }
 
-/** 系统传送点列表（分页选择传送） */
-async function listSystemTeleports(player: Player, back?: MenuBack): Promise<void> {
-  const points = await prisma.teleport.findMany({
-    where: { isSystem: true, isEnabled: true, deletedAt: null },
-    orderBy: { name: "asc" },
-  });
+/** 传送点列表排序（对齐赛道列表 /r s 的排序交互：先选字段再选方向） */
+type TeleportOrder =
+  | "name_asc"
+  | "name_desc"
+  | "createdAt_asc"
+  | "createdAt_desc"
+  | "updatedAt_asc"
+  | "updatedAt_desc";
+
+/** 排序选择（传送列表/系统列表共用）：字段 + 方向两步 pickOption，任一步取消返回 null */
+async function pickTeleportSort(player: Player): Promise<TeleportOrder | null> {
+  const fieldIndex = await pickOption(player, "传送点 · 排序", [
+    "按名称",
+    "按创建时间",
+    "按更新时间",
+  ]);
+  if (fieldIndex < 0) return null;
+  const dirIndex = await pickOption(player, "排序方向", ["升序", "降序"]);
+  if (dirIndex < 0) return null;
+  const field = ["name", "createdAt", "updatedAt"][fieldIndex];
+  return `${field}_${dirIndex === 0 ? "asc" : "desc"}` as TeleportOrder;
+}
+
+/**
+ * 按排序取传送点列表（名称排序在 JS 端做不区分大小写——DB 默认按字节序区分
+ * 大小写，A 会排在 a 前；时间排序走 DB orderBy）。
+ * where 在函数内构造（isSystem 区分系统/用户点），类型由 findMany 推断。
+ */
+async function queryTeleportsSorted(
+  isSystem: boolean,
+  order: TeleportOrder,
+): Promise<Awaited<ReturnType<typeof prisma.teleport.findMany>>> {
+  const where = { isSystem, isEnabled: true, deletedAt: null };
+  const [field, dir] = order.split("_") as [string, "asc" | "desc"];
+  if (field === "name") {
+    const rows = await prisma.teleport.findMany({ where, orderBy: { createdAt: "asc" } });
+    rows.sort((a, b) => {
+      const la = a.name.toLowerCase();
+      const lb = b.name.toLowerCase();
+      const cmp = la < lb ? -1 : la > lb ? 1 : 0;
+      return dir === "asc" ? cmp : -cmp;
+    });
+    return rows;
+  }
+  return prisma.teleport.findMany({ where, orderBy: { [field]: dir } });
+}
+
+/** 传送点列表（系统/用户共用，分页 + 排序 + 页码跳转） */
+async function showTeleportList(
+  player: Player,
+  opts: { isSystem: boolean; back?: MenuBack },
+): Promise<void> {
+  const order = await pickTeleportSort(player);
+  if (!order) return opts.back?.(); // 排序取消 → 返回上一层
+  const points = await queryTeleportsSorted(opts.isSystem, order);
   if (points.length === 0) {
-    sysMsg(player, "tp", "暂无系统传送点", "plain");
-    return back?.();
+    sysMsg(
+      player,
+      "tp",
+      opts.isSystem ? "暂无系统传送点" : "暂无用户传送点，创建后输入 //名称 或在此选择使用",
+      "plain",
+    );
+    return opts.back?.();
   }
   const r = await showPagedDialog(player, {
-    caption: "系统传送点",
+    caption: opts.isSystem ? "系统传送点" : "用户传送点",
     data: points,
-    cacheKey: "tp:system", // 传送点列表常翻页找点，记住上次位置
-    format: (p) => `/${p.name}${p.description ? `（${p.description}）` : ""}`,
+    // 多列：名称 | 描述 | 更新时间（时间列让"按创建/更新时间排序"可见效果）
+    headers: ["名称", "描述", "更新时间"],
+    cacheKey: opts.isSystem ? "tp:system" : "tp:user", // 页码记忆（翻页/手输跳转后重开回同页）
+    format: (p) => [
+      `${opts.isSystem ? "/" : "//"}${p.name}`,
+      p.description || "—",
+      formatFullDate(p.updatedAt),
+    ],
     button1: "传送",
     button2: "取消",
   });
-  if (!r) return back?.();
+  if (!r) return opts.back?.();
   const point = r.item;
   teleportTo(
     player,
@@ -551,44 +613,22 @@ async function listSystemTeleports(player: Player, back?: MenuBack): Promise<voi
     point.interiorId,
   );
   sysMsg(player, "tp", `你传送到了 ${point.name}`, "success");
-  return back?.();
+  return opts.back?.();
 }
 
 /**
- * 用户传送点列表（// 用户点，分页选择传送）。
+ * 用户传送点列表（// 用户点，分页 + 排序选择）。
  * 与 fallbackTeleport 的查询一致（isSystem:false 即可，不按 userId 过滤）——
  * 历史 // 点（原版迁移，owner 为特殊账号）对所有玩家可见可用，
  * 否则列表为空但 //名称 输入又能传，行为不一致。
  */
 async function listUserTeleports(player: Player, back?: MenuBack): Promise<void> {
-  const points = await prisma.teleport.findMany({
-    where: { isSystem: false, isEnabled: true, deletedAt: null },
-    orderBy: { name: "asc" },
-  });
-  if (points.length === 0) {
-    sysMsg(player, "tp", "暂无用户传送点，创建后输入 //名称 或在此选择使用", "plain");
-    return back?.();
-  }
-  const r = await showPagedDialog(player, {
-    caption: "用户传送点",
-    data: points,
-    cacheKey: "tp:user", // 用户传送点列表常翻页找点，记住上次位置
-    format: (p) => `//${p.name}${p.description ? `（${p.description}）` : ""}`,
-    button1: "传送",
-    button2: "取消",
-  });
-  if (!r) return back?.();
-  const point = r.item;
-  teleportTo(
-    player,
-    Number(point.x),
-    Number(point.y),
-    Number(point.z),
-    Number(point.angle),
-    point.interiorId,
-  );
-  sysMsg(player, "tp", `你传送到了 //${point.name}`, "success");
-  return back?.();
+  await showTeleportList(player, { isSystem: false, back });
+}
+
+/** 系统传送点列表（/telemenu 命令入口；分页 + 排序选择） */
+async function listSystemTeleports(player: Player, back?: MenuBack): Promise<void> {
+  await showTeleportList(player, { isSystem: true, back });
 }
 
 /** 创建传送点（面板流程与 /vmake /vsmake 命令共用）：
