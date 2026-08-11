@@ -62,13 +62,14 @@ interface ChallengeGhost {
   lastEmulateAt: number;
   /** emulate/send 失败是否已警告过（一次性防刷屏） */
   warnedEmulateFail: boolean;
-  /** 上次自动补氮气**墙钟时刻**（timer 模式录制者 15 秒自动补、帧里无按键信号——
-   *  影子每墙钟 15 秒自动补一管兜底，对齐玩家现实开车节奏） */
+  /** 上次自动补氮气**播放时间**（timer 模式录制者 15 秒自动补、帧里无按键信号——
+   *  影子每播放 15 秒自动补一管兜底，对齐录制节奏） */
   lastAutoNitroAt: number;
-  /** 上次氮气按住持续补**墙钟时刻**（点按模式录制：帧 FIRE 位按住每墙钟 1 秒补一管） */
+  /** 上次氮气按住持续补**播放时间**（点按模式录制：帧 FIRE 位按住每播放 1 秒补一管） */
   lastNitroAt: number;
-  /** 补氮气后强制模拟 SPRINT 的墙钟截止点（SA 喷氮气 = 车有组件 + 按 W；
-   *  补组件那帧若录制者松油门客户端不喷——补后持续模拟 SPRINT 保证喷起来） */
+  /** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的**墙钟**截止点：补组件那帧
+   *  采样可能恰好是录制者松油门瞬间（帧 keys 无 SPRINT），客户端有组件没按键
+   *  不喷——窗口内强制 SPRINT 保证喷起来；窗口结束恢复录制按键 */
   nitroSimUntil: number;
   /** 播放中发现过 KEY_FIRE 位（点按模式录制）→ 停用 15s 自动补氮气兜底
    *  （按住持续补已覆盖补给，兜底反而会在喷射中打断） */
@@ -249,26 +250,31 @@ function renderGhost(ch: ChallengeSession): void {
     const now = Date.now();
     if (now - ch.ghost.lastEmulateAt < 33) return;
     ch.ghost.lastEmulateAt = now;
-    // 氮气：按住持续补，节流基准用**墙钟**（now）——SA 客户端喷氮气物理按
-    // 现实时间消耗组件，补组件同墙钟固定节奏才对齐（timer 15s 兜底 / 点按按住
-    // 每秒补，倍速不影响）。补组件时强制模拟 SPRINT（SA 喷氮气 = 车有组件 +
-    // 按 W，录制者那刻松油门则客户端不喷）。与 playback renderGhost 同一套。
-    // 发现 FIRE 位（点按录制）停用 15s 兜底。起始/播完后 atEnd 不再补。
+    // 氮气：按住持续补，节流基准用**播放时间**（playTime）对齐录制节奏——
+    // 录制时 vehicleAuto 按现实时间补（timer 15s / 点按按键即补），回放按播放
+    // 时间补 = 复现"录制者补氮气的那段路线"。慢放时录制 15 秒 = 播放 15 秒 =
+    // 现实更长，按播放时间补正好落在录制者补管的时段（按墙钟补会落在录制者
+    // 根本没喷的时段）。**补组件同时模拟玩家按下氮气键**：SA 喷氮气 = 车有
+    // 组件 + 按住 W（SPRINT），补组件那帧采样可能恰好是录制者松油门瞬间（帧
+    // keys 无 SPRINT）——补了组件客户端也不喷。补组件起墙钟窗口内强制 SPRINT，
+    // 窗口结束恢复录制按键。与 playback renderGhost 同一套。起始/播完后 atEnd
+    // 不再补。
+    const pt = ch.ghost.playTime;
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
     if (nitroOn && !atEnd) {
       ch.ghost.nitroFireSeen = true;
-      if (now - ch.ghost.lastNitroAt >= NITRO_REFILL_MS) {
-        ch.ghost.lastNitroAt = now;
+      if (pt - ch.ghost.lastNitroAt >= NITRO_REFILL_MS) {
+        ch.ghost.lastNitroAt = pt;
         ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
         addNitro(ch.ghost.vehicle);
       }
     }
-    if (!atEnd && !ch.ghost.nitroFireSeen && now - ch.ghost.lastAutoNitroAt >= 15_000) {
-      ch.ghost.lastAutoNitroAt = now;
+    if (!atEnd && !ch.ghost.nitroFireSeen && pt - ch.ghost.lastAutoNitroAt >= 15_000) {
+      ch.ghost.lastAutoNitroAt = pt;
       ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
       addNitro(ch.ghost.vehicle);
     }
-    // 补氮气后的模拟窗口内：强制 SPRINT（覆盖录制原始 keys），组件刚补上即喷
+    // 补氮气后的模拟窗口内：强制 SPRINT（模拟玩家按下氮气键），组件刚补上即喷
     if (!atEnd && now < ch.ghost.nitroSimUntil) {
       s.keys |= KeysEnum.SPRINT;
     }
@@ -325,10 +331,10 @@ function ghostProgress(ch: ChallengeSession): { cp: number; dist: number } {
 
 /** 影子挑战冲线倒计时（对齐真人比赛 END_GRACE：第一名冲线 → 20 秒宽限） */
 const CHALLENGE_END_GRACE_MS = 20_000;
-/** 氮气按住持续补间隔（**墙钟**毫秒，对齐 playback：倍速不影响节奏，客户端
- *  喷氮气物理按现实时间消耗组件） */
+/** 氮气按住持续补间隔（**播放时间**毫秒，对齐 playback：补给随播放时间轴落在
+ *  录制者按管时段） */
 const NITRO_REFILL_MS = 1000;
-/** 补氮气后强制模拟 SPRINT 的时长（墙钟毫秒，对齐 playback） */
+/** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的时长（墙钟毫秒，对齐 playback） */
 const NITRO_SIM_MS = 300;
 
 /**
