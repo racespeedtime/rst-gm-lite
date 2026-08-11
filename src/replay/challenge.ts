@@ -252,10 +252,11 @@ function renderGhost(ch: ChallengeSession): void {
     // 时间补 = 复现"录制者补氮气的那段路线"。慢放时录制 15 秒 = 播放 15 秒 =
     // 现实更长，按播放时间补正好落在录制者补管的时段（按墙钟补会落在录制者
     // 根本没喷的时段）。**补组件同时模拟玩家按下氮气键**：SA 喷氮气 = 车有
-    // 组件 + 按住 W（SPRINT），补组件那帧采样可能恰好是录制者松油门瞬间（帧
-    // keys 无 SPRINT）——补了组件客户端也不喷。补组件起墙钟窗口内强制 SPRINT，
-    // 窗口结束恢复录制按键。与 playback renderGhost 同一套。起始/播完后 atEnd
-    // 不再补。
+    // 组件 + 按住 FIRE（左键）或 W（SPRINT）。我们的点按交互是 FIRE/ACTION，
+    // 补组件那帧采样可能恰好是录制者松键瞬间（帧 keys 无 FIRE）——补了组件
+    // 客户端也不喷。补组件起墙钟窗口内强制 FIRE|ACTION（不用 SPRINT——W 是
+    // 油门会干扰录制速度物理），窗口结束恢复录制按键。与 playback renderGhost
+    // 同一套。起始/播完后 atEnd 不再补。
     const pt = ch.ghost.playTime;
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
     if (nitroOn && !atEnd) {
@@ -269,9 +270,10 @@ function renderGhost(ch: ChallengeSession): void {
       ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
       addNitro(ch.ghost.vehicle);
     }
-    // 补氮气后的模拟窗口内：强制 SPRINT（模拟玩家按下氮气键），组件刚补上即喷
+    // 补氮气后的模拟窗口内：强制 FIRE/ACTION（模拟玩家按下点按氮气键），组件
+    // 刚补上即喷
     if (!atEnd && now < ch.ghost.nitroSimUntil) {
-      s.keys |= KeysEnum.SPRINT;
+      s.keys |= KeysEnum.FIRE | KeysEnum.ACTION;
     }
     emulateDriverSync(ch.ghost.npcPlayerId, ch.ghost.vehicle, s, atEnd);
   } catch (e) {
