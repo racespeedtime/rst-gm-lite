@@ -15,15 +15,17 @@ import { COLOR_ERROR } from "@/utils/colors";
 export async function runLobby(player: Player): Promise<void> {
   const setting = await getSetting(player);
   const currentSpawn = setting?.spawnMode === "LAST_POSITION" ? "LAST_POSITION" : "RANDOM";
-  const currentEnter = setting?.enterWorldMode === "OWN_SESSION" ? "OWN_SESSION" : "PUBLIC";
+  // "OWN" = 自身战局（enterWorldMode 列 VarChar(10)，"OWN_SESSION" 11 字符超长
+  // 会触发 "value too long"——旧值用短枚举 "OWN" 对齐列宽）
+  const currentEnter = setting?.enterWorldMode === "OWN" ? "OWN" : "PUBLIC";
 
   // 出生方式 × 进入世界方式 4 组合（一次选完，当前值标注）。
   // 带数据驱动（避免依赖固定排列的魔法索引，增删组合不易错）
-  const combos: { spawn: "RANDOM" | "LAST_POSITION"; enter: "PUBLIC" | "OWN_SESSION" }[] = [
+  const combos: { spawn: "RANDOM" | "LAST_POSITION"; enter: "PUBLIC" | "OWN" }[] = [
     { spawn: "RANDOM", enter: "PUBLIC" },
-    { spawn: "RANDOM", enter: "OWN_SESSION" },
+    { spawn: "RANDOM", enter: "OWN" },
     { spawn: "LAST_POSITION", enter: "PUBLIC" },
-    { spawn: "LAST_POSITION", enter: "OWN_SESSION" },
+    { spawn: "LAST_POSITION", enter: "OWN" },
   ];
   const options = combos.map((c) => {
     const isCurrent = c.spawn === currentSpawn && c.enter === currentEnter;
@@ -64,7 +66,7 @@ export async function runLobby(player: Player): Promise<void> {
 
   // 进入对应战局（再次断线防护）
   if (!player.isConnected()) return;
-  if (enterMode === "OWN_SESSION") {
+  if (enterMode === "OWN") {
     // 已有自身战局则回到（createSession 内部处理防重复创建），没有则创建。
     // 战局创建失败（DB 故障/加入拦截）降级回公共大世界照常出生——与上面
     // "保存失败不致命"同口径：登录流程不应因战局问题把玩家踢出服务器

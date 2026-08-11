@@ -16,7 +16,7 @@ export async function openSessionSettingsMenu(player: Player, back?: MenuBack): 
   const menuOptions = [
     `自身战局类型：${setting.sessionType === "PUBLIC" ? "公开" : "私有"}${setting.sessionType === "PRIVATE" ? "（需要密码）" : ""}`,
     `设置战局密码：${setting.sessionPassword ? "已设置" : "未设置"}`,
-    `启动进入：${setting.enterWorldMode === "OWN_SESSION" ? "自身战局" : "公共大世界"}`,
+    `启动进入：${setting.enterWorldMode === "OWN" ? "自身战局" : "公共大世界"}`,
   ];
   const index = await pickOption(player, "战局设置", menuOptions);
   if (index < 0) return back?.(); // 取消 → 返回上一层
@@ -91,16 +91,17 @@ export async function openSessionSettingsMenu(player: Player, back?: MenuBack): 
 
   if (index === 2) {
     // 启动进入方式
-    const enterOwn = setting.enterWorldMode === "OWN_SESSION";
+    const enterOwn = setting.enterWorldMode === "OWN";
     const enterOptions = [
       `公共大世界${!enterOwn ? "（当前）" : ""}`,
       `自身战局${enterOwn ? "（当前）" : ""}`,
     ];
     const modeIndex = await pickOption(player, "启动进入", enterOptions);
     if (modeIndex < 0) return back?.();
-    const next = modeIndex === 1 ? "OWN_SESSION" : "PUBLIC";
+    // "OWN" = 自身战局（enterWorldMode 列 VarChar(10)，"OWN_SESSION" 11 字符超长）
+    const next = modeIndex === 1 ? "OWN" : "PUBLIC";
     await updateSetting(player, { enterWorldMode: next });
-    notifySaved(player, `下次进入世界：${next === "OWN_SESSION" ? "自身战局" : "公共大世界"}`);
+    notifySaved(player, `下次进入世界：${next === "OWN" ? "自身战局" : "公共大世界"}`);
     return back?.();
   }
 }
