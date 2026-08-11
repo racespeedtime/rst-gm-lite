@@ -8,9 +8,9 @@ import {
   SpectateModesEnum,
   Vehicle,
   VehicleEvent,
-  isPressed,
 } from "@infernus/core";
 
+import { setIntervalSafe } from "@/core/timers";
 import { sysMsg } from "@/utils/msg";
 
 /** 观察状态 */
@@ -52,10 +52,12 @@ export function unregisterObserveCandidate(targetId: number, kind: "player" | "v
 }
 
 /** 观战切换：循环切换下一个/上一个可观战目标。
- *  open.mp 无现成的"观战目标切换"事件。触发源：
- *  - LOOK_RIGHT（E）→ 下一个；LOOK_LEFT（Q）→ 上一个；/tv next|prev 命令
- *  - **不做 getKeys() 轮询 / FIRE 绑定**（见 initObserve 注释：spectate 模式
- *    getKeys 返回陈旧值会误触发，FIRE 是瞄准/氮气键不该占）
+ *  open.mp 无现成的"观战目标切换"事件。触发源（键位读 getKeys 轮询，
+ *  spectate/ride 下 Q/E 与方向键都不触发 onKeyStateChange——观战模式 Q/E 是
+ *  本地镜头键不上传、方向键 SA-MP 本就不走该事件）：
+ *  - 观战（spectate）：Q/E 与方向键 ←/→ 都兼容
+ *  - 副驾（ride）：只用方向键 ←/→（Q/E 是客户端本地镜头键不该占）
+ *  - /tv next|prev 命令
  *  - 副驾模式（mode=ride）只切车辆目标，切换仍保持副驾（见函数内分支）
  *  鼠标右键（SECONDARY_ATTACK/瞄准）在观战模式下客户端不发送，不可用。 */
 function cycleObserveTarget(observer: Player, forward: boolean): void {
@@ -93,6 +95,47 @@ function cycleObserveTarget(observer: Player, forward: boolean): void {
         return;
       }
     }
+  }
+}
+
+/** 键盘切换检测（getKeys 轮询）：Q/E 与方向键在观战/副驾下都不触发
+ *  onKeyStateChange（观战模式 Q/E 是客户端本地镜头键不上传，方向键 SA-MP 本
+ *  就不走该事件），统一由轮询读 getKeys。只响应观战者，按下瞬间（与上次读数
+ *  变化）触发一次。
+ *  - 方向键 leftRight：ride（副驾）+ spectate（观战）都可切换
+ *  - Q/E（keys 位集 LOOK_LEFT/LOOK_RIGHT）：仅 spectate 响应——副驾下 Q/E 是
+ *    客户端本地镜头键不该占
+ *  注意：spectate 模式客户端不发 sync 包，getKeys 可能返回陈旧/杂音值（f4b6d41
+ *  曾因方向键误切而整体移除轮询）；此处保留边沿检测（仅按键状态变化触发一次）
+ *  压制误切，若实机仍误切再针对 spectate 收紧。 */
+const observePrevKeys = new Map<number, { keys: number; leftRight: number }>();
+function pollObserveKeys(): void {
+  for (const [pid, st] of observeStates) {
+    const p = Player.getInstance(pid);
+    if (!p || !p.isConnected()) continue;
+    const k = p.getKeys();
+    const keys = k.keys & 0xffff;
+    const lrVal = k.leftRight;
+    const prev = observePrevKeys.get(pid);
+    // Q/E：仅观战（spectate）响应；副驾让位（本地镜头键）
+    if (st.mode !== "ride") {
+      const lookRight = (keys & KeysEnum.LOOK_RIGHT) !== 0;
+      const lookLeft = (keys & KeysEnum.LOOK_LEFT) !== 0;
+      const prevRight = prev ? (prev.keys & KeysEnum.LOOK_RIGHT) !== 0 : false;
+      const prevLeft = prev ? (prev.keys & KeysEnum.LOOK_LEFT) !== 0 : false;
+      if (lookRight && !prevRight)
+        cycleObserveTarget(p, true); // E → 下一个
+      else if (lookLeft && !prevLeft) cycleObserveTarget(p, false); // Q → 上一个
+    }
+    // 方向键 ←/→：ride + spectate 都可切换
+    const right = lrVal === KeysEnum.KEY_RIGHT;
+    const left = lrVal === KeysEnum.KEY_LEFT;
+    const prevRight2 = prev ? prev.leftRight === KeysEnum.KEY_RIGHT : false;
+    const prevLeft2 = prev ? prev.leftRight === KeysEnum.KEY_LEFT : false;
+    if (right && !prevRight2)
+      cycleObserveTarget(p, true); // → 下一个
+    else if (left && !prevLeft2) cycleObserveTarget(p, false); // ← 上一个
+    observePrevKeys.set(pid, { keys, leftRight: lrVal });
   }
 }
 
@@ -238,6 +281,7 @@ export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
     return;
   }
   observeStates.delete(player.id);
+  observePrevKeys.delete(player.id); // 清轮询按键残留（防 playerId 复用时吞掉首次按键切换）
   // 副驾：先下车（车辆随后可能被销毁——stopReplaySession 先 stopObserve 再 destroy，
   // 不先下车玩家会卡在已销毁车里）
   if (state.mode === "ride" && player.isInAnyVehicle()) {
@@ -289,7 +333,8 @@ function findFreePassengerSeat(veh: Vehicle, observerId: number): number | null 
 
 /**
  * 副驾观战：真实坐在目标车里（NPC/司机开车）跟随，而非镜头观战。
- * 与 startObserveVehicle 共用同一 observeStates/切换键（Q/E、/tv next|prev）。
+ * 与 startObserveVehicle 共用同一 observeStates/切换键（方向键 ←/→、
+ * /tv next|prev；观战的 Q/E 在副驾下不响应，见 pollObserveKeys）。
  * 锁定车门不阻塞 PutPlayerInVehicle（服务端直接入座，锁只挡 on-foot 自然上车）——
  * ghost 车全程保持锁门，他人无法中途挤上车，座位上的副驾不受影响。
  * 返回 true=已在车上；false=失败（座位满/上车异常，状态未改，调用方可兜底）。
@@ -389,6 +434,7 @@ export function detachObservingVehicle(
 /** 清理（断线时） */
 export function cleanupObserve(playerId: number): void {
   observeStates.delete(playerId);
+  observePrevKeys.delete(playerId); // 清轮询按键残留（防 playerId 复用误切）
   emitObserveStop(playerId); // 断线：清理观察者专属实体（CP 箭头等）
 }
 
@@ -481,34 +527,18 @@ export function initObserve(): void {
     return next();
   });
 
-  // 观战切换（按下瞬间触发；只响应观战者）：
-  // Q（LOOK_LEFT）/E（LOOK_RIGHT）→ 上一个/下一个；/tv next|prev 命令。
-  // **不做 getKeys() 轮询**：观战（spectate）模式客户端不发 sync 包，服务器
-  // getKeys() 返回陈旧/杂音值（进入观战前的残留按键），轮询读到 KEY_LEFT/RIGHT
-  // 且与上次不同就误判按下 → cycleObserveTarget 反复切 ghost 车（候选只有一辆
-  // 时切回同一辆 = 反复 spectateVehicle，"没按键也反复切观战"的根因）。
+  // 观战切换：Q/E 与方向键都由 getKeys 轮询驱动（pollObserveKeys，见该函数
+  // 注释）——观战（spectate）模式下客户端把 Q/E 当本地镜头键不上传
+  // onKeyStateChange、方向键 SA-MP 本就不走该事件，onKeyStateChange 收不到。
   // **FIRE（左键）不绑定切换**：SA 里左键是默认瞄准/射击键，观战/副驾中玩家
   // 点左键会触发客户端行为（瞄准、氮气等）——若 FIRE 同时切车，点左键就反复
   // spectateVehicle 切 ghost 车（"视角乱跳"）。副驾下 FIRE 让位给氮气（drift
-  // NPC 点按氮气）。切换入口：Q/E、/tv next|prev 命令。
-  PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
-    if (player.isNpc()) return next();
-    const st = observeStates.get(player.id);
-    if (!st) return next(); // 非观战不处理
-    if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_RIGHT)) {
-      cycleObserveTarget(player, true); // E 键 → 下一个
-      return next();
-    }
-    if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_LEFT)) {
-      cycleObserveTarget(player, false); // Q 键 → 上一个
-      return next();
-    }
-    return next();
-  });
+  // NPC 点按氮气）。切换入口：Q/E + 方向键（轮询）+ /tv next|prev 命令。
+  setIntervalSafe(() => pollObserveKeys(), 100);
 
   // /tv <ID> 观战玩家 · /tv off 关闭 · /tv next|prev 切换上一个/下一个观战目标。
   // 聊天命令在观战中不受限制（对齐 /p 面板原理），是切换的可靠入口——
-  // 观战模式下客户端 Q/E（LOOK_LEFT/RIGHT）是否上传不稳，命令兜底可靠。
+  // 轮询/按键受 getKeys 陈旧值影响时命令兜底可靠。
   PlayerEvent.onCommandText(["tv", "ob", "spec"], ({ player, subcommand, next }) => {
     const arg = subcommand[0];
     if (!arg) {
