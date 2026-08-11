@@ -8,6 +8,8 @@ import {
   PlayerEvent,
   RaceCheckpoint,
   RaceCpEvent,
+  Streamer,
+  StreamerItemTypes,
   Vehicle,
 } from "@infernus/core";
 import { prisma } from "@/prisma";
@@ -35,6 +37,7 @@ import {
   registerReplayNpcForReplay,
   unregisterReplayNpcForReplay,
   frameTimeAt,
+  isReplayLabelHidden,
 } from "./playback";
 import { registerObserveCandidate, unregisterObserveCandidate } from "@/core/observe";
 import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
@@ -123,6 +126,32 @@ const pendingRespawn = new Set<number>();
 
 export function isInChallenge(playerId: number): boolean {
   return challenges.has(playerId);
+}
+
+/** 对某玩家的挑战影子标签应用显隐偏好（复用回放 /rp label 的同一偏好，
+ *  challenge 影子与回放 ghost 标签一视同仁，切换一次两侧同时生效） */
+function applyShadowLabelVisibility(playerId: number): void {
+  const ch = challenges.get(playerId);
+  if (!ch || !ch.ghost.label.isValid()) return;
+  const p = Player.getInstance(playerId);
+  if (!p || !p.isConnected()) return;
+  try {
+    Streamer.toggleItem(
+      p,
+      StreamerItemTypes.TEXT_3D_LABEL,
+      ch.ghost.label.id,
+      !isReplayLabelHidden(playerId),
+    );
+  } catch {
+    /* 标签已失效等，忽略 */
+  }
+}
+
+/** 切换该玩家挑战影子标签显隐（/rp label 与回放标签共用）；返回切换后的可见状态 */
+export function toggleChallengeShadowLabel(playerId: number): boolean {
+  const visible = !isReplayLabelHidden(playerId);
+  applyShadowLabelVisibility(playerId);
+  return visible;
 }
 
 /** 玩家断线/退出清理（挑战会话销毁 + ghost 清理 + 恢复原世界）。
@@ -425,6 +454,8 @@ function standbyAtStart(player: Player, ch: ChallengeSession): void {
     }
   }
   renderGhost(ch);
+  // 影子标签按 /rp label 偏好应用（首次创建与重开都走这里）
+  applyShadowLabelVisibility(ch.playerId);
 }
 
 /** 玩家触发开始（/challenge go）：待命 → 3 秒倒计时 → GO。倒计时期间玩家可控：
@@ -952,8 +983,7 @@ async function startChallengeCore(
     lab.create();
     // 登记影子 NPC：屏蔽其真实 sync 包（emulate 的包不走 onIncomingPacket，
     // 防的是 NPC 自身/残留 sync 与模拟广播冲突）
-    registerReplayNpcForReplay(shadowPlayer.id);
-    // 登记为观战切换候选（与回放 ghost 同机制，可左右键切到影子车）
+    registerReplayNpcForReplay(shadowPlayer.id); // 登记为观战切换候选（与回放 ghost 同机制，可左右键切到影子车）
     registerObserveCandidate(veh.id, "vehicle");
     vehicle = veh;
     label = lab;

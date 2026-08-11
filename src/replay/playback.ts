@@ -137,6 +137,11 @@ export function getReplaySpeedScaleForVehicle(vehicleId: number): number | null 
  */
 const hiddenReplayLabels = new Set<number>();
 
+/** 该玩家是否隐藏回放/挑战 ghost 标签（供 challenge 复用同一偏好） */
+export function isReplayLabelHidden(playerId: number): boolean {
+  return hiddenReplayLabels.has(playerId);
+}
+
 /** 对某玩家应用一个回放会话的 ghost 标签显隐（创建会话 / 切换偏好时调用） */
 function applyLabelVisibilityForPlayer(session: ReplaySession, playerId: number): void {
   const p = Player.getInstance(playerId);

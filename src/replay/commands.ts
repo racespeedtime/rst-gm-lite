@@ -6,7 +6,13 @@ import { showDialog } from "@/utils/dialog";
 import { sysMsg } from "@/utils/msg";
 import { startRecording, stopRecording, isRecording } from "./recorder";
 import { controlReplay, getReplaySession, REPLAY_SPEEDS, toggleReplayLabels } from "./playback";
-import { isInChallenge, exitChallenge, goChallenge, restartChallenge } from "./challenge";
+import {
+  isInChallenge,
+  exitChallenge,
+  goChallenge,
+  restartChallenge,
+  toggleChallengeShadowLabel,
+} from "./challenge";
 import { openReplayMenu } from "./menu";
 import { COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
 
@@ -105,8 +111,10 @@ export function initReplayCommands(): void {
       }
       case "label": {
         // ghost 身份标签（车顶"身份+扮演谁+ghost N/M"）临时显隐：不落库，
-        // 断线重置为显示。多分身时标签可能遮挡视线，玩家可暂时屏蔽
+        // 断线重置为显示。多分身时标签可能遮挡视线，玩家可暂时屏蔽。
+        // 回放 ghost 与挑战影子标签共用同一偏好：切换一次两侧同时生效
         const visible = toggleReplayLabels(player);
+        toggleChallengeShadowLabel(player.id);
         player.sendClientMessage(
           visible ? COLOR_SUCCESS : COLOR_INFO,
           `回放 ghost 标签已${visible ? "显示" : "隐藏"}`,
