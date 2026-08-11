@@ -282,12 +282,18 @@ export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
  * 找车辆的空闲乘客座位（跳过 0 号司机位——NPC/司机占用）。
  * infernus 的 putPlayerIn 只支持 seat 0-4（seat>4 抛异常），多座车（bus/train
  * getSeats>5）只枚举到 4。无空闲返回 null。
+ * 排除项：
+ * - NPC：ghost 司机 NPC 占 0 号座由 putInVehicle(veh,0) 明确控制，不靠
+ *   getVehicleSeat() 猜（infernus 对 NPC 的 seat 返回值不可靠，可能误标乘客座
+ *   → 2 座车被误判"已满"）
+ * - 调用者自己：可能已上车但 observeStates 被外部清（幂等不命中），自己占的
+ *   座不算"满"——已在车上由 startRideVehicle 复用座位兜底
  */
-function findFreePassengerSeat(veh: Vehicle): number | null {
+function findFreePassengerSeat(veh: Vehicle, observerId: number): number | null {
   const maxSeat = Math.min(veh.getSeats(), 5); // 0-4 共 5 座（0=司机）
   const occupied = new Set<number>();
   for (const p of Player.getInstances()) {
-    if (!p.isConnected()) continue;
+    if (p.isNpc() || !p.isConnected() || p.id === observerId) continue;
     if (p.getVehicle() === veh) occupied.add(p.getVehicleSeat());
   }
   for (let seat = 1; seat < maxSeat; seat++) {
@@ -308,8 +314,20 @@ export function startRideVehicle(observer: Player, target: Vehicle): boolean {
   const existing = observeStates.get(observer.id);
   // 已在骑这辆车（同目标同模式）→ 幂等跳过
   if (existing?.mode === "ride" && existing.targetId === target.id) return true;
+  // 兜底：玩家已实际在这辆车上（observeStates 被外部清但人还在车里/时序残留）
+  // → 直接复用当前座位，不找座不判满（否则 2 座车把自己算占用 → "座位已满"）
+  if (observer.isInAnyVehicle() && observer.getVehicle() === target) {
+    observeStates.set(observer.id, {
+      targetId: target.id,
+      kind: "vehicle",
+      prevWorld: existing?.prevWorld ?? observer.getVirtualWorld(),
+      prevInterior: existing?.prevInterior ?? observer.getInterior(),
+      mode: "ride",
+    });
+    return true;
+  }
   // 先找座再下车：座位满直接拒绝，保持旧车副驾不动（否则玩家被晾在车外）
-  const seat = findFreePassengerSeat(target);
+  const seat = findFreePassengerSeat(target, observer.id);
   if (seat == null) {
     sysMsg(observer, "observe", "该车座位已满，无法副驾跟随", "warn");
     return false;
