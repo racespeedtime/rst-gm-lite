@@ -1480,7 +1480,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
     }
     case "ride": {
       // 副驾模式：真实坐在 ghost 车里跟随（NPC 开车），而非镜头观战。
-      // 切换上一个/下一个快捷键与观战一致（FIRE/←→/Q/E，见 observe.ts）。
+      // 切换上一个/下一个快捷键与观战一致（Q/E、/tv next|prev，见 observe.ts）。
       // 多次调用幂等（同车同模式跳过）；已在别的车副驾 → 换车
       startRideVehicle(player, session.ghosts[0].vehicle);
       session.watchers.add(player.id); // 会话停止时统一下车（stopReplaySession → stopObserve → removeFromVehicle）
