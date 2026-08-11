@@ -193,12 +193,13 @@ export async function openRaceDetailPanel(
     "查看排行榜",
     ...(mine ? ["编辑赛道", "删除赛道（二次验证）"] : []),
   ];
-  // 详情信息头（名称/长度/作者）后接分隔空行，其后才是操作项。
-  // INFO_LINES = 信息头行数 + 1（分隔空行）：按结构计算。
-  // 关键：信息头文本必须单行（不能换行）——SA LIST 对话框按渲染宽度自动换行，
-  // 赛道名（VarChar 255）/作者昵称过长会折行，listItem 偏移按"逻辑行数"算就错位
-  // （点"开始比赛"实际命中"查看回放"）。名称/作者截断到安全宽度（中文双宽，
-  // 28 字符 ≈ 56 列，在 ~64 列换行阈值内），杜绝折行。
+  // 详情信息头（名称/长度/作者），其后紧跟操作项。
+  // INFO_LINES = 信息头行数。两个坑（都踩过）：
+  // 1) 信息头文本必须单行——SA LIST 对话框按渲染宽度自动折行，赛道名/作者
+  //    过长折行后渲染行数 > 逻辑行数，listItem 偏移错位。名称截断 28 字符、
+  //    作者截断 12 字符（中文双宽，安全宽度内不折行）。
+  // 2) 不要用空行做信息头与操作项的分隔——SA 客户端折叠空行不占行号，多算的
+  //    INFO_LINES 会让点击整体偏移（"选查看回放触发开始比赛"）。
   const name = race.name.length > 28 ? `${race.name.slice(0, 28)}…` : race.name;
   const author = race.sysUser?.username ?? "?";
   const authorSafe = author.length > 12 ? `${author.slice(0, 12)}…` : author;
@@ -207,8 +208,8 @@ export async function openRaceDetailPanel(
     `长度 ${Math.round(Number(race.totalLength))}m · ${race.laps ?? 1} 圈`,
     `作者 ${authorSafe} · 纪录 ${recs} 条`,
   ];
-  const INFO_LINES = headerLines.length + 1;
-  const info = [...headerLines, "", ...actions.map((o, i) => `${i + 1}. ${o}`)].join("\n");
+  const INFO_LINES = headerLines.length;
+  const info = [...headerLines, ...actions.map((o, i) => `${i + 1}. ${o}`)].join("\n");
   const res = await showDialog(
     player,
     new Dialog({
