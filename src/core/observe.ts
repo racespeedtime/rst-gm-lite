@@ -27,6 +27,9 @@ interface ObserveState {
    * "vehicle" 后 onStateChange 的 kind=player 匹配永远不中，观察者卡在空车上
    */
   originPlayerId?: number;
+  /** 观战方式：spectate=原生镜头观战（默认）；ride=副驾模式（真实坐在车里，
+   *  NPC 开车跟随）。两者共用同一 observeStates/循环切换键 */
+  mode?: "spectate" | "ride";
 }
 
 const observeStates = new Map<number, ObserveState>();
@@ -66,6 +69,8 @@ function cycleObserveTarget(observer: Player, forward: boolean): void {
   for (let step = 1; step <= keys.length; step++) {
     const k = keys[(idx + (forward ? step : -step) + keys.length * 2) % keys.length];
     const cand = observeCandidates.get(k)!;
+    // 副驾模式只切车辆（ghost 车）——切到玩家会把观战者塞进别人车里
+    if (st.mode === "ride" && cand.kind !== "vehicle") continue;
     if (cand.kind === "player") {
       const target = Player.getInstance(k);
       if (target && target.isConnected() && target.id !== observer.id) {
@@ -76,8 +81,14 @@ function cycleObserveTarget(observer: Player, forward: boolean): void {
     } else {
       const target = Vehicle.getInstance(-k);
       if (target && target.isValid()) {
-        startObserveVehicle(observer, target);
-        sysMsg(observer, "observe", `已切换到车辆 #${target.id}`, "info");
+        // 副驾模式切换 → 换一辆车坐（仍是副驾）；镜头观战 → 原切换逻辑
+        if (st.mode === "ride") {
+          startRideVehicle(observer, target);
+          sysMsg(observer, "observe", `已切换副驾到车辆 #${target.id}`, "info");
+        } else {
+          startObserveVehicle(observer, target);
+          sysMsg(observer, "observe", `已切换到车辆 #${target.id}`, "info");
+        }
         return;
       }
     }
@@ -174,6 +185,15 @@ export function startObservePlayer(observer: Player, target: Player): void {
     sysMsg(observer, "observe", "对方当前无法被观看", "warn");
     return;
   }
+  // 副驾 → 镜头观战：先下车（否则观战期间仍坐在旧车里）
+  const prev = observeStates.get(observer.id);
+  if (prev?.mode === "ride") {
+    try {
+      observer.removeFromVehicle();
+    } catch {
+      /* 已不在车里 */
+    }
+  }
   if (target.isInAnyVehicle()) {
     // 换车/上车瞬间 isInAnyVehicle 与 getVehicle 之间有空窗：getVehicle 可能
     // 返回 undefined，非空断言会让 startObserveVehicle 在 isValid() 上抛 TypeError
@@ -206,6 +226,14 @@ export function startObserveVehicle(
 ): void {
   if (!target.isValid()) return;
   const existing = observeStates.get(observer.id);
+  // 副驾 → 镜头观战：先下车（否则观战期间仍坐在旧车里）
+  if (existing?.mode === "ride") {
+    try {
+      observer.removeFromVehicle();
+    } catch {
+      /* 已不在车里 */
+    }
+  }
   observeStates.set(observer.id, {
     targetId: target.id,
     kind: "vehicle",
@@ -230,6 +258,15 @@ export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
   }
   observeStates.delete(player.id);
   observePrevLeftRight.delete(player.id); // 清轮询残留（防 playerId 复用时吞掉首次按键切换）
+  // 副驾：先下车（车辆随后可能被销毁——stopReplaySession 先 stopObserve 再 destroy，
+  // 不先下车玩家会卡在已销毁车里）
+  if (state.mode === "ride" && player.isInAnyVehicle()) {
+    try {
+      player.removeFromVehicle();
+    } catch {
+      /* 已不在车里 */
+    }
+  }
   player.toggleSpectating(false);
   // 恢复观战前所在战局（世界）与室内
   player.setVirtualWorld(state.prevWorld);
@@ -240,21 +277,77 @@ export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
   emitObserveStop(player.id);
 }
 
+/** 找车辆的空闲乘客座位（跳过 0 号司机位——NPC/司机占用）。无空闲返回 null */
+function findFreePassengerSeat(veh: Vehicle): number | null {
+  const total = veh.getSeats();
+  const occupied = new Set<number>();
+  for (const p of Player.getInstances()) {
+    if (!p.isConnected()) continue;
+    if (p.getVehicle() === veh) occupied.add(p.getVehicleSeat());
+  }
+  for (let seat = 1; seat < total; seat++) {
+    if (!occupied.has(seat)) return seat;
+  }
+  return null;
+}
+
+/**
+ * 副驾观战：真实坐在目标车里（NPC/司机开车）跟随，而非镜头观战。
+ * 与 startObserveVehicle 共用同一 observeStates/循环切换键（FIRE/Q/E/方向键）。
+ * 锁定车门不阻塞 PutPlayerInVehicle（服务端直接入座，锁只挡 on-foot 自然上车）——
+ * ghost 车全程保持锁门，他人无法中途挤上车，座位上的副驾不受影响。
+ */
+export function startRideVehicle(observer: Player, target: Vehicle): void {
+  if (!target.isValid()) return;
+  const existing = observeStates.get(observer.id);
+  // 已在骑这辆车（同目标同模式）→ 幂等跳过
+  if (existing?.mode === "ride" && existing.targetId === target.id) return;
+  // 从别的车副驾切来：先下车（player 只能在一辆车里，但显式下车更稳）
+  if (existing?.mode === "ride") {
+    try {
+      observer.removeFromVehicle();
+    } catch {
+      /* 已不在车里 */
+    }
+  }
+  const seat = findFreePassengerSeat(target);
+  if (seat == null) {
+    sysMsg(observer, "observe", "该车座位已满，无法副驾跟随", "warn");
+    return;
+  }
+  observeStates.set(observer.id, {
+    targetId: target.id,
+    kind: "vehicle",
+    prevWorld: existing?.prevWorld ?? observer.getVirtualWorld(),
+    prevInterior: existing?.prevInterior ?? observer.getInterior(),
+    mode: "ride",
+  });
+  observer.setVirtualWorld(target.getVirtualWorld());
+  observer.setInterior(target.getInterior());
+  if (!target.putPlayerIn(observer, seat)) {
+    observeStates.delete(observer.id);
+    sysMsg(observer, "observe", "副驾上车失败，请重试", "error");
+    return;
+  }
+  emitObserveStart(observer.id);
+  sysMsg(observer, "observe", `已切换为副驾（坐在车辆 #${target.id} 里跟随）`, "info");
+}
+
 /** 摘除所有正在观战指定车辆实体的观察者（换车/实体销毁前调用，防 onStreamOut 触发
- *  suggestStop 弹窗打断观战）。返回被摘除的 (playerId, originPlayerId) 列表，供调用方
- *  建新车后重挂（startObserveVehicle 保留 originPlayerId 重跟踪语义）。
+ *  suggestStop 弹窗打断观战）。返回被摘除的 (playerId, originPlayerId, mode) 列表，
+ *  供调用方建新车后按原模式重挂（副驾保持副驾、镜头观战保留 originPlayerId 重跟踪）。
  *  覆盖全表而非调用方自己的集合：任何玩家都可能经左右键/cycleObserveTarget 切到
  *  该车（observeStates 有记录但不属于调用方的 watcher 集合）。 */
 export function detachObservingVehicle(
   targetId: number,
-): { playerId: number; originPlayerId?: number }[] {
-  const detached: { playerId: number; originPlayerId?: number }[] = [];
+): { playerId: number; originPlayerId?: number; mode?: "spectate" | "ride" }[] {
+  const detached: { playerId: number; originPlayerId?: number; mode?: "spectate" | "ride" }[] = [];
   for (const [pid, st] of observeStates) {
     if (st.kind === "vehicle" && st.targetId === targetId) {
       const observer = Player.getInstance(pid);
       if (observer && observer.isConnected()) {
         stopObserve(observer, { quiet: true }); // 瞬态重挂：不弹"已关闭观战"
-        detached.push({ playerId: pid, originPlayerId: st.originPlayerId });
+        detached.push({ playerId: pid, originPlayerId: st.originPlayerId, mode: st.mode });
       }
     }
   }
