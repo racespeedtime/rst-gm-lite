@@ -120,6 +120,9 @@ export const REPLAY_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4];
 /** emulate 发包节流：对齐 open.mp in_vehicle_sync_rate=30（30Hz）——60fps tick
  *  每 2 tick 发一个 DriverSync 模拟包（发太多服务器会合并/浪费） */
 const EMULATE_INTERVAL_MS = 33;
+/** 氮气按住持续补间隔（对齐点按模式 vehicleTick 的每秒补）：SA 氮气单管约
+ *  3-4 秒，每秒补一管维持连续喷射（0.5 倍速按住段播放拉长也不断氮气） */
+const NITRO_REFILL_MS = 1000;
 
 /** 找回放 ghost 车所属会话的倍速（非回放/挑战车返回 null）。
  * 速度表反向除倍速用：emulate 驱动把 velocity×倍速推进（物理位置与速度一致），
@@ -199,12 +202,11 @@ interface Ghost {
   stopped: boolean;
   /** 当前车辆的装扮挂件（applyReplayVehicleAttire 套玩家当前爱车装扮；随车销毁） */
   attireObjs: DynamicObject[];
-  /** 上一帧录制按键是否按着氮气（KEY_FIRE 上升沿检测——点按模式按 FIRE 补一管，
-   *  不边喷边装组件，防打断客户端正在进行的喷射） */
-  nitroWasOn: boolean;
   /** 上次自动补氮气时刻（timer 模式录制者 15 秒自动补、帧里无按键信号——回放
    *  每 15 秒自动补一管兜底，保证 timer 玩家录像的 ghost 氮气不断档） */
   lastAutoNitroAt: number;
+  /** 上次氮气按住持续补时刻（点按模式录制：帧 FIRE 位按住每 1 秒补一管） */
+  lastNitroAt: number;
   /** 分身编号（1..N，头车=1；标签显示用） */
   labelNo: number;
   /** 当前标签显示的在线状态（掉线时标签追加红字"掉线"；变化时 updateText） */
@@ -785,16 +787,20 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     //    与录制时玩家自身一致——原版玩家的管也是有限的）。
     // 2) 每 15 秒自动补一管兜底：timer 模式录制者自动补、帧里没有按键信号——
     //    不自动补则其录像的 ghost 氮气会断档（"回放里没氮气"）。
-    // 兜底只对"帧里从未出现 FIRE 位"的录像生效（timer 录制）：一旦发现 FIRE 位
-    // （点按录制，FIRE 上升沿已覆盖补给）就停用兜底——否则 15s 边界撞上正在
-    // 喷射的影子会重新打断（复现"氮气 1 秒就没了"）。
-    // 播完（atEnd）不再补。
+    // 氮气：按住持续补（对齐点按模式 vehicleTick 的每秒补）——SA 氮气单管约
+    // 3-4 秒，检测帧 keys 含 FIRE（点按录制）就每 1000ms 补一管维持连续喷射。
+    // 不用"上升沿只补一次"：0.5 倍速下按住段播放时间拉长（录制 3 秒喷一管
+    // 播 6 秒），只补一管管子耗尽 → "0.5 倍速很容易就没氮气"。
+    // timer 录制（帧无 FIRE 位）→ 15s 自动兜底；发现 FIRE 位（点按录制，按住
+    // 持续补已覆盖）→ 停用兜底。播完（atEnd）不再补。
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
-    if (nitroOn && !atEnd && !ghost.nitroWasOn) {
+    if (nitroOn && !atEnd) {
       session.nitroFireSeen = true;
-      addNitro(ghost.vehicle);
+      if (now - ghost.lastNitroAt >= NITRO_REFILL_MS) {
+        ghost.lastNitroAt = now;
+        addNitro(ghost.vehicle);
+      }
     }
-    ghost.nitroWasOn = nitroOn;
     if (!atEnd && !session.nitroFireSeen && now - ghost.lastAutoNitroAt >= 15_000) {
       ghost.lastAutoNitroAt = now;
       addNitro(ghost.vehicle);
@@ -1166,8 +1172,8 @@ export async function spawnReplay(
           lastEmulateAt: 0,
           warnedEmulateFail: false,
           stopped: false,
-          nitroWasOn: false,
           lastAutoNitroAt: 0,
+          lastNitroAt: 0,
           attireObjs,
           labelNo,
           online: true,
