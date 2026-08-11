@@ -1,5 +1,6 @@
 import {
   Dynamic3DTextLabel,
+  DynamicObject,
   GameText,
   KeysEnum,
   Npc,
@@ -44,6 +45,8 @@ import { applyWorldEnv } from "@/core/worldenv";
 import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
+import { cleanupAttire } from "@/attire";
+import { destroyAttireObjs, applyReplayVehicleAttire, applyReplayPlayerAttire } from "./attire";
 
 /**
  * 回放会话（NPC 逐帧驱动，非原生 .rec）：
@@ -194,6 +197,8 @@ interface Ghost {
   warnedEmulateFail: boolean;
   /** 已播完（playTime 到终点）：停止 emulate 驱动标志（seek 回看时重置） */
   stopped: boolean;
+  /** 当前车辆的装扮挂件（applyReplayVehicleAttire 套玩家当前爱车装扮；随车销毁） */
+  attireObjs: DynamicObject[];
   /** 上一帧录制按键是否按着氮气（KEY_FIRE 上升沿检测——点按模式按 FIRE 补一管，
    *  不边喷边装组件，防打断客户端正在进行的喷射） */
   nitroWasOn: boolean;
@@ -604,7 +609,9 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
     // 不触发弹窗；建新车后在同一同步函数内重挂（stopObserve 恢复 prevWorld 与
     // startObserveVehicle 切回回放世界无感知）
     const reattach = detachObservingVehicle(oldVehId);
-    // 换车型：销毁旧车、建新车、NPC 立即上车（位置延续）
+    // 换车型：销毁旧车挂件 + 旧车、建新车、NPC 立即上车（位置延续）
+    destroyAttireObjs(ghost.attireObjs);
+    ghost.attireObjs = [];
     unregisterObserveCandidate(ghost.vehicle.id, "vehicle"); // 旧车移出观战切换候选
     ghost.vehicle.destroy();
     const v = new Vehicle({
@@ -625,6 +632,11 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
     ghost.npc.putInVehicle(v, 0);
     ghost.vehicle = v;
     registerObserveCandidate(v.id, "vehicle"); // 新车登记进观战切换候选（否则该 ghost 无法被切到）
+    // 换车型后异步套玩家当前爱车装扮（查库异步不能阻塞 60fps tick）：
+    // 竞态守卫——只接收"仍挂在这辆车上"的结果（换车 tick 内可能又换）
+    void applyReplayVehicleAttire(v, model, session.ownerId).then((objs) => {
+      if (ghost.vehicle === v) ghost.attireObjs = objs;
+    });
     // 重挂到新车：副驾保持副驾（再上车），镜头观战保留 originPlayerId 重跟踪
     for (const { playerId, originPlayerId, mode } of reattach) {
       const w = Player.getInstance(playerId);
@@ -1123,6 +1135,14 @@ export async function spawnReplay(
         registerReplayNpc(npcPlayer.id);
         // 登记为观战切换候选：回放/挑战玩家按左/右键可在各 ghost 车之间循环切换
         registerObserveCandidate(vehicle.id, "vehicle");
+        // 套玩家当前装扮（查库，不按回放当时存储）：NPC 皮肤 + 人物装扮预设；
+        // ghost 车按玩家该车型爱车默认预设（颜色/改装件/挂件，挂件独立管理随车销毁）
+        await applyReplayPlayerAttire(npcPlayer, player.id);
+        const attireObjs = await applyReplayVehicleAttire(
+          vehicle,
+          data.header.vehicleModelId,
+          player.id,
+        );
         ghosts.push({
           npc,
           vehicle,
@@ -1136,6 +1156,7 @@ export async function spawnReplay(
           stopped: false,
           nitroWasOn: false,
           lastAutoNitroAt: 0,
+          attireObjs,
           labelNo,
           online: true,
         });
@@ -1183,6 +1204,8 @@ export async function spawnReplay(
       try {
         unregisterReplayNpc(g.npcPlayerId);
         unregisterObserveCandidate(g.vehicle.id, "vehicle");
+        destroyAttireObjs(g.attireObjs); // 挂件实体独立于车辆，须显式销毁
+        cleanupAttire(g.npcPlayerId); // 清 NPC 的装扮 map 残留（attached obj 随 NPC 销毁）
         g.label.destroy();
         g.npc.destroy();
         g.vehicle.destroy();
@@ -1204,6 +1227,8 @@ export async function spawnReplay(
       try {
         unregisterReplayNpc(g.npcPlayerId);
         unregisterObserveCandidate(g.vehicle.id, "vehicle");
+        destroyAttireObjs(g.attireObjs);
+        cleanupAttire(g.npcPlayerId);
         g.label.destroy();
         g.npc.destroy();
         g.vehicle.destroy();
@@ -1456,6 +1481,8 @@ export function stopReplaySession(playerId: number): void {
     try {
       unregisterReplayNpc(g.npcPlayerId); // 注销屏蔽（NPC 销毁后不再有 sync 包）
       unregisterObserveCandidate(g.vehicle.id, "vehicle"); // 移出观战切换候选
+      destroyAttireObjs(g.attireObjs); // ghost 车挂件独立于车辆，须显式销毁
+      cleanupAttire(g.npcPlayerId); // 清 NPC 的装扮 map 残留（attached obj 随 NPC 销毁）
       g.label.destroy();
       g.npc.destroy();
       g.vehicle.destroy();
