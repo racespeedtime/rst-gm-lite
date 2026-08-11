@@ -392,8 +392,10 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       return back?.();
     }
     case 4:
+      // 观看视角 = 切入观战画面：不弹回对话框（玩家按 /tv off 或 /rp stop 退出；
+      // 若已观战中，watch 为幂等登记，同样不弹回）
       controlReplay(player, "watch");
-      return back?.();
+      return;
     case 5: {
       // 显示/隐藏 ghost 标签（对齐 /rp label：回放 ghost 与挑战影子共用偏好）
       const visible = toggleReplayLabels(player);
