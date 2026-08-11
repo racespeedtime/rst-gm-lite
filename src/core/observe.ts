@@ -504,7 +504,24 @@ export function initObserve(): void {
   // 不触发 onKeyStateChange（文档明确），由 pollObserveKeys 的 getKeys 轮询。
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
-    if (!observeStates.has(player.id)) return next(); // 非观战不处理
+    const st = observeStates.get(player.id);
+    if (!st) return next(); // 非观战不处理
+    // 副驾模式（mode="ride"）：FIRE 是**点按氮气键**（vehicleAuto hold / drift
+    // NPC 都监听 FIRE）——若 FIRE 同时触发观战切换，按 FIRE 喷氮气会切 ghost 车
+    // → startRideVehicle 反复 removeFromVehicle+putPlayerIn，视角反复跳、没法
+    // 稳定跟随（"一直在反复切观战"）。副驾下 FIRE 让位给氮气；方向键/Q/E 保留
+    // 切换 ghost 车（与观战一致）
+    if (st.mode === "ride") {
+      if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_RIGHT)) {
+        cycleObserveTarget(player, true); // E 键 → 下一个
+        return next();
+      }
+      if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_LEFT)) {
+        cycleObserveTarget(player, false); // Q 键 → 上一个
+        return next();
+      }
+      return next();
+    }
     if (isPressed(newKeys, oldKeys, KeysEnum.FIRE)) {
       cycleObserveTarget(player, true); // 左键 → 下一个
       return next();
