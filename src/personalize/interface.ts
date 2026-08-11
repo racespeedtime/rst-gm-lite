@@ -1,4 +1,6 @@
 import { Player } from "@infernus/core";
+import { sysMsg } from "@/utils/msg";
+
 import {
   getSetting,
   updateSetting,
@@ -52,9 +54,11 @@ export async function openInterfaceMenu(player: Player, back?: MenuBack): Promis
     const next = !setting.hideAllGui;
     await updateSetting(player, { hideAllGui: next });
     if (next) {
-      player.sendClientMessage(
-        "#ffaa00",
+      sysMsg(
+        player,
+        "settings",
         "已开启隐藏所有GUI（覆盖优先），其他界面个性化开关暂时失效",
+        "warn",
       );
     } else {
       notifySaved(player, "已关闭隐藏所有GUI");

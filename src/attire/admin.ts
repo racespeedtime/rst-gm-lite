@@ -5,7 +5,7 @@ import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /** OP 装扮管理：编辑/删除系统装扮目录。子功能取消返回本面板，本面板"关闭"返回上一层 */
 export async function openAttireAdmin(player: Player, back?: MenuBack): Promise<void> {
@@ -40,7 +40,7 @@ async function editAttire(player: Player, back: MenuBack): Promise<void> {
     orderBy: { name: "asc" },
   });
   if (attires.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "装扮库为空");
+    sysMsg(player, "attire", "装扮库为空", "plain");
     return back();
   }
   const r = await showPagedDialog(player, {
@@ -67,7 +67,7 @@ async function editAttire(player: Player, back: MenuBack): Promise<void> {
   if (offsetRes.response !== 1) return back();
   const nums = offsetRes.inputText.trim().split(/\s+/).map(Number);
   if (nums.length !== 11 || nums.some((n) => !Number.isFinite(n))) {
-    player.sendClientMessage(COLOR_ERROR, "需要 11 个数字");
+    sysMsg(player, "attire", "需要 11 个数字", "error");
     return back();
   }
   await prisma.attire.update({
@@ -86,7 +86,7 @@ async function editAttire(player: Player, back: MenuBack): Promise<void> {
       sZ: nums[10],
     },
   });
-  player.sendClientMessage(COLOR_SUCCESS, `装扮「${attire.name}」已更新`);
+  sysMsg(player, "attire", `装扮「${attire.name}」已更新`, "success");
   return back();
 }
 
@@ -96,7 +96,7 @@ async function deleteAttire(player: Player, back: MenuBack): Promise<void> {
     orderBy: { name: "asc" },
   });
   if (attires.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "装扮库为空");
+    sysMsg(player, "attire", "装扮库为空", "plain");
     return back();
   }
   const r = await showPagedDialog(player, {
@@ -129,6 +129,6 @@ async function deleteAttire(player: Player, back: MenuBack): Promise<void> {
       data: { deletedAt: new Date() },
     });
   });
-  player.sendClientMessage(COLOR_SUCCESS, `装扮「${attire.name}」已删除`);
+  sysMsg(player, "attire", `装扮「${attire.name}」已删除`, "success");
   return back();
 }

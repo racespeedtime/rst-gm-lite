@@ -4,7 +4,8 @@ import { spawnPlayer } from "@/core/spawn";
 import { sessionManager } from "@/sessions/manager";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
-import { COLOR_ERROR } from "@/utils/colors";
+
+import { sysMsg } from "@/utils/msg";
 
 /**
  * 玩家认证成功后的"大厅"（对话框序列）：
@@ -60,7 +61,7 @@ export async function runLobby(player: Player): Promise<void> {
       await updateSetting(player, { spawnMode, enterWorldMode: enterMode });
     } catch (e) {
       logger.error(`[lobby] ${player.getName().name} 保存进入设置失败`, e);
-      player.sendClientMessage(COLOR_ERROR, "进入设置保存失败，本次按当前设置进入");
+      sysMsg(player, "settings", "进入设置保存失败，本次按当前设置进入", "error");
     }
   }
 

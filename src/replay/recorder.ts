@@ -23,7 +23,7 @@ import {
 } from "./storage";
 import { getReplaySession } from "./playback";
 import { isInChallenge } from "./challenge";
-import { COLOR_SUCCESS } from "@/utils/colors";
+
 import { sysMsg } from "@/utils/msg";
 
 /**
@@ -555,9 +555,11 @@ export async function stopRecording(
     });
     removePendingEntry(fileName); // DB 记录已建：移出待落库索引
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage(
-        COLOR_SUCCESS,
+      sysMsg(
+        player,
+        "replay",
         `录制完成：${(durationMs / 1000).toFixed(1)}s / ${session.frames.length} 帧`,
+        "success",
       );
     }
     // 采样来源诊断（定位录制帧数少/0.1s 问题）：

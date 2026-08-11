@@ -8,6 +8,7 @@ import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
 
 import { COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /** 按用户名查找在线玩家（大小写不敏感，排除 NPC） */
 function findOnlinePlayer(name: string): Player | undefined {
@@ -35,7 +36,7 @@ export async function openSessionMenu(player: Player, back?: MenuBack): Promise<
     run: async () => {
       const current = sessionManager.getPlayerSession(player);
       if (current.id === PUBLIC_SESSION_ID) {
-        player.sendClientMessage(COLOR_ERROR, "你已经在公共大世界");
+        sysMsg(player, "session", "你已经在公共大世界", "error");
         return;
       }
       await sessionManager.joinPublicWorld(player);
@@ -47,7 +48,7 @@ export async function openSessionMenu(player: Player, back?: MenuBack): Promise<
       run: async () => {
         const mine = sessionManager.findOwnedSession(player)!;
         if (sessionManager.getPlayerSession(player).id === mine.id) {
-          player.sendClientMessage(COLOR_ERROR, "你已经在自己的战局中");
+          sysMsg(player, "session", "你已经在自己的战局中", "error");
           return;
         }
         // 路由到 createSession：内部找到已有战局静默加入 + 提示"已回到你的战局"，
@@ -89,7 +90,7 @@ export async function openSessionMenu(player: Player, back?: MenuBack): Promise<
 async function joinSessionFlow(player: Player, back?: MenuBack): Promise<void> {
   const list = sessionManager.listJoinableSessions(player);
   if (list.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, "当前没有可加入的战局，你可以创建一个");
+    sysMsg(player, "session", "当前没有可加入的战局，你可以创建一个", "error");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -233,7 +234,7 @@ async function kickMemberFlow(player: Player, back?: MenuBack): Promise<void> {
   const session = sessionManager.getPlayerSession(player);
   const others = sessionManager.getMembers(session).filter((p) => p.id !== player.id);
   if (others.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, "战局内没有其他成员");
+    sysMsg(player, "session", "战局内没有其他成员", "error");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -266,11 +267,11 @@ async function inviteFlow(player: Player, back?: MenuBack): Promise<void> {
   if (res.response !== 1) return back?.();
   const target = findOnlinePlayer(res.inputText.trim());
   if (!target) {
-    player.sendClientMessage(COLOR_ERROR, "未找到该在线玩家");
+    sysMsg(player, "session", "未找到该在线玩家", "error");
     return back?.();
   }
   if (target.id === player.id) {
-    player.sendClientMessage(COLOR_ERROR, "不能邀请自己");
+    sysMsg(player, "session", "不能邀请自己", "error");
     return back?.();
   }
   const result = await sessionManager.inviteMember(player, target);

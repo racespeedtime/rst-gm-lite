@@ -11,7 +11,7 @@ import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { banUser, unbanUser, banIp, unbanIp } from "@/core/ban";
 import { showDialog } from "@/utils/dialog";
 
-import { COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /** 判断当前玩家是否为超级管理员（OP） */
 export function isSuperAdmin(player: Player): boolean {
@@ -39,13 +39,13 @@ export async function resetUserPassword(player: Player, back?: MenuBack): Promis
   if (targetRes.response !== 1) return back?.();
   const target = targetRes.inputText.trim();
   if (!target) {
-    player.sendClientMessage(COLOR_ERROR, "用户名不能为空");
+    sysMsg(player, "system", "用户名不能为空", "error");
     return back?.();
   }
   // 2. 查用户
   const user = await prisma.sysUser.findUnique({ where: { username: target } });
   if (!user) {
-    player.sendClientMessage(COLOR_ERROR, `用户 ${target} 不存在`);
+    sysMsg(player, "system", `用户 ${target} 不存在`, "error");
     return back?.();
   }
   // 3. 操作确认
@@ -70,11 +70,11 @@ export async function resetUserPassword(player: Player, back?: MenuBack): Promis
       where: { id: user.id },
       data: { password: await hashPassword(pwd), salt: null },
     });
-    player.sendClientMessage(COLOR_SUCCESS, `用户 ${target} 的密码已重置`);
+    sysMsg(player, "system", `用户 ${target} 的密码已重置`, "success");
     logger.info(`[op] ${player.getName().name} 重置了用户 ${target} 的密码`);
   } catch (e) {
     logger.error(`[op] 重置 ${target} 密码失败`, e);
-    player.sendClientMessage(COLOR_ERROR, "重置失败，请稍后重试");
+    sysMsg(player, "system", "重置失败，请稍后重试", "error");
   }
   return back?.();
 }
@@ -111,7 +111,7 @@ export async function openOpPanel(player: Player, back?: MenuBack): Promise<void
 
 /** 对无权限玩家的统一拒绝提示 */
 export function sendNoPermission(player: Player): void {
-  player.sendClientMessage(COLOR_ERROR, "你没有执行此操作的权限");
+  sysMsg(player, "system", "你没有执行此操作的权限", "error");
 }
 
 /** 初始化命令（命令为辅）：/op 打开管理员面板；/ban /unban 封禁管理 */
@@ -122,7 +122,7 @@ export function initOpCommands(): void {
       return next();
     }
     if (isPlayerLocked(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前正在其他流程中，请稍后再试");
+      sysMsg(player, "system", "当前正在其他流程中，请稍后再试", "error");
       return next();
     }
     // 锁由调用方负责（嵌套进万能面板时外层已锁，不能重复解锁）
@@ -141,7 +141,7 @@ export function initOpCommands(): void {
     const minutes = Number(subcommand[1]);
     const reason = subcommand.slice(2).join(" ").trim() || "无";
     if (!username || !Number.isInteger(minutes) || minutes < 0) {
-      player.sendClientMessage(COLOR_ERROR, "用法: /ban 用户名 时长分钟(0=永久) 原因");
+      sysMsg(player, "system", "用法: /ban 用户名 时长分钟(0=永久) 原因", "error");
       return next();
     }
     await banUser(player, username, minutes, reason);
@@ -156,7 +156,7 @@ export function initOpCommands(): void {
     }
     const username = subcommand[0];
     if (!username) {
-      player.sendClientMessage(COLOR_ERROR, "用法: /unban 用户名");
+      sysMsg(player, "system", "用法: /unban 用户名", "error");
       return next();
     }
     await unbanUser(player, username);
@@ -173,7 +173,7 @@ export function initOpCommands(): void {
     const minutes = Number(subcommand[1]);
     const reason = subcommand.slice(2).join(" ").trim() || "无";
     if (!ip || !Number.isInteger(minutes) || minutes < 0) {
-      player.sendClientMessage(COLOR_ERROR, "用法: /banip IP 时长分钟(0=永久) 原因");
+      sysMsg(player, "system", "用法: /banip IP 时长分钟(0=永久) 原因", "error");
       return next();
     }
     await banIp(player, ip, minutes, reason);
@@ -188,7 +188,7 @@ export function initOpCommands(): void {
     }
     const ip = subcommand[0];
     if (!ip) {
-      player.sendClientMessage(COLOR_ERROR, "用法: /unbanip IP");
+      sysMsg(player, "system", "用法: /unbanip IP", "error");
       return next();
     }
     await unbanIp(player, ip);

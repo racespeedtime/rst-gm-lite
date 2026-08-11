@@ -27,7 +27,7 @@ import { VEHICLE_CATEGORIES, vehicleName, isValidVehicleModel } from "./catalog"
 import type { UserVehicleModel } from "@/prisma/generated/prisma/models/UserVehicle";
 import { Prisma } from "@/prisma/generated/prisma/client";
 
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
+import { COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 /** 车辆位置保存间隔（毫秒） */
 const SAVE_INTERVAL_MS = 30_000;
 
@@ -142,7 +142,7 @@ export async function spawnVehicle(
   silent = false,
 ): Promise<boolean> {
   if (!isValidVehicleModel(modelId)) {
-    player.sendClientMessage(COLOR_ERROR, "车辆ID需在 400-611 之间");
+    sysMsg(player, "vehicle", "车辆ID需在 400-611 之间", "error");
     return false;
   }
   try {
@@ -195,15 +195,17 @@ export async function spawnVehicle(
     }
     veh.putPlayerIn(player, 0);
     if (!silent) {
-      player.sendClientMessage(
-        COLOR_SUCCESS,
+      sysMsg(
+        player,
+        "vehicle",
         `刷车成功！爱车模型 [${modelId}]，/cc 换色，/c wode 召唤`,
+        "success",
       );
     }
     return true;
   } catch (e) {
     logger.error(`[veh] ${player.getName().name} 刷车失败 ${modelId}`, e);
-    player.sendClientMessage(COLOR_ERROR, "刷车失败，请稍后重试");
+    sysMsg(player, "vehicle", "刷车失败，请稍后重试", "error");
     return false;
   }
 }
@@ -267,7 +269,7 @@ export async function summonMyVehicle(player: Player): Promise<void> {
     // 实体没了但 DB 爱车仍在（损毁只清了实体，user_vehicle 行未删）：重建
     const auth = getAuthState(player.id);
     if (!auth) {
-      player.sendClientMessage(COLOR_ERROR, "请先登录");
+      sysMsg(player, "vehicle", "请先登录", "error");
       return;
     }
     const last = await prisma.userVehicle.findFirst({
@@ -275,7 +277,7 @@ export async function summonMyVehicle(player: Player): Promise<void> {
       orderBy: { updatedAt: "desc" }, // 最近用过的爱车（损毁前开的那辆）
     });
     if (!last) {
-      player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先 /c 车辆ID 刷车");
+      sysMsg(player, "vehicle", "你还没有爱车，先 /c 车辆ID 刷车", "error");
       return;
     }
     const ok = await spawnVehicle(player, last.modelId, true);
@@ -293,14 +295,14 @@ export async function summonMyVehicle(player: Player): Promise<void> {
   veh.linkToInterior(player.getInterior());
   addNitro(veh);
   veh.putPlayerIn(player, 0);
-  player.sendClientMessage(COLOR_SUCCESS, "爱车已召唤到身边");
+  sysMsg(player, "vehicle", "爱车已召唤到身边", "success");
 }
 
 /** 锁/解锁当前爱车（/c lock · /cars lock 共用；状态落库） */
 export async function toggleMyVehicleLock(player: Player): Promise<void> {
   const veh = playerVehs.get(player.id);
   if (!veh || !veh.isValid()) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有车（或已损毁）");
+    sysMsg(player, "vehicle", "你还没有车（或已损毁）", "error");
     return;
   }
   const { doors } = veh.getParamsEx();
@@ -353,11 +355,11 @@ async function ensureDefaultPresetTx(
 export function changeMyVehicleColor(player: Player, c1: number, c2: number): void {
   const veh = playerVehs.get(player.id);
   if (!veh || !veh.isValid()) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有车（或已损毁），先 /c 车辆ID 刷车");
+    sysMsg(player, "vehicle", "你还没有车（或已损毁），先 /c 车辆ID 刷车", "error");
     return;
   }
   veh.changeColors(c1, c2);
-  player.sendClientMessage(COLOR_SUCCESS, `颜色已更换为 ${c1} / ${c2}`);
+  sysMsg(player, "vehicle", `颜色已更换为 ${c1} / ${c2}`, "success");
   const auth = getAuthState(player.id);
   if (!auth) return;
   const modelId = veh.getModel();
@@ -380,12 +382,12 @@ export function changeMyVehicleColor(player: Player, c1: number, c2: number): vo
  *  车牌对所有玩家可见渲染——与昵称前后缀/传送点名同防线，含敏感词拒绝设置 */
 export async function setMyVehiclePlate(player: Player, plate: string): Promise<void> {
   if (containsSensitiveWord(plate)) {
-    player.sendClientMessage(COLOR_ERROR, "车牌包含敏感内容，请更换");
+    sysMsg(player, "vehicle", "车牌包含敏感内容，请更换", "error");
     return;
   }
   const veh = playerVehs.get(player.id);
   if (!veh || !veh.isValid()) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有车（或已损毁）");
+    sysMsg(player, "vehicle", "你还没有车（或已损毁）", "error");
     return;
   }
   veh.setNumberPlate(plate);
@@ -396,14 +398,14 @@ export async function setMyVehiclePlate(player: Player, plate: string): Promise<
       data: { plateNumber: plate },
     });
   }
-  player.sendClientMessage(COLOR_SUCCESS, "车牌已更换");
+  sysMsg(player, "vehicle", "车牌已更换", "success");
 }
 
 /** 踢出当前爱车内的乘客（/c kick · /cars kick 共用） */
 export function kickMyVehiclePassengers(player: Player): void {
   const veh = playerVehs.get(player.id);
   if (!veh) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有车");
+    sysMsg(player, "vehicle", "你还没有车", "error");
     return;
   }
   let kicked = 0;
@@ -412,7 +414,7 @@ export function kickMyVehiclePassengers(player: Player): void {
     if (!p.isInAnyVehicle() || p.getVehicle() !== veh) continue;
     const pos = p.getPos();
     p.setPos(pos.x, pos.y, pos.z + 5);
-    p.sendClientMessage(COLOR_ERROR, "你被车主移出了车辆");
+    sysMsg(p, "vehicle", "你被车主移出了车辆", "error");
     kicked++;
   }
   player.sendClientMessage(
@@ -518,7 +520,7 @@ export function initVehicleCommands(): void {
     // B6：刷车需已认证且不在流程锁中（未登录/大厅对话框期间 /c 会触发
     // getOrCreateUserVehicle 的 auth! 空断言 → 报错被吞，只留"刷车失败"）
     if (!getAuthState(player.id) || isPlayerLocked(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "请先完成登录后再刷车");
+      sysMsg(player, "vehicle", "请先完成登录后再刷车", "error");
       return next();
     }
     const arg = subcommand[0];
@@ -529,13 +531,12 @@ export function initVehicleCommands(): void {
     if (!arg || Number.isNaN(+arg)) {
       // 拆两条短消息：SA 客户端聊天单条上限 128 字节（gbk），整条 usage 143
       // 字节会被静默丢弃（"什么都没提示"的根因）
-      player.sendClientMessage(
-        COLOR_WHITE,
-        "刷车: /c [车辆ID400-611] · /c list 选车 · /c wode 召唤",
-      );
-      player.sendClientMessage(
-        COLOR_WHITE,
+      sysMsg(player, "vehicle", "刷车: /c [车辆ID400-611] · /c list 选车 · /c wode 召唤", "plain");
+      sysMsg(
+        player,
+        "vehicle",
         " /cc 色1 色2 · /c lock · /c chepai 文字 · /c kick · /c 3d/2d 速度表",
+        "plain",
       );
       return next();
     }
@@ -570,7 +571,7 @@ export function initVehicleCommands(): void {
       c2 < 0 ||
       c2 > 255
     ) {
-      player.sendClientMessage(COLOR_ERROR, "用法: /cc 颜色代码1 颜色代码2（0-255）");
+      sysMsg(player, "vehicle", "用法: /cc 颜色代码1 颜色代码2（0-255）", "error");
       return next();
     }
     changeMyVehicleColor(player, c1, c2);
@@ -580,11 +581,11 @@ export function initVehicleCommands(): void {
   PlayerEvent.onCommandText(["c chepai", "veh chepai"], async ({ player, subcommand, next }) => {
     const plate = subcommand.join(" ").trim();
     if (!plate) {
-      player.sendClientMessage(COLOR_ERROR, "用法: /c chepai 车牌文字（≤10字符）");
+      sysMsg(player, "vehicle", "用法: /c chepai 车牌文字（≤10字符）", "error");
       return next();
     }
     if (plate.length > 10) {
-      player.sendClientMessage(COLOR_ERROR, "车牌文字最多 10 个字符");
+      sysMsg(player, "vehicle", "车牌文字最多 10 个字符", "error");
       return next();
     }
     await setMyVehiclePlate(player, plate);
@@ -631,7 +632,7 @@ export function initVehicleCommands(): void {
   // 强制覆盖为"无碰撞"，命令仅改个人设置，不碰比赛态）
   PlayerEvent.onCommandText(["dcar", "autofix"], async ({ player, next }) => {
     if (!getAuthState(player.id) || isPlayerLocked(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "请先完成登录后再操作");
+      sysMsg(player, "vehicle", "请先完成登录后再操作", "error");
       return next();
     }
     const setting = await getSetting(player);
@@ -646,7 +647,7 @@ export function initVehicleCommands(): void {
   // /hys：toggle 车辆变色龙（自动换色，对齐原版 hys——每秒随机换色，vehicleTick 驱动）
   PlayerEvent.onCommandText("hys", async ({ player, next }) => {
     if (!getAuthState(player.id) || isPlayerLocked(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "请先完成登录后再操作");
+      sysMsg(player, "vehicle", "请先完成登录后再操作", "error");
       return next();
     }
     const setting = await getSetting(player);

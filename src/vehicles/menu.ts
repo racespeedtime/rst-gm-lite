@@ -309,9 +309,11 @@ function toggleVehicleParam(
     key === "boot" ? next : p.boot,
     p.objective,
   );
-  player.sendClientMessage(
-    COLOR_SUCCESS,
+  sysMsg(
+    player,
+    "vehicle",
     `${label}已${next === VehicleParamsEnum.ON ? "开启" : "关闭"}`,
+    "success",
   );
 }
 

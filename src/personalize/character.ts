@@ -2,7 +2,7 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { getSetting, updateSetting, pickOption, notifySaved, toggleText } from "./settings";
-import { COLOR_ERROR } from "@/utils/colors";
+
 import { applyInvincibleState } from "@/core/invincible";
 import { applyPlayerStyle } from "@/core/playerStyle";
 import { applyPlayerPreset } from "@/attire";
@@ -11,6 +11,7 @@ import { parseIntInRange } from "@/utils/parse";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 import { containsSensitiveWord } from "@/utils/sensitive";
+import { sysMsg } from "@/utils/msg";
 
 /**
  * 人物个性化菜单
@@ -53,7 +54,7 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     const next = !setting.showPlayerAttire;
     await updateSetting(player, { showPlayerAttire: next });
     if (!next) {
-      player.sendClientMessage(COLOR_ERROR, "你已关闭人物装扮显示，装扮将不再展示");
+      sysMsg(player, "character", "你已关闭人物装扮显示，装扮将不再展示", "error");
     } else {
       notifySaved(player, "人物装扮已开启显示");
     }
@@ -90,7 +91,7 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     if (!res || res.response !== 1) return again();
     const skin = parseIntInRange(res.inputText, 0, 311);
     if (skin == null) {
-      player.sendClientMessage(COLOR_ERROR, "皮肤ID需为 0-311 的整数");
+      sysMsg(player, "character", "皮肤ID需为 0-311 的整数", "error");
       return again();
     }
     await applySkin(player, skin); // 统一校验（74 禁用）
@@ -111,12 +112,12 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     if (!res || res.response !== 1) return again();
     const prefix = res.inputText.trim();
     if (prefix.length > 255) {
-      player.sendClientMessage(COLOR_ERROR, "名字前缀最多 255 个字符");
+      sysMsg(player, "character", "名字前缀最多 255 个字符", "error");
       return again();
     }
     // 前缀拼进聊天名（所有人可见），含敏感词拒绝
     if (containsSensitiveWord(prefix)) {
-      player.sendClientMessage(COLOR_ERROR, "名字前缀包含敏感内容");
+      sysMsg(player, "character", "名字前缀包含敏感内容", "error");
       return again();
     }
     await updateSetting(player, { prefix: prefix || null });
@@ -139,12 +140,12 @@ export async function openCharacterMenu(player: Player, back?: MenuBack): Promis
     if (!res || res.response !== 1) return again();
     const suffix = res.inputText.trim();
     if (suffix.length > 255) {
-      player.sendClientMessage(COLOR_ERROR, "名字后缀最多 255 个字符");
+      sysMsg(player, "character", "名字后缀最多 255 个字符", "error");
       return again();
     }
     // 后缀拼进聊天名（所有人可见），含敏感词拒绝
     if (containsSensitiveWord(suffix)) {
-      player.sendClientMessage(COLOR_ERROR, "名字后缀包含敏感内容");
+      sysMsg(player, "character", "名字后缀包含敏感内容", "error");
       return again();
     }
     await updateSetting(player, { suffix: suffix || null });

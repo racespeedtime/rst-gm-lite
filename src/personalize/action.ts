@@ -8,7 +8,8 @@ import { getReplaySession } from "@/replay/playback";
 import { isInChallenge } from "@/replay/challenge";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
-import { COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
+import { COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /**
  * 玩家动作系统（对齐原版 pawn-server 的 /anim 21 号动作映射，Action_Play）：
@@ -171,7 +172,7 @@ export function stopAction(player: Player): void {
   player.clearAnimations();
   player.setSpecialAction(SpecialActionsEnum.NONE);
   activeActions.delete(player.id);
-  player.sendClientMessage(COLOR_SUCCESS, "已清除动作");
+  sysMsg(player, "action", "已清除动作", "success");
 }
 
 /** 清除动作（静默：状态切换自动清理时用，不刷提示消息） */
@@ -214,7 +215,7 @@ export function playAction(player: Player, id: number): boolean {
     );
   }
   activeActions.set(player.id, id);
-  player.sendClientMessage(COLOR_SUCCESS, `已播放动作「${def.name}」，按 F 或 /anim 0 清除`);
+  sysMsg(player, "action", `已播放动作「${def.name}」，按 F 或 /anim 0 清除`, "success");
   return true;
 }
 
@@ -275,7 +276,7 @@ export function initActionCleanup(): void {
 export function initActionCommands(): void {
   PlayerEvent.onCommandText("anim", ({ player, subcommand, next }) => {
     if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      sysMsg(player, "action", "当前流程中不可操作", "error");
       return next();
     }
     const arg = subcommand[0];
@@ -289,14 +290,16 @@ export function initActionCommands(): void {
     }
     const id = Number(arg);
     if (!Number.isInteger(id)) {
-      player.sendClientMessage(
-        COLOR_ERROR,
+      sysMsg(
+        player,
+        "action",
         `用法: /anim <1-${ACTIONS.length}> 播放动作 · /anim 0 清除 · /anim 无参打开列表`,
+        "error",
       );
       return next();
     }
     if (id < 0 || id > ACTIONS.length) {
-      player.sendClientMessage(COLOR_ERROR, `动作 ID 范围 1-${ACTIONS.length}（0 清除）`);
+      sysMsg(player, "action", `动作 ID 范围 1-${ACTIONS.length}（0 清除）`, "error");
       return next();
     }
     playAction(player, id);

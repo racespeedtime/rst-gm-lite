@@ -201,9 +201,11 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
       const angle = player.getFacingAngle().angle;
       const world = player.getVirtualWorld();
       const interior = player.getInterior();
-      player.sendClientMessage(
-        "#ffffff",
+      sysMsg(
+        player,
+        "action",
         `位置 X:${pos.x.toFixed(2)} Y:${pos.y.toFixed(2)} Z:${pos.z.toFixed(2)} 朝向:${angle.toFixed(2)} 世界:${world} 室内:${interior}`,
+        "plain",
       );
     },
   });

@@ -13,7 +13,7 @@ import { formatDuration, formatShortDate } from "@/utils/format";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
 
-import { COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /** 汇总一行内的统计信息（查库一次完成） */
 interface ProfileStats {
@@ -132,7 +132,7 @@ function buildProfileLines(s: ProfileStats): string[] {
 async function showProfile(player: Player, userId: string, title: string): Promise<void> {
   const stats = await collectProfileStats(userId);
   if (!stats) {
-    player.sendClientMessage(COLOR_ERROR, "玩家不存在");
+    sysMsg(player, "system", "玩家不存在", "error");
     return;
   }
   await showDialog(
@@ -158,7 +158,7 @@ export async function showMyProfile(player: Player, back?: MenuBack): Promise<vo
 async function showProfileByName(player: Player, username: string): Promise<boolean> {
   const user = await prisma.sysUser.findUnique({ where: { username } });
   if (!user) {
-    player.sendClientMessage(COLOR_ERROR, `用户 ${username} 不存在`);
+    sysMsg(player, "system", `用户 ${username} 不存在`, "error");
     return false;
   }
   await showProfile(player, user.id, `${username} 的信息`);
@@ -197,7 +197,7 @@ async function listAllPlayers(player: Player, back?: MenuBack, skipSort = false)
     select: { id: true, username: true, createdAt: true },
   });
   if (users.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, "暂无玩家");
+    sysMsg(player, "system", "暂无玩家", "error");
     return back?.();
   }
   // 在线集（status=ONLINE 的会话）
@@ -321,7 +321,7 @@ async function openClickPlayerMenu(player: Player, target: Player): Promise<void
         label: "查看个人信息",
         run: () => {
           if (!targetUserId) {
-            player.sendClientMessage(COLOR_ERROR, "对方已下线，无法查看信息");
+            sysMsg(player, "system", "对方已下线，无法查看信息", "error");
             return;
           }
           showProfile(player, targetUserId, `${name} 的信息`);
@@ -387,7 +387,7 @@ async function listPlayerReplays(
     orderBy: { createdAt: "desc" },
   });
   if (list.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, `${targetName} 还没有比赛回放`);
+    sysMsg(player, "system", `${targetName} 还没有比赛回放`, "error");
     return;
   }
   const r = await showPagedDialog(player, {

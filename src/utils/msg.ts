@@ -23,11 +23,13 @@ export const PREFIX = {
   /** 战局 / 公共大世界 */
   session: "[战局]",
   /**
-   * 聊天 / 全局喊话与私聊刻意不走 sysMsg（聊天转发是消息**内容**格式而非模块
-   * 提示，且用各自聊天色）：手写 [全局]/[战局]/[pm] 保留在 chat/index.ts。
-   * 无敌攻击者提示用金色特殊色（invincible.ts 手写 [无敌]）同理。
-   * 此三者不登记 PREFIX（登记了也是死登记，误导后续维护）。
+   * 聊天提示（范围切换/限频/敏感词拒绝等）。聊天**转发**（[全局]/[战局]/[pm]
+   * 前缀 + 内容格式）刻意走 sendClientMessage 保留聊天色，不在此表；
+   * 私聊系统提示（用法/拒绝原因）走 pm 表。
    */
+  chat: "[聊天]",
+  /** 私聊提示（对齐原版 /pm 前缀 [pm]） */
+  pm: "[pm]",
   /** 比赛内通用提示（命令隔离/比赛中禁止类，与 [赛车] 并存——[赛车] 用于玩家消息） */
   match: "[比赛]",
   /** 装扮 / 挂件 */
@@ -56,6 +58,8 @@ export const PREFIX = {
   system: "[系统]",
   /** 个性化设置（notifySaved 统一用） */
   settings: "[设置]",
+  /** 人物个性化（皮肤/前缀后缀等） */
+  character: "[人物]",
 } as const;
 export type MsgTag = keyof typeof PREFIX;
 

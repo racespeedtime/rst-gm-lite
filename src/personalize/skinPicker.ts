@@ -1,9 +1,10 @@
 import { Player, PlayerEvent } from "@infernus/core";
 import { getAuthState } from "@/auth/auth";
 import { updateSetting, notifySaved } from "./settings";
-import { COLOR_ERROR } from "@/utils/colors";
+
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { showModelSelectionMenu } from "@/utils/eSelection";
+import { sysMsg } from "@/utils/msg";
 
 /**
  * 皮肤选择工具：
@@ -27,7 +28,7 @@ export function isValidSkin(skinId: number): boolean {
 /** 应用皮肤并写库（统一入口：3D 选择与手动输入共用，含校验） */
 export async function applySkin(player: Player, skinId: number): Promise<boolean> {
   if (!isValidSkin(skinId)) {
-    player.sendClientMessage(COLOR_ERROR, "该皮肤不可用（需 0-311，74 为禁用皮肤）");
+    sysMsg(player, "character", "该皮肤不可用（需 0-311，74 为禁用皮肤）", "error");
     return false;
   }
   const auth = getAuthState(player.id);
@@ -63,7 +64,7 @@ export function initSkinCommands(): void {
     // 无参数 → 3D 选皮肤（对齐原版 /skin 无参数 ShowModelSelectionMenu）
     if (!arg) {
       if (isPlayerLocked(player.id)) {
-        player.sendClientMessage(COLOR_ERROR, "当前正在其他流程中，请稍后再试");
+        sysMsg(player, "character", "当前正在其他流程中，请稍后再试", "error");
         return next();
       }
       lockPlayer(player.id);
@@ -76,7 +77,7 @@ export function initSkinCommands(): void {
     }
     const skinId = Number(arg);
     if (!Number.isInteger(skinId)) {
-      player.sendClientMessage(COLOR_ERROR, "用法: /skin（打开选肤菜单）或 /skin 皮肤ID（0-311）");
+      sysMsg(player, "character", "用法: /skin（打开选肤菜单）或 /skin 皮肤ID（0-311）", "error");
       return next();
     }
     await applySkin(player, skinId);

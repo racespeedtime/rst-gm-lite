@@ -6,7 +6,7 @@ export const CHAT_COOLDOWN_MS = 1500;
 /** 指令最小间隔（毫秒） */
 export const COMMAND_COOLDOWN_MS = 500;
 
-import { COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 const lastChatAt = new Map<number, number>();
 const lastCommandAt = new Map<number, number>();
@@ -49,11 +49,11 @@ export function initRateLimit(): void {
     }
     // 未认证玩家（登录/注册对话框期间）拒绝一切命令
     if (!getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "请先完成登录或注册");
+      sysMsg(player, "system", "请先完成登录或注册", "error");
       return false;
     }
     if (!allowCommand(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "操作过于频繁，请稍后再试");
+      sysMsg(player, "system", "操作过于频繁，请稍后再试", "error");
       return false;
     }
     return next();

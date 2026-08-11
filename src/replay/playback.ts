@@ -44,7 +44,7 @@ import { RECORDING_DIR } from "./storage";
 import { applyWorldEnv } from "@/core/worldenv";
 import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
 import { DEFAULT_CHARSET } from "@/utils/constants";
-import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
+import { COLOR_RACE } from "@/utils/colors";
 import { cleanupAttire } from "@/attire";
 import { destroyAttireObjs, applyReplayVehicleAttire, applyReplayPlayerAttire } from "./attire";
 
@@ -1293,9 +1293,11 @@ export async function spawnReplay(
   if (isGhost) {
     // 自由录制回放：ghost 放当前世界（不切世界、不观战），同世界玩家看得见
     // 可一起玩；控制只对自己会话生效（各看各的）；/rp watch 进入自己的观战视角
-    player.sendClientMessage(
-      COLOR_SUCCESS,
+    sysMsg(
+      player,
+      "replay",
       `回放已开始：${ghosts.length} 台车在世界上重播 · /rp 控制（暂停/快进/倍速/seek）· /rp watch 观战`,
+      "success",
     );
     return true;
   }
@@ -1329,9 +1331,11 @@ export async function spawnReplay(
       },
     });
   }
-  player.sendClientMessage(
-    COLOR_SUCCESS,
+  sysMsg(
+    player,
+    "replay",
     `回放已开始：${ghosts.length} 台车 · /rp 控制（暂停/快进/倍速/seek）`,
+    "success",
   );
   return true;
 }
@@ -1384,9 +1388,11 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         sysMsg(player, "replay", `倍速 ×${session.speed}`, "info");
       } else {
         session.speed = 1;
-        player.sendClientMessage(
-          COLOR_ERROR,
+        sysMsg(
+          player,
+          "replay",
           `无效倍速，已回退 ×1（可选：${REPLAY_SPEEDS.join(" / ")}）`,
+          "error",
         );
       }
       break;
@@ -1458,7 +1464,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       break;
     }
     default:
-      player.sendClientMessage(COLOR_ERROR, "未知回放指令: " + action);
+      sysMsg(player, "replay", `未知回放指令: ${action}`, "error");
   }
 }
 

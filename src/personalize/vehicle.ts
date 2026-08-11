@@ -2,7 +2,8 @@ import { Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { getSetting, updateSetting, pickOption, notifySaved, toggleText } from "./settings";
-import { COLOR_ERROR } from "@/utils/colors";
+
+import { sysMsg } from "@/utils/msg";
 import { syncVehicleAutoState, syncNoCollisionState, resetNitroCount } from "@/core/vehicleAuto";
 import { getOwnedVehicle } from "@/vehicles";
 import { applyVehiclePreset } from "@/attire";
@@ -48,7 +49,7 @@ export async function openVehicleMenu(player: Player, back?: MenuBack): Promise<
       const next = !setting.showVehicleAttire;
       await updateSetting(player, { showVehicleAttire: next });
       if (!next) {
-        player.sendClientMessage(COLOR_ERROR, "你已关闭爱车装扮显示，装扮将不再展示");
+        sysMsg(player, "settings", "你已关闭爱车装扮显示，装扮将不再展示", "error");
       } else {
         notifySaved(player, "爱车装扮已开启显示");
       }

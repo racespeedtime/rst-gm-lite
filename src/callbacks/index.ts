@@ -60,7 +60,6 @@ import {
   startWorldClockTimers,
 } from "@/core/worldenv";
 
-import { COLOR_ERROR } from "@/utils/colors";
 import { sysMsg } from "@/utils/msg";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 
@@ -340,10 +339,7 @@ PlayerEvent.onCommandError(({ player, command, cmdText, error, getSuggestion, ne
       // 传送点也不存在 → 命令确实不存在：提示 + 最接近的命令建议（避免静默吞掉）
       const { suggestion, distance } = getSuggestion();
       if (suggestion && Number.isFinite(distance) && distance <= 4) {
-        player.sendClientMessage(
-          COLOR_ERROR,
-          `命令不存在: ${used}，你是不是想输入 /${suggestion}？`,
-        );
+        sysMsg(player, "system", `命令不存在: ${used}，你是不是想输入 /${suggestion}？`, "error");
       } else {
         sysMsg(player, "system", `命令不存在: ${used}`, "error");
       }

@@ -1,5 +1,6 @@
 import { Dialog, DialogStylesEnum, Player, PlayerEvent } from "@infernus/core";
 import { showDialog } from "@/utils/dialog";
+import { sysMsg } from "@/utils/msg";
 
 /** 分页导航哨兵：上一页 */
 const NAV_PREV = -1;
@@ -182,7 +183,7 @@ export async function showPagedDialog<T>(
           savePage();
           continue;
         }
-        player.sendClientMessage("#ff5555", `页码需在 1-${pageCount} 之间`);
+        sysMsg(player, "system", `页码需在 1-${pageCount} 之间`, "error");
       }
       continue; // 取消/非法：留在当前页
     }

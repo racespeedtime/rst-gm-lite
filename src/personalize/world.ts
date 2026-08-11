@@ -7,7 +7,7 @@ import {
   toggleText,
   toggleSetting,
 } from "./settings";
-import { COLOR_ERROR } from "@/utils/colors";
+
 import { openSpawnSettingsFlow } from "@/core/spawn";
 import { setHouseObjectsVisibleForPlayer } from "@/house";
 import { applyWorldEnv } from "@/core/worldenv";
@@ -15,6 +15,7 @@ import { applyPlayerStyle } from "@/core/playerStyle";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import { parseIntInRange } from "@/utils/parse";
 import { showDialog } from "@/utils/dialog";
+import { sysMsg } from "@/utils/msg";
 import type { MenuBack } from "@/core/panel";
 
 /**
@@ -199,7 +200,7 @@ export async function openWorldMenu(player: Player, back?: MenuBack): Promise<vo
       // 保证长度 ≤9 兼容 player_color VarChar(9)，否则 (255,255,255,255) 超长写库抛错
       const hexColor = normalizeHexColor(input);
       if (!hexColor) {
-        player.sendClientMessage(COLOR_ERROR, "颜色格式不正确（支持 #fff / #ff0000 / (r,g,b,a)）");
+        sysMsg(player, "settings", "颜色格式不正确（支持 #fff / #ff0000 / (r,g,b,a)）", "error");
         return again();
       }
       next = hexColor;
@@ -246,13 +247,13 @@ async function openTimeWeatherFlow(player: Player): Promise<void> {
     if (!res || res.response !== 1) return;
     const m = /^(\d{1,2}):(\d{1,2})$/.exec(res.inputText.trim());
     if (!m) {
-      player.sendClientMessage(COLOR_ERROR, "时间格式不正确，应为 时:分（如 12:30）");
+      sysMsg(player, "settings", "时间格式不正确，应为 时:分（如 12:30）", "error");
       return;
     }
     const hour = Number(m[1]);
     const minute = Number(m[2]);
     if (hour > 23 || minute > 59) {
-      player.sendClientMessage(COLOR_ERROR, "时间超出范围（时 0-23，分 0-59）");
+      sysMsg(player, "settings", "时间超出范围（时 0-23，分 0-59）", "error");
       return;
     }
     await updateSetting(player, { timeHour: hour, timeMinute: minute });
@@ -278,7 +279,7 @@ async function openTimeWeatherFlow(player: Player): Promise<void> {
   if (!res || res.response !== 1) return;
   const weather = parseIntInRange(res.inputText, 0, 255);
   if (weather == null) {
-    player.sendClientMessage(COLOR_ERROR, "天气ID需为 0-255 的整数");
+    sysMsg(player, "settings", "天气ID需为 0-255 的整数", "error");
     return;
   }
   await updateSetting(player, { weather });

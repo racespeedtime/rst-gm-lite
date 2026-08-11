@@ -1,7 +1,8 @@
 import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { getSetting, updateSetting, pickOption, notifySaved } from "./settings";
-import { COLOR_ERROR } from "@/utils/colors";
+
 import { showDialog } from "@/utils/dialog";
+import { sysMsg } from "@/utils/msg";
 import type { MenuBack } from "@/core/panel";
 
 /**
@@ -46,11 +47,11 @@ export async function openSessionSettingsMenu(player: Player, back?: MenuBack): 
       if (pwdRes.response !== 1) return back?.();
       const pwd = pwdRes.inputText.trim();
       if (!pwd) {
-        player.sendClientMessage(COLOR_ERROR, "私有战局必须设置密码，未设置已取消");
+        sysMsg(player, "session", "私有战局必须设置密码，未设置已取消", "error");
         return back?.();
       }
       if (pwd.length > 32) {
-        player.sendClientMessage(COLOR_ERROR, "战局密码最多 32 个字符");
+        sysMsg(player, "session", "战局密码最多 32 个字符", "error");
         return back?.();
       }
       await updateSetting(player, {
@@ -81,7 +82,7 @@ export async function openSessionSettingsMenu(player: Player, back?: MenuBack): 
     if (pwdRes.response !== 1) return back?.();
     const pwd = pwdRes.inputText.trim();
     if (pwd.length > 32) {
-      player.sendClientMessage(COLOR_ERROR, "战局密码最多 32 个字符");
+      sysMsg(player, "session", "战局密码最多 32 个字符", "error");
       return back?.();
     }
     await updateSetting(player, { sessionPassword: pwd || null });

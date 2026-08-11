@@ -6,8 +6,8 @@ import { getSpawnGroundZ } from "@/core/colandreas";
 import { isInRace } from "@/race/room";
 import { isEditing } from "@/race/editor";
 import { isPlayerLocked } from "@/core/interaction";
-import { Session, SESSION_COLOR, PUBLIC_SESSION_ID, PUBLIC_WORLD_ID } from "./session";
-import { PREFIX } from "@/utils/msg";
+import { Session, PUBLIC_SESSION_ID, PUBLIC_WORLD_ID } from "./session";
+import { PREFIX, sysMsg } from "@/utils/msg";
 
 /** 断线理由文案（SA-MP disconnect reason 下标：0=掉线/超时崩溃 1=正常退出 2=Kick/Ban，
  *  对齐原版 disconnectReasons 格式；未知 reason 不加后缀） */
@@ -147,7 +147,7 @@ export class SessionManager {
       `${PREFIX.session} ${player.getName().name} 回到了公共大世界`,
       player,
     );
-    player.sendClientMessage(SESSION_COLOR, `你已回到${this.publicWorld.name}`);
+    sysMsg(player, "session", `你已回到${this.publicWorld.name}`, "info");
   }
 
   /** 列出当前可加入的私人战局（未满、玩家未在其中） */
@@ -181,7 +181,7 @@ export class SessionManager {
     // 加入提示：默认全员可见但排除本人（本人由成功提示覆盖）；silentSelf 时同样排除
     const name = player.getName().name;
     session.broadcastOthers(`${PREFIX.session} ${name} 加入了战局`, player);
-    player.sendClientMessage(SESSION_COLOR, `你已加入战局「${session.name}」`);
+    sysMsg(player, "session", `你已加入战局「${session.name}」`, "success");
     return { ok: true };
   }
 
@@ -192,7 +192,7 @@ export class SessionManager {
     if (mine) {
       // 回到已有战局：静默加入（自己不看"加入了"），其他成员仍可见
       await this.joinSession(player, mine);
-      player.sendClientMessage(SESSION_COLOR, `已回到你的战局「${mine.name}」`);
+      sysMsg(player, "session", `已回到你的战局「${mine.name}」`, "info");
       return mine;
     }
     const session = new Session({
@@ -213,7 +213,7 @@ export class SessionManager {
       // 防幽灵战局 + worldId 未归还；向上抛由调用方认证流程兜底
       this.privateSessions.delete(session.id);
       this.freedWorldIds.push(session.worldId); // 归还 world id 供复用
-      player.sendClientMessage(SESSION_COLOR, "战局创建失败，请稍后重试");
+      sysMsg(player, "session", "战局创建失败，请稍后重试", "error");
       throw e;
     }
     // 加入失败（比赛/编辑中拦截等）必须回收：战局已登记但玩家没进去，
@@ -221,10 +221,10 @@ export class SessionManager {
     if (!joined.ok) {
       this.privateSessions.delete(session.id);
       this.freedWorldIds.push(session.worldId); // 归还 world id 供复用
-      player.sendClientMessage(SESSION_COLOR, `战局创建失败：${joined.reason ?? "未知原因"}`);
+      sysMsg(player, "session", `战局创建失败：${joined.reason ?? "未知原因"}`, "error");
       throw new Error(`createSession 加入失败: ${joined.reason ?? "未知"}`);
     }
-    player.sendClientMessage(SESSION_COLOR, `战局「${session.name}」创建成功，你是房主`);
+    sysMsg(player, "session", `战局「${session.name}」创建成功，你是房主`, "success");
     return session;
   }
 
@@ -253,7 +253,7 @@ export class SessionManager {
     this.publicWorld.members.set(target.id, target);
     this.playerSessions.set(target.id, PUBLIC_SESSION_ID);
     await this.teleportTo(target, PUBLIC_WORLD_ID);
-    target.sendClientMessage(SESSION_COLOR, `你已被移出战局「${session.name}」`);
+    sysMsg(target, "session", `你已被移出战局「${session.name}」`, "warn");
     return { ok: true };
   }
 

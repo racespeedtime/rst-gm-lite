@@ -6,7 +6,7 @@ import type { MenuBack } from "@/core/panel";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import { showDialog } from "@/utils/dialog";
 
-import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 /** 分页浏览最近 50 条登录记录（每页 10 条） */
 const RECENT_LIMIT = 50;
 const PAGE_SIZE = 10;
@@ -61,7 +61,7 @@ async function showSessionLog(player: Player, userId: string, title: string): Pr
     take: RECENT_LIMIT,
   });
   if (logs.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "暂无登录记录");
+    sysMsg(player, "auth", "暂无登录记录", "plain");
     return;
   }
   await showPagedDialog(player, {
@@ -86,7 +86,7 @@ export async function showMySessionLogs(player: Player, back?: MenuBack): Promis
 /** OP 面板入口：按用户名查看任意用户登录记录（不要求在线）。取消返回上一层 */
 export async function showUserSessionLogs(player: Player, back?: MenuBack): Promise<void> {
   if (!isSuperAdmin(player)) {
-    player.sendClientMessage(COLOR_ERROR, "仅管理员可查看他人登录记录");
+    sysMsg(player, "auth", "仅管理员可查看他人登录记录", "error");
     return back?.();
   }
   const res = await showDialog(
@@ -105,7 +105,7 @@ export async function showUserSessionLogs(player: Player, back?: MenuBack): Prom
   if (!username) return back?.();
   const user = await prisma.sysUser.findUnique({ where: { username } });
   if (!user) {
-    player.sendClientMessage(COLOR_ERROR, `用户 ${username} 不存在`);
+    sysMsg(player, "auth", `用户 ${username} 不存在`, "error");
     return back?.();
   }
   await showSessionLog(player, user.id, `${username} 的登录记录`);

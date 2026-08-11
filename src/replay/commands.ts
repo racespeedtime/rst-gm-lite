@@ -14,7 +14,6 @@ import {
   toggleChallengeShadowLabel,
 } from "./challenge";
 import { openReplayMenu } from "./menu";
-import { COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
 
 /**
  * 回放命令：
@@ -54,7 +53,7 @@ export function initReplayCommands(): void {
         // startRecording 内部已发错误提示（未登录/已在录制/无车等），
         // 仅成功时补充"录制中"引导（失败不再追加误导文案）
         const ok = await startRecording(player, { type: "ghost" });
-        if (ok) player.sendClientMessage(COLOR_INFO, "录制中… /rec stop 停止");
+        if (ok) sysMsg(player, "replay", "录制中… /rec stop 停止", "info");
       })();
       return next();
     }
@@ -78,9 +77,11 @@ export function initReplayCommands(): void {
       void openReplayMenu(player);
       return next();
     }
-    player.sendClientMessage(
-      COLOR_INFO,
+    sysMsg(
+      player,
+      "replay",
       "用法: /rec start 开始录制 · /rec stop 停止 · /rec list 我的录制",
+      "info",
     );
     return next();
   });
@@ -115,10 +116,7 @@ export function initReplayCommands(): void {
         // 回放 ghost 与挑战影子标签共用同一偏好：切换一次两侧同时生效
         const visible = toggleReplayLabels(player);
         toggleChallengeShadowLabel(player.id);
-        player.sendClientMessage(
-          visible ? COLOR_SUCCESS : COLOR_INFO,
-          `回放 ghost 标签已${visible ? "显示" : "隐藏"}`,
-        );
+        sysMsg(player, "replay", `回放 ghost 标签已${visible ? "显示" : "隐藏"}`, "info");
         return next();
       }
       case "help":
@@ -171,9 +169,11 @@ export function initReplayCommands(): void {
       exitChallenge(player);
       return next();
     }
-    player.sendClientMessage(
-      COLOR_INFO,
+    sysMsg(
+      player,
+      "replay",
       "用法: /challenge go 起跑 · /challenge restart 重开 · /challenge stop 退出（入口在赛道详情）",
+      "info",
     );
     return next();
   });

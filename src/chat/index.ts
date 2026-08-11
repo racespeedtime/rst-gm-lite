@@ -2,7 +2,7 @@ import { Dialog, DialogStylesEnum, GameText, Player, PlayerEvent } from "@infern
 import { sessionManager } from "@/sessions/manager";
 import { getAuthState } from "@/auth/auth";
 import { allowChat } from "@/core/ratelimit";
-import { COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import { getChatDisplayName } from "@/core/playerStyle";
 import type { MenuBack } from "@/core/panel";
 import { showDialog } from "@/utils/dialog";
@@ -75,7 +75,7 @@ export async function changeChatRangeFlow(player: Player, back?: MenuBack): Prom
   if (res.response !== 1) return back?.();
   const range: ChatRange = res.listItem === 1 ? "public" : "session";
   setChatRange(player.id, range);
-  player.sendClientMessage(SESSION_CHAT_COLOR, `聊天范围已切换为：${chatRangeName(range)}`);
+  sysMsg(player, "chat", `聊天范围已切换为：${chatRangeName(range)}`, "info");
   return back?.();
 }
 
@@ -95,12 +95,12 @@ export function initChat(): void {
     // 未认证玩家不参与聊天（正常流程中认证期间也不会发出文本）
     if (!getAuthState(player.id)) {
       // B9：认证对话框期间打字被静默丢弃 → 给反馈，避免玩家以为发出去了
-      player.sendClientMessage(COLOR_ERROR, "请先完成登录（正在登录中）");
+      sysMsg(player, "chat", "请先完成登录（正在登录中）", "error");
       return false;
     }
     // 全局限频：发言过快则提示并忽略本次
     if (!allowChat(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "发言过于频繁，请稍后再试");
+      sysMsg(player, "chat", "发言过于频繁，请稍后再试", "error");
       return false;
     }
     // 名字本体剥离颜色码（supportAllNickname 允许昵称含 {RRGGBB}，防聊天注入），prefix/suffix 彩色装饰保留
@@ -111,7 +111,7 @@ export function initChat(): void {
     // "{RRGGBB}" 之类中缀把 AC 自动机匹配链拆断、绕过拦截（拆词攻击）
     const safeText = sanitizeChatText(text);
     if (containsSensitiveWord(safeText)) {
-      player.sendClientMessage(COLOR_ERROR, "消息包含敏感内容，已拒绝发送");
+      sysMsg(player, "chat", "消息包含敏感内容，已拒绝发送", "error");
       return false;
     }
     if (range === "public") {
@@ -136,30 +136,30 @@ export function initChat(): void {
     const targetId = +subcommand[0];
     const msg = subcommand.slice(1).join(" ").trim();
     if (!targetId || !msg) {
-      player.sendClientMessage(COLOR_ERROR, "用法: /pm 玩家ID 消息内容");
+      sysMsg(player, "pm", "用法: /pm 玩家ID 消息内容", "error");
       return next();
     }
     // 私聊同样受聊天限频约束（防高频骚扰）
     if (!allowChat(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "发言过于频繁，请稍后再试");
+      sysMsg(player, "pm", "发言过于频繁，请稍后再试", "error");
       return next();
     }
     const target = Player.getInstance(targetId);
     if (!target || target.isNpc() || !target.isConnected()) {
-      player.sendClientMessage(COLOR_ERROR, "无效的玩家ID");
+      sysMsg(player, "pm", "无效的玩家ID", "error");
       return next();
     }
     if (target.id === player.id) {
-      player.sendClientMessage(COLOR_ERROR, "不能给自己发私聊");
+      sysMsg(player, "pm", "不能给自己发私聊", "error");
       return next();
     }
     if (!getAuthState(target.id)) {
-      player.sendClientMessage(COLOR_ERROR, "对方尚未登录");
+      sysMsg(player, "pm", "对方尚未登录", "error");
       return next();
     }
     // 私聊同样拦截敏感词（对齐公共聊天口径）
     if (containsSensitiveWord(msg)) {
-      player.sendClientMessage(COLOR_ERROR, "消息包含敏感内容，已拒绝发送");
+      sysMsg(player, "pm", "消息包含敏感内容，已拒绝发送", "error");
       return next();
     }
     const safeMsg = sanitizeChatText(msg);
