@@ -1166,8 +1166,8 @@ export async function spawnReplay(
         registerObserveCandidate(vehicle.id, "vehicle");
         // 套玩家当前装扮（查库，不按回放当时存储）：NPC 皮肤 + 人物装扮预设；
         // ghost 车按玩家该车型爱车默认预设（颜色/改装件/挂件，挂件独立管理随车销毁）。
-        // 注意：预设的 modComponents（含氮气）在 applyReplayVehicleAttire 内已
-        // 注释——观战中二次 addComponent 会导致 spectate 镜头抽（见该处注释）
+        // 注意：改装件含 1087 时会被黑名单过滤（观战中二次 addComponent 会导致
+        // spectate 镜头抽，见 vehicles/index.ts VEHICLE_COMPONENT_BLACKLIST）
         await applyReplayPlayerAttire(npcPlayer, player.id);
         attireObjs = await applyReplayVehicleAttire(vehicle, data.header.vehicleModelId, player.id);
         ghosts.push({

@@ -62,11 +62,25 @@ export function destroyPlayerVehicle(playerId: number): void {
   cleanupAttire(playerId);
 }
 
+/** 车辆组件黑名单：**一律不加**（回放/挑战 ghost 观战 + 玩家自己刷车都拦在这里）。
+ * 新增黑名单 = 往数组加 id 并注明原因。
+ *
+ * - 1087（车辆增压器/车底喷焰）：实机二分定位——观战中给被观战车再次
+ *   addComponent(1087) 会触发客户端车辆状态变化 → spectate 镜头重置 → 观战
+ *   上下转一抽一抽（1082/1096/1076/1081/1085 均不抽，唯独 1087 抽）。改装店
+ *   装 1087 会经 onMod 存进 modComponents，应用时在此被过滤（观战不抽 > 外观）。
+ * - 注意：组件 id 是 SA 全局编号（同车型同 id），不存在"仅某车型"白名单问题；
+ *   黑名单在这里拦截一次，所有 addComponent 路径（氮气 addNitro/预设改装件
+ *   applyVehiclePreset/回放 applyReplayVehicleAttire）统一生效。
+ */
+const VEHICLE_COMPONENT_BLACKLIST: number[] = [1087];
+
 /** 安全加车辆组件：先校验车型能否装该组件（VehicleCanHaveComponent），能装才装。
  * 氮气(1010)/预设改装件统一走这里——避免对不能装的车型（飞机/船等）发无效
  * AddVehicleComponent（SA native 对无效组件返回 false 静默忽略，但先查更明确且
- * 避免无效 native 调用）。 */
+ * 避免无效 native 调用）。黑名单组件（VEHICLE_COMPONENT_BLACKLIST）直接跳过。 */
 export function addVehicleComponentIfPossible(vehicle: Vehicle, componentId: number): void {
+  if (VEHICLE_COMPONENT_BLACKLIST.includes(componentId)) return;
   try {
     if (vehicle.isValid() && vehicle.canHaveComponent(componentId)) {
       vehicle.addComponent(componentId);
