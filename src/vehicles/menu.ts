@@ -170,7 +170,7 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "当前爱车管理",
-      info: "1. 锁车/解锁\n2. 更换车牌\n3. 更换颜色\n4. 踢出乘客\n5. 回收车辆\n6. 车灯开关\n7. 引擎盖开关\n8. 行李箱开关",
+      info: "1. 锁车/解锁\n2. 更换车牌\n3. 更换颜色\n4. 踢出乘客\n5. 回收车辆\n6. 车灯开关\n7. 引擎盖开关\n8. 行李箱开关\n9. 清空改装件",
       button1: "确定",
       button2: "关闭",
     }),
@@ -280,7 +280,49 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
   } else if (res.listItem === 7) {
     toggleVehicleParam(player, veh, "boot", "行李箱");
     return toThis();
+  } else if (res.listItem === 8) {
+    await clearVehicleComponents(player, veh);
+    return toThis();
   }
+}
+
+/**
+ * 清空当前爱车改装件：实体上逐个 removeComponent 卸掉 + 默认预设 modComponents 清空。
+ * 氮气(1010)也会被卸——但刷车/重应用路径由 addNitro 显式补回（见 addVehicleComponentIfPossible），
+ * 改装件是唯一持久来源，清空后回原厂状态。历史数据里可能残留黑名单件（1087 修复前
+ * 存的）——一并卸掉正好顺带清理，不区分跳过。
+ */
+async function clearVehicleComponents(player: Player, veh: Vehicle): Promise<void> {
+  const auth = getAuthState(player.id);
+  if (!auth) return;
+  const modelId = veh.getModel();
+  const uv = await prisma.userVehicle.findUnique({
+    where: { userId_modelId: { userId: auth.userId, modelId } },
+  });
+  if (!uv?.defaultPresetId) {
+    sysMsg(player, "vehicle", "该爱车还没有改装件记录", "plain");
+    return;
+  }
+  const preset = await prisma.vehiclePreset.findUnique({ where: { id: uv.defaultPresetId } });
+  const list = (preset?.modComponents ? preset.modComponents.split(" ") : []).filter(Boolean);
+  if (list.length === 0) {
+    sysMsg(player, "vehicle", "该爱车还没有改装件", "plain");
+    return;
+  }
+  for (const c of list) {
+    const id = Number(c);
+    if (!Number.isInteger(id) || id <= 0) continue;
+    try {
+      veh.removeComponent(id); // 卸掉实体上的件（不在车上时返回 false，无害）
+    } catch {
+      /* 实体已失效等，忽略 */
+    }
+  }
+  await prisma.vehiclePreset.update({
+    where: { id: uv.defaultPresetId },
+    data: { modComponents: "" },
+  });
+  sysMsg(player, "vehicle", `已清空 ${list.length} 个改装件，车辆恢复原厂`, "success");
 }
 
 /**

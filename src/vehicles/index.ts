@@ -67,8 +67,11 @@ export function destroyPlayerVehicle(playerId: number): void {
  *
  * - 1087（车辆增压器/车底喷焰）：实机二分定位——观战中给被观战车再次
  *   addComponent(1087) 会触发客户端车辆状态变化 → spectate 镜头重置 → 观战
- *   上下转一抽一抽（1082/1096/1076/1081/1085 均不抽，唯独 1087 抽）。改装店
- *   装 1087 会经 onMod 存进 modComponents，应用时在此被过滤（观战不抽 > 外观）。
+ *   上下转一抽一抽（1082/1096/1076/1081/1085 均不抽，唯独 1087 抽）。
+ * - 三层拦截，防"装上了但应用时又抽"：
+ *   ① 改装店 onMod：黑名单件不存 modComponents，并从实体卸掉 + 提示；
+ *   ② 应用路径 addVehicleComponentIfPossible：含黑名单直接 return；
+ *   ③ 存量 DB 数据：清空改装件时一并卸除。
  * - 注意：组件 id 是 SA 全局编号（同车型同 id），不存在"仅某车型"白名单问题；
  *   黑名单在这里拦截一次，所有 addComponent 路径（氮气 addNitro/预设改装件
  *   applyVehiclePreset/回放 applyReplayVehicleAttire）统一生效。
@@ -466,6 +469,23 @@ export function initVehicleCommands(): void {
   // 时自然带上改装件，无需额外存储）
   VehicleEvent.onMod(({ player, vehicle, componentId, next }) => {
     if (player.isNpc()) return next();
+    // 黑名单件（如 1087）：改装店装上也**不存不生效**——卸掉并提示。
+    // 若存进 modComponents，重刷车/回放观战会再 addComponent 触发 spectate
+    // 镜头抽（见 VEHICLE_COMPONENT_BLACKLIST 注释）；且该件有观战 bug 不能留
+    if (VEHICLE_COMPONENT_BLACKLIST.includes(componentId)) {
+      try {
+        vehicle.removeComponent(componentId); // 从实体卸掉（客户端立即消失）
+      } catch {
+        /* 实体已失效等，忽略 */
+      }
+      sysMsg(
+        player,
+        "vehicle",
+        `组件 ${componentId} 在服务器被禁用（观战兼容问题），已自动卸除`,
+        "warn",
+      );
+      return next();
+    }
     // 仅自己的爱车：改装店能开进别人的车，但 mod 归属按车主存储
     if (getOwnedVehicle(player.id) !== vehicle) return next();
     const auth = getAuthState(player.id);
