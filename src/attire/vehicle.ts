@@ -8,7 +8,7 @@ import { setIntervalSafe } from "@/core/timers";
 import { swapSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import type { MenuBack } from "@/core/panel";
 import {
   MAX_VEHICLE_ATTIRE,
@@ -131,7 +131,7 @@ export async function vehiclePresetMenu(player: Player, back?: MenuBack): Promis
   if (modelRes.response !== 1) return back?.();
   const modelId = modelRes.inputText.trim() ? Number(modelRes.inputText.trim()) : currentModel;
   if (!Number.isInteger(modelId) || modelId < 400 || modelId > 611) {
-    player.sendClientMessage(COLOR_ERROR, "车辆模型ID需为 400-611");
+    sysMsg(player, "attire", "车辆模型ID需为 400-611", "error");
     return back?.();
   }
   await showVehiclePresetList(player, modelId);
@@ -209,16 +209,13 @@ async function reorderVehiclePreset(
   if (res.response !== 1) return back?.();
   const target = res.listItem === 0 ? presets[idx - 1] : presets[idx + 1];
   if (!target) {
-    player.sendClientMessage(
-      COLOR_ERROR,
-      res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设",
-    );
+    sysMsg(player, "attire", res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设", "error");
     return back?.();
   }
   await swapSortIndex(presets[idx], target, (id, index) =>
     prisma.vehiclePreset.update({ where: { id }, data: { index } }),
   );
-  player.sendClientMessage(COLOR_SUCCESS, `预设${label} 已${res.listItem === 0 ? "上移" : "下移"}`);
+  sysMsg(player, "attire", `预设${label} 已${res.listItem === 0 ? "上移" : "下移"}`, "success");
   await showVehiclePresetList(player, modelId, back);
 }
 
@@ -229,7 +226,7 @@ async function createVehiclePreset(
   back?: MenuBack,
 ): Promise<void> {
   if (presets.length >= 3) {
-    player.sendClientMessage(COLOR_ERROR, "每个车辆模型最多 3 套预设");
+    sysMsg(player, "attire", "每个车辆模型最多 3 套预设", "error");
     return back?.();
   }
   const nameRes = await showDialog(
@@ -254,11 +251,11 @@ async function createVehiclePreset(
         name: nameRes.inputText.trim() || null,
       },
     });
-    player.sendClientMessage(COLOR_SUCCESS, `车辆预设创建成功`);
+    sysMsg(player, "attire", `车辆预设创建成功`, "success");
     await vehiclePresetDetail(player, preset.id, modelId, back);
   } catch (e) {
     logger.error(`[attire] 创建车辆预设失败`, e);
-    player.sendClientMessage(COLOR_ERROR, "创建失败");
+    sysMsg(player, "attire", "创建失败", "error");
     return back?.();
   }
 }
@@ -303,13 +300,15 @@ async function vehiclePresetDetail(
     // 挂件残留到他车上），且车型必须与预设匹配（选 411 的预设挂到 560 上会错位）
     const owned = getOwnedVehicle(player.id);
     if (!owned || !owned.isValid() || owned !== veh) {
-      player.sendClientMessage(COLOR_ERROR, "请进入你的爱车后再应用车辆预设");
+      sysMsg(player, "attire", "请进入你的爱车后再应用车辆预设", "error");
       return back?.();
     }
     if (owned.getModel() !== modelId) {
-      player.sendClientMessage(
-        COLOR_ERROR,
+      sysMsg(
+        player,
+        "attire",
         `该预设属于模型 ${modelId}，请先刷对应模型的爱车（/c ${modelId}）`,
+        "error",
       );
       return back?.();
     }
@@ -324,7 +323,7 @@ async function vehiclePresetDetail(
         data: { defaultPresetId: presetId },
       });
     }
-    player.sendClientMessage(COLOR_SUCCESS, "已应用车辆预设（重刷车自动带上）");
+    sysMsg(player, "attire", "已应用车辆预设（重刷车自动带上）", "success");
     return toThis();
   } else if (idx === 1) {
     await addVehiclePresetItem(player, presetId, modelId, toThis);
@@ -371,7 +370,7 @@ async function editVehiclePresetItem(
     await adjustVehiclePresetItem(player, item.id, item.attire.name, presetId, back);
   } else if (res.listItem === 2) {
     await prisma.vehiclePresetItem.delete({ where: { id: item.id } });
-    player.sendClientMessage(COLOR_SUCCESS, `已移除挂件 ${item.attire.name}`);
+    sysMsg(player, "attire", `已移除挂件 ${item.attire.name}`, "success");
     // 当前爱车重新应用，挂件即时消失（用爱车而非 player.getVehicle，防别人车/乘客座）
     const veh = getOwnedVehicle(player.id);
     if (veh && veh.isValid()) await applyVehiclePreset(veh, presetId, player.id);
@@ -501,9 +500,11 @@ async function showVehicleEditDialog(player: Player): Promise<void> {
     st.axis = res.listItem + 1;
     const stepText =
       res.listItem < 3 ? `每次 ±${st.step} 单位` : `每次 ±${st.step * ROT_STEP_MULT} 度`;
-    player.sendClientMessage(
-      COLOR_WHITE,
-      `[装扮] 当前微调：${VEHC_EDIT_AXES[res.listItem]}（方向键 ←/→ 按住连续，${stepText}）`,
+    sysMsg(
+      player,
+      "attire",
+      `当前微调：${VEHC_EDIT_AXES[res.listItem]}（方向键 ←/→ 按住连续，${stepText}）`,
+      "info",
     );
     st.dialogOpen = false;
     return;
@@ -527,9 +528,9 @@ async function showVehicleEditDialog(player: Player): Promise<void> {
       const v = /^\d+(\.\d+)?$/.test(s) ? parseFloat(s) : NaN;
       if (Number.isFinite(v) && v >= 0.01 && v <= 10) {
         st.step = v;
-        player.sendClientMessage(COLOR_WHITE, `[装扮] 微调步长已设为 ${v}`);
+        sysMsg(player, "attire", `微调步长已设为 ${v}`, "plain");
       } else {
-        player.sendClientMessage(COLOR_ERROR, "[装扮] 步长需为 0.01-10 之间的数字");
+        sysMsg(player, "attire", "步长需为 0.01-10 之间的数字", "error");
       }
     }
     st.dialogOpen = false;
@@ -538,7 +539,7 @@ async function showVehicleEditDialog(player: Player): Promise<void> {
   if (res.listItem === 7) {
     // 删除：删 DB 行 → 重建预设（该挂件消失）
     await prisma.vehiclePresetItem.delete({ where: { id: st.itemId } });
-    player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已删除该挂件");
+    sysMsg(player, "attire", "已删除该挂件", "success");
     endVehicleAttireEdit(player, true);
     return;
   }
@@ -555,11 +556,11 @@ async function showVehicleEditDialog(player: Player): Promise<void> {
         rZ: st.work.rZ,
       },
     });
-    player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
+    sysMsg(player, "attire", "已保存编辑", "success");
   } catch (e) {
     // 保存失败（条目可能被并发删除/DB 抖动）：不还原也不退出——提示后留在编辑
     logger.error(`[attire] 保存车辆挂件编辑失败 ${player.getName().name}`, e);
-    player.sendClientMessage(COLOR_ERROR, "[装扮] 保存失败，请重试");
+    sysMsg(player, "attire", "保存失败，请重试", "error");
     return;
   }
   endVehicleAttireEdit(player, true);
@@ -578,12 +579,12 @@ async function startEditVehicleAttire(
   const objMap = vehicleObjMap.get(player.id);
   const obj = objMap?.get(itemId);
   if (!objMap || !obj || !obj.isValid()) {
-    player.sendClientMessage(COLOR_ERROR, "该挂件未挂载（先应用此预设或坐进车内），无法实时编辑");
+    sysMsg(player, "attire", "该挂件未挂载（先应用此预设或坐进车内），无法实时编辑", "error");
     return false;
   }
   const item = await prisma.vehiclePresetItem.findUnique({ where: { id: itemId } });
   if (!item) {
-    player.sendClientMessage(COLOR_ERROR, "挂件数据不存在");
+    sysMsg(player, "attire", "挂件数据不存在", "error");
     return false;
   }
   vehicleEditing.set(player.id, {
@@ -647,14 +648,18 @@ async function startEditVehicleAttire(
   // IsPlayerInAnyVehicle 编辑）；车里方向键=转向，不冲突。不强制——站车外
   // 也能调，只是方向键会移动角色
   if (!player.isInAnyVehicle()) {
-    player.sendClientMessage(
-      COLOR_WHITE,
-      "[装扮] 建议坐进车里编辑（车外方向键是移动），坐车后方向键=转向不冲突",
+    sysMsg(
+      player,
+      "attire",
+      "建议坐进车里编辑（车外方向键是移动），坐车后方向键=转向不冲突",
+      "info",
     );
   }
-  player.sendClientMessage(
-    COLOR_WHITE,
-    "[装扮] 方向键 ←/→ 微调挂件位置（小键盘 4/6 同键位），方向键 ↓ 打开操作框",
+  sysMsg(
+    player,
+    "attire",
+    "方向键 ←/→ 微调挂件位置（小键盘 4/6 同键位），方向键 ↓ 打开操作框",
+    "info",
   );
   void showVehicleEditDialog(player);
   return true;
@@ -687,14 +692,14 @@ async function adjustVehiclePresetItem(
     ? res.inputText.trim().split(/\s+/).map(Number)
     : [item.x, item.y, item.z, item.rX, item.rY, item.rZ].map(Number);
   if (nums.length !== 6 || nums.some((n) => !Number.isFinite(n))) {
-    player.sendClientMessage(COLOR_ERROR, "需要 6 个数字（偏移X Y Z / 旋转X Y Z），留空保持当前");
+    sysMsg(player, "attire", "需要 6 个数字（偏移X Y Z / 旋转X Y Z），留空保持当前", "error");
     return back?.();
   }
   await prisma.vehiclePresetItem.update({
     where: { id: itemId },
     data: { x: nums[0], y: nums[1], z: nums[2], rX: nums[3], rY: nums[4], rZ: nums[5] },
   });
-  player.sendClientMessage(COLOR_SUCCESS, `已调整挂件「${name}」的位置/旋转`);
+  sysMsg(player, "attire", `已调整挂件「${name}」的位置/旋转`, "success");
   // B4：用爱车实体重应用（玩家在车内时 player.getVehicle 可能不是爱车/为空，
   // 调整后已刷出的爱车挂件必须刷新）
   const veh = getOwnedVehicle(player.id);
@@ -718,7 +723,7 @@ async function addVehiclePresetItem(
   });
   const nextSlot = (maxSlot?.slotId ?? -1) + 1;
   if (nextSlot >= MAX_VEHICLE_ATTIRE) {
-    player.sendClientMessage(COLOR_ERROR, `车辆预设最多 ${MAX_VEHICLE_ATTIRE} 个挂件`);
+    sysMsg(player, "attire", `车辆预设最多 ${MAX_VEHICLE_ATTIRE} 个挂件`, "error");
     return back?.();
   }
   const attires = await prisma.attire.findMany({
@@ -726,7 +731,7 @@ async function addVehiclePresetItem(
     orderBy: { name: "asc" },
   });
   if (attires.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "车辆装扮库为空，请联系管理员添加");
+    sysMsg(player, "attire", "车辆装扮库为空，请联系管理员添加", "plain");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -763,7 +768,7 @@ async function addVehiclePresetItem(
         Number(attire.rZ),
       ];
   if (nums.length !== 6 || nums.some((n) => !Number.isFinite(n))) {
-    player.sendClientMessage(COLOR_ERROR, "需要 6 个数字（偏移X Y Z / 旋转X Y Z）");
+    sysMsg(player, "attire", "需要 6 个数字（偏移X Y Z / 旋转X Y Z）", "error");
     return back?.();
   }
   try {
@@ -780,14 +785,14 @@ async function addVehiclePresetItem(
         rZ: nums[5],
       },
     });
-    player.sendClientMessage(COLOR_SUCCESS, `已添加挂件 ${attire.name}`);
+    sysMsg(player, "attire", `已添加挂件 ${attire.name}`, "success");
     // U1：该预设正应用在当前爱车时重应用（添加后挂件即时出现）
     const veh = getOwnedVehicle(player.id);
     if (veh && veh.isValid()) await applyVehiclePreset(veh, presetId, player.id);
     await vehiclePresetDetail(player, presetId, modelId, back);
   } catch (e) {
     logger.error(`[attire] 添加车辆挂件失败`, e);
-    player.sendClientMessage(COLOR_ERROR, "添加失败（可能槽位冲突）");
+    sysMsg(player, "attire", "添加失败（可能槽位冲突）", "error");
     return back?.();
   }
 }

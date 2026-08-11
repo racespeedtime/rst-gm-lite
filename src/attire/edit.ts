@@ -1,7 +1,7 @@
 import { EditResponseTypesEnum, ObjectMpEvent, PlayerEvent } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import { playerEditing, vehicleEditing, cleanupAttireEditing } from "./state";
 import { applyPlayerPreset } from "./player";
 
@@ -38,7 +38,7 @@ export function initAttireEditor(): void {
         playerEditing.delete(player.id);
         // 取消：重新应用当前预设，恢复原位
         void applyPlayerPreset(player, st.presetId);
-        player.sendClientMessage(COLOR_WHITE, "[装扮] 已取消编辑，恢复原位置");
+        sysMsg(player, "attire", "已取消编辑，恢复原位置", "info");
         return next();
       }
       if (response === EditResponseTypesEnum.FINAL) {
@@ -65,10 +65,10 @@ export function initAttireEditor(): void {
               sZ: fScaleZ,
             },
           });
-          player.sendClientMessage(COLOR_SUCCESS, "[装扮] 已保存编辑");
+          sysMsg(player, "attire", "已保存编辑", "success");
         } catch (e) {
           logger.error(`[attire] 保存挂件编辑失败 ${player.getName().name}`, e);
-          player.sendClientMessage(COLOR_ERROR, "[装扮] 保存失败");
+          sysMsg(player, "attire", "保存失败", "error");
         }
       })();
       return next();

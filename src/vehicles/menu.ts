@@ -10,6 +10,7 @@ import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { isPlayerLocked } from "@/core/interaction";
 import { showDialog } from "@/utils/dialog";
+import { sysMsg } from "@/utils/msg";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import type { MenuBack } from "@/core/panel";
 import {
@@ -26,7 +27,7 @@ import { getSetting, updateSetting, notifySaved } from "@/personalize/settings";
 import { openVehiclePresetMenu } from "@/attire";
 import { parseIntInRange } from "@/utils/parse";
 
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
+import { COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 
 /**
  * 爱车面板入口：
@@ -50,7 +51,7 @@ export async function openMyVehicleMenu(player: Player, back?: MenuBack): Promis
         label: "收起当前车辆",
         run: () => {
           destroyPlayerVehicle(player.id);
-          player.sendClientMessage(COLOR_SUCCESS, "已收起当前车辆");
+          sysMsg(player, "vehicle", "已收起当前车辆", "success");
         },
       },
     );
@@ -86,7 +87,7 @@ async function spawnVehicleFlow(player: Player, back?: MenuBack): Promise<void> 
   if (res.response !== 1) return back?.();
   const modelId = parseIntInRange(res.inputText, 400, 611);
   if (modelId == null) {
-    player.sendClientMessage(COLOR_ERROR, "请输入 400-611 的整数车辆ID");
+    sysMsg(player, "vehicle", "请输入 400-611 的整数车辆ID", "error");
     return back?.();
   }
   await spawnVehicle(player, modelId);
@@ -102,7 +103,7 @@ export async function listVehiclesFlow(player: Player, back?: MenuBack): Promise
     orderBy: { modelId: "asc" },
   });
   if (vehicles.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "你还没有爱车，先刷一辆吧（/c 车辆ID）");
+    sysMsg(player, "vehicle", "你还没有爱车，先刷一辆吧（/c 车辆ID）", "plain");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -144,7 +145,7 @@ async function resolveManagedVehicle(player: Player): Promise<Vehicle | null> {
     orderBy: { modelId: "asc" },
   });
   if (vehicles.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, "你还没有爱车，先刷一辆吧（/c 车辆ID）");
+    sysMsg(player, "vehicle", "你还没有爱车，先刷一辆吧（/c 车辆ID）", "error");
     return null;
   }
   const r = await showPagedDialog(player, {
@@ -205,7 +206,7 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
     if (!r) return;
     if (r.response !== 1) return toThis();
     if (r.inputText.trim().length > 10) {
-      player.sendClientMessage(COLOR_ERROR, "车牌文字最多 10 个字符");
+      sysMsg(player, "vehicle", "车牌文字最多 10 个字符", "error");
       return toThis();
     }
     const plate = r.inputText.trim();
@@ -218,7 +219,7 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
         data: { plateNumber: plate },
       });
     }
-    player.sendClientMessage(COLOR_SUCCESS, "车牌已更换");
+    sysMsg(player, "vehicle", "车牌已更换", "success");
     return toThis();
   } else if (res.listItem === 2) {
     const r = await showDialog(
@@ -242,7 +243,7 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
       c2 < 0 ||
       c2 > 255
     ) {
-      player.sendClientMessage(COLOR_ERROR, "颜色代码需为 0-255 的整数");
+      sysMsg(player, "vehicle", "颜色代码需为 0-255 的整数", "error");
       return toThis();
     }
     // 换色复用 changeMyVehicleColor（持久化到默认预设，与 /cc 行为一致——
@@ -258,7 +259,7 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
       const pos = p.getPos();
       p.setPos(pos.x, pos.y, pos.z + 5);
       // 实际是车主主动踢人（车没锁），文案与动作一致（对齐 /c kick）
-      p.sendClientMessage(COLOR_ERROR, "你被车主移出了车辆");
+      sysMsg(p, "vehicle", "你被车主移出了车辆", "error");
       kicked++;
     }
     player.sendClientMessage(
@@ -268,7 +269,7 @@ export async function manageCurrentVehicle(player: Player, back?: MenuBack): Pro
     return toThis();
   } else if (res.listItem === 4) {
     destroyPlayerVehicle(player.id);
-    player.sendClientMessage(COLOR_SUCCESS, "已回收车辆");
+    sysMsg(player, "vehicle", "已回收车辆", "success");
     return back?.(); // 回收后车没了，回上一层
   } else if (res.listItem === 5) {
     toggleVehicleParam(player, veh, "lights", "车灯");
@@ -294,7 +295,7 @@ function toggleVehicleParam(
 ): void {
   const p = veh.getParamsEx();
   if (!p.ret) {
-    player.sendClientMessage(COLOR_ERROR, "车辆参数读取失败，请重试");
+    sysMsg(player, "vehicle", "车辆参数读取失败，请重试", "error");
     return;
   }
   const cur = p[key];
@@ -328,7 +329,7 @@ function toggleVehicleParam(
 export function initMyVehicleCommands(): void {
   const cmdGuard = (player: Player, next: () => unknown): boolean => {
     if (!getAuthState(player.id) || isPlayerLocked(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "请先完成登录后再操作");
+      sysMsg(player, "vehicle", "请先完成登录后再操作", "error");
       next();
       return false;
     }
@@ -347,11 +348,11 @@ export function initMyVehicleCommands(): void {
     } else if (arg === "chepai") {
       const plate = subcommand.slice(1).join(" ").trim();
       if (!plate) {
-        player.sendClientMessage(COLOR_ERROR, "用法: /cars chepai 车牌文字（≤10字符）");
+        sysMsg(player, "vehicle", "用法: /cars chepai 车牌文字（≤10字符）", "error");
         return next();
       }
       if (plate.length > 10) {
-        player.sendClientMessage(COLOR_ERROR, "车牌文字最多 10 个字符");
+        sysMsg(player, "vehicle", "车牌文字最多 10 个字符", "error");
         return next();
       }
       await setMyVehiclePlate(player, plate);
@@ -368,7 +369,7 @@ export function initMyVehicleCommands(): void {
         c2 < 0 ||
         c2 > 255
       ) {
-        player.sendClientMessage(COLOR_ERROR, "用法: /cars color 颜色代码1 颜色代码2（0-255）");
+        sysMsg(player, "vehicle", "用法: /cars color 颜色代码1 颜色代码2（0-255）", "error");
         return next();
       }
       changeMyVehicleColor(player, c1, c2);
@@ -425,9 +426,11 @@ export function initMyVehicleCommands(): void {
   // 挂件命令——装扮由模型+预设驱动，警灯/尾翼就是车辆装扮预设里的挂件，引导玩家去加
   PlayerEvent.onCommandText("infobj", ({ player, next }) => {
     if (!cmdGuard(player, next)) return;
-    player.sendClientMessage(
-      COLOR_WHITE,
-      "[装扮] 警灯/尾翼请在「车辆装扮预设」中添加（装扮由模型+预设驱动，可自由组合）",
+    sysMsg(
+      player,
+      "attire",
+      "警灯/尾翼请在「车辆装扮预设」中添加（装扮由模型+预设驱动，可自由组合）",
+      "info",
     );
     void openVehiclePresetMenu(player);
     return next();

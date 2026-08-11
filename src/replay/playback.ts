@@ -15,6 +15,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { formatRaceTimeCs } from "@/utils/format";
+import { sysMsg } from "@/utils/msg";
 import { isInRace } from "@/race/room";
 import { isInChallenge } from "./challenge";
 import { getOwnedVehicle, addNitro } from "@/vehicles";
@@ -41,7 +42,7 @@ import { RECORDING_DIR } from "./storage";
 import { applyWorldEnv } from "@/core/worldenv";
 import { playCountdown, cancelCountdownFx } from "@/interface/countdownFx";
 import { DEFAULT_CHARSET } from "@/utils/constants";
-import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
+import { COLOR_RACE, COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
 
 /**
  * 回放会话（NPC 逐帧驱动，非原生 .rec）：
@@ -729,7 +730,7 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     for (const pid of targets) {
       const w = Player.getInstance(pid);
       if (w && w.isConnected()) {
-        w.sendClientMessage(COLOR_RACE, `[回放] ${msg}`);
+        sysMsg(w, "replay", msg, "info");
       }
     }
   }
@@ -782,7 +783,7 @@ function tickSession(session: ReplaySession): void {
   // ghost 留在无人世界继续播是资源浪费且用户困惑（"我的回放呢"）
   const owner = Player.getInstance(session.ownerId);
   if (owner && owner.isConnected() && owner.getVirtualWorld() !== session.worldId) {
-    owner.sendClientMessage(COLOR_ORANGE, "已离开回放世界，回放已停止");
+    sysMsg(owner, "replay", "已离开回放世界，回放已停止", "warn");
     stopReplaySession(session.ownerId);
     return;
   }
@@ -977,22 +978,22 @@ export async function spawnReplay(
   const auth = getAuthState(player.id);
   if (!auth) return false;
   if (sessions.has(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "你已在播放回放中，先 /rp stop");
+    sysMsg(player, "replay", "你已在播放回放中，先 /rp stop", "error");
     return false;
   }
   if (isInRace(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "比赛中不能播放回放（世界隔离）");
+    sysMsg(player, "replay", "比赛中不能播放回放（世界隔离）", "error");
     return false;
   }
   if (isInChallenge(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "影子挑战中不能播放回放");
+    sysMsg(player, "replay", "影子挑战中不能播放回放", "error");
     return false;
   }
   const replay = await prisma.replay.findFirst({
     where: { id: replayId, deletedAt: null },
   });
   if (!replay) {
-    player.sendClientMessage(COLOR_ERROR, "回放不存在或已删除");
+    sysMsg(player, "replay", "回放不存在或已删除", "error");
     return false;
   }
   let data: ReplayData;
@@ -1000,7 +1001,7 @@ export async function spawnReplay(
     data = loadReplayData(replay.fileName); // 只读缓存（多人共享同一文件数据）
   } catch (e) {
     logger.error(`[replay] 回放文件读取失败 ${replay.fileName}`, e);
-    player.sendClientMessage(COLOR_ERROR, "回放文件损坏或不存在");
+    sysMsg(player, "replay", "回放文件损坏或不存在", "error");
     return false;
   }
 
@@ -1031,7 +1032,7 @@ export async function spawnReplay(
   // NPC 池子边界：创建前检查剩余槽位（回放/挑战共用 100 槽，各世界多人同时
   // 开回放/挑战可能占满）。不足则明确提示剩余数，避免创建到一半才失败
   if (npcSlotsLeft() < count) {
-    player.sendClientMessage(COLOR_ERROR, `NPC 槽位不足（剩余 ${npcSlotsLeft()}），请稍后再试`);
+    sysMsg(player, "replay", `NPC 槽位不足（剩余 ${npcSlotsLeft()}），请稍后再试`, "error");
     return false;
   }
   // 按类型分流：ghost（自由录制）→ 当前世界播放（其他玩家看得见、可一起玩，
@@ -1058,7 +1059,7 @@ export async function spawnReplay(
       if (!npc) {
         if (ghosts.length === 0) {
           freeReplayWorld(worldId); // race 回放已分配独立世界：失败即回收（ghost 回放 worldId 是玩家世界，内部守卫不会误回收）
-          player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足，回放创建失败");
+          sysMsg(player, "replay", "NPC 槽位不足，回放创建失败", "error");
           return false;
         }
         logger.warn(
@@ -1180,7 +1181,7 @@ export async function spawnReplay(
       }
     }
     freeReplayWorld(worldId);
-    player.sendClientMessage(COLOR_ERROR, "NPC 槽位不足或创建失败");
+    sysMsg(player, "replay", "NPC 槽位不足或创建失败", "error");
     return false;
   }
 
@@ -1287,7 +1288,7 @@ export async function spawnReplay(
 export function controlReplay(player: Player, action: string, arg?: string): void {
   const session = sessions.get(player.id);
   if (!session) {
-    player.sendClientMessage(COLOR_ERROR, "你不在播放回放中，用 /rp play 开始");
+    sysMsg(player, "replay", "你不在播放回放中，用 /rp play 开始", "error");
     return;
   }
   switch (action) {
@@ -1305,7 +1306,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
           /* 暂停帧失败不影响：恢复播放后下一帧会重发 */
         }
       }
-      player.sendClientMessage(COLOR_RACE, "回放已暂停");
+      sysMsg(player, "replay", "回放已暂停", "warn");
       break;
     }
     case "play": {
@@ -1313,22 +1314,22 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       session.paused = false;
       // 全部 ghost 已播完（停发）→ 按 play 不会动，明确提示回看而非无响应
       if (session.ghosts.every((g) => g.stopped)) {
-        player.sendClientMessage(COLOR_RACE, "回放已播完（/rp seek 可回看）");
+        sysMsg(player, "replay", "回放已播完（/rp seek 可回看）", "warn");
         break;
       }
-      player.sendClientMessage(COLOR_RACE, `回放继续 ×${session.speed}`);
+      sysMsg(player, "replay", `回放继续 ×${session.speed}`, "warn");
       break;
     }
     case "speed": {
       if (!arg) {
         // 不填参数：只显示当前倍速（对齐命令帮助的提示逻辑）
-        player.sendClientMessage(COLOR_RACE, `当前倍速 ×${session.speed}`);
+        sysMsg(player, "replay", `当前倍速 ×${session.speed}`, "warn");
         break;
       }
       const n = Number(arg);
       if (REPLAY_SPEEDS.includes(n)) {
         session.speed = n;
-        player.sendClientMessage(COLOR_RACE, `倍速 ×${session.speed}`);
+        sysMsg(player, "replay", `倍速 ×${session.speed}`, "warn");
       } else {
         session.speed = 1;
         player.sendClientMessage(
@@ -1340,12 +1341,12 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
     }
     case "seek": {
       if (!arg) {
-        player.sendClientMessage(COLOR_ERROR, "用法: /rp seek <秒|mm:ss>");
+        sysMsg(player, "replay", "用法: /rp seek <秒|mm:ss>", "error");
         return;
       }
       const ms = parseTimeArg(arg);
       if (ms == null) {
-        player.sendClientMessage(COLOR_ERROR, "时间格式无效（秒或 mm:ss）");
+        sysMsg(player, "replay", "时间格式无效（秒或 mm:ss）", "error");
         return;
       }
       // seek 上限 = 播放终点（v7 末帧时间戳 / 旧文件均匀间隔——与
@@ -1371,7 +1372,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       cancelCountdownFx(player.id); // 取消进行中的开场倒计时动画（TD 一并销毁）
       for (const g of session.ghosts) renderGhost(session, g);
       syncObserverTds(session); // seek 后 TD 状态与时间线一致
-      player.sendClientMessage(COLOR_RACE, `已跳转到 ${(target / 1000).toFixed(1)}s`);
+      sysMsg(player, "replay", `已跳转到 ${(target / 1000).toFixed(1)}s`, "warn");
       break;
     }
     case "watch": {
@@ -1383,13 +1384,13 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
           ensureObserverTds(session, player);
           syncObserverTds(session);
         }
-        player.sendClientMessage(COLOR_ORANGE, "已切换为观看回放视角");
+        sysMsg(player, "replay", "已切换为观看回放视角", "warn");
       }
       break;
     }
     case "stop": {
       stopReplaySession(player.id);
-      player.sendClientMessage(COLOR_SUCCESS, "回放已停止");
+      sysMsg(player, "replay", "回放已停止", "success");
       break;
     }
     default:

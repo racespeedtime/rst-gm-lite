@@ -2,6 +2,7 @@ import { Dialog, DialogStylesEnum, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState } from "@/auth/auth";
 import { showDialog } from "@/utils/dialog";
+import { sysMsg } from "@/utils/msg";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import { isSuperAdmin } from "@/admin/op";
 import { deleteRecordingFile } from "./storage";
@@ -11,7 +12,7 @@ import { isInChallenge, startChallengeWithReplay } from "./challenge";
 import { isInRace } from "@/race/room";
 import { formatDuration, formatShortDate } from "@/utils/format";
 import type { MenuBack } from "@/core/panel";
-import { COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
+import { COLOR_ERROR } from "@/utils/colors";
 
 /** 时长/时间格式化收敛至 utils/format（formatDuration/formatShortDate） */
 
@@ -50,12 +51,12 @@ async function confirmDeleteReplay(
     }),
   );
   if (!v || v.response !== 1 || v.inputText.trim() !== fileName) {
-    player.sendClientMessage(COLOR_ERROR, "删除已取消（文件名不匹配）");
+    sysMsg(player, "replay", "删除已取消（文件名不匹配）", "error");
     return back?.();
   }
   await prisma.replay.update({ where: { id: replayId }, data: { deletedAt: new Date() } });
   deleteRecordingFile(fileName);
-  player.sendClientMessage(COLOR_SUCCESS, "回放已删除");
+  sysMsg(player, "replay", "回放已删除", "success");
   return back?.();
 }
 
@@ -190,7 +191,7 @@ export async function openPublicReplayMenu(player: Player, back?: MenuBack): Pro
     orderBy: { createdAt: "desc" },
   });
   if (list.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, "暂无比赛回放（跑一场比赛后自动生成）");
+    sysMsg(player, "replay", "暂无比赛回放（跑一场比赛后自动生成）", "error");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -215,7 +216,7 @@ export async function openPublicReplayMenu(player: Player, back?: MenuBack): Pro
 /** OP：全部回放管理（列出含录者，可删除任意回放） */
 export async function openOpReplayPanel(player: Player, back?: MenuBack): Promise<void> {
   if (!isSuperAdmin(player)) {
-    player.sendClientMessage(COLOR_ERROR, "你没有执行此操作的权限");
+    sysMsg(player, "replay", "你没有执行此操作的权限", "error");
     return back?.();
   }
   const list = await prisma.replay.findMany({
@@ -223,7 +224,7 @@ export async function openOpReplayPanel(player: Player, back?: MenuBack): Promis
     orderBy: { createdAt: "desc" },
   });
   if (list.length === 0) {
-    player.sendClientMessage(COLOR_ERROR, "暂无回放记录");
+    sysMsg(player, "replay", "暂无回放记录", "error");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -279,7 +280,7 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
       // 比赛中禁止手动停止：比赛自动录制由系统管理，提前停止会丢名次元数据
       //（endRoom 的 raceRecordingStop 找不到会话，完赛录像永远缺 rank/finished）
       if (isInRace(player.id)) {
-        player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中由系统自动录制，比赛结束后自动保存");
+        sysMsg(player, "replay", "比赛中由系统自动录制，比赛结束后自动保存", "info");
         return back?.();
       }
       await stopRecording(player.id);
@@ -287,11 +288,11 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
     }
     if (isInRace(player.id)) {
       // 比赛中由比赛系统自动录制（race 类型），手动开始会与自动录制抢会话
-      player.sendClientMessage(COLOR_ERROR, "比赛中已自动录制（结束自动保存），无需手动开始");
+      sysMsg(player, "replay", "比赛中已自动录制（结束自动保存），无需手动开始", "error");
       return back?.();
     }
     if (isInChallenge(player.id) || getReplaySession(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "影子挑战/回放中不能录制");
+      sysMsg(player, "replay", "影子挑战/回放中不能录制", "error");
       return back?.();
     }
     // 开始录制前确认：录制会持续采集当前行驶，误触会白录一段
@@ -309,7 +310,7 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
     const ok = await startRecording(player, { type: "ghost" });
     if (!ok) return back?.(); // 失败（无车等，startRecording 已发错误提示）→ 回面板
     // 录制已正式开始：不再回到面板（结束整个面板流程），提示录制中
-    player.sendClientMessage(COLOR_SUCCESS, "录制中… 用 /rec stop 或 /p → 回放 停止并保存");
+    sysMsg(player, "replay", "录制中… 用 /rec stop 或 /p → 回放 停止并保存", "success");
     return;
   } else if (res.listItem === 4) {
     await openReplayControlMenu(player, panelBack);
@@ -339,7 +340,7 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
   if (res.response !== 1) return back?.();
   const session = getReplaySession(player.id);
   if (!session && res.listItem !== 5) {
-    player.sendClientMessage(COLOR_ERROR, "你不在播放回放中，先在「我的录制」选择播放");
+    sysMsg(player, "replay", "你不在播放回放中，先在「我的录制」选择播放", "error");
     return back?.();
   }
   switch (res.listItem) {

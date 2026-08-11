@@ -17,7 +17,7 @@ import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { clearTimeoutSafe, setTimeoutSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { DEFAULT_CHARSET } from "@/utils/constants";
-import { COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import { logger } from "@/logger";
 import {
   DOORS_SPEED,
@@ -453,11 +453,11 @@ async function showFloorDialog(el: ElevatorInstance, player: Player): Promise<vo
   if (!res || res.response !== 1) return; // 取消/断线
   const floorId = res.listItem;
   if (el.requestedBy[floorId] !== InvalidEnum.PLAYER_ID || queueHas(el, floorId)) {
-    player.sendClientMessage(COLOR_ERROR, "[电梯] 该楼层已在队列中");
+    sysMsg(player, "elevator", "该楼层已在队列中", "error");
   } else if (floorId === el.floor) {
-    player.sendClientMessage(COLOR_ERROR, "[电梯] 电梯已在此楼层");
+    sysMsg(player, "elevator", "电梯已在此楼层", "error");
   } else if (didRequest(el, player)) {
-    player.sendClientMessage(COLOR_ERROR, "[电梯] 您已呼叫过电梯");
+    sysMsg(player, "elevator", "您已呼叫过电梯", "error");
   } else {
     callElevator(el, player, floorId);
   }
@@ -517,6 +517,7 @@ function handleKeyState(
         player.sendClientMessage(0xffdd00aa, `[电梯] 已呼叫「${cfg.floors[target]}」，请稍候`);
         if (cfg.callChatMessage) {
           const name = cfg.floors[el.floor];
+          // * 开头是 RP 氛围广播（对齐原版电梯聊天消息），刻意不带模块前缀
           const msg =
             el.state === ELEVATOR_STATE_MOVING
               ? `* 电梯已呼叫，正在前往「${name}」…`

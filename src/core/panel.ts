@@ -34,7 +34,7 @@ import { showMyProfile, openLookupPlayerInfo } from "@/core/profile";
 import { openHelp } from "@/core/help";
 import { openReplayMenuPanel } from "@/replay/menu";
 import { showDialog } from "@/utils/dialog";
-import { COLOR_ERROR, COLOR_INFO } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /** 面板条目：条件可见 + 点击执行 */
 interface PanelItem {
@@ -141,7 +141,7 @@ const panelGroups: PanelGroup[] = [
           if (pr && room && room.state === "RACING") {
             rollbackToPrevCp(player, pr, room);
           } else {
-            player.sendClientMessage(COLOR_ERROR, "[赛车] 当前不在比赛中");
+            sysMsg(player, "race", "当前不在比赛中", "error");
           }
         },
       },
@@ -227,7 +227,7 @@ const panelGroups: PanelGroup[] = [
         raceSafe: true,
         run: (player) => {
           exitEdit(player.id);
-          player.sendClientMessage(COLOR_INFO, "已退出赛道编辑模式");
+          sysMsg(player, "race", "已退出赛道编辑模式", "info");
         },
       },
     ],
@@ -451,11 +451,11 @@ export function initPanel(): void {
   // 时不打开，避免覆盖当前对话框或把别人的流程锁解开）
   const openPanelByCommand = (player: Player): void => {
     if (!getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "请先完成登录");
+      sysMsg(player, "race", "请先完成登录", "error");
       return;
     }
     if (isPlayerLocked(player.id)) {
-      player.sendClientMessage(COLOR_INFO, "当前正在其他流程中，请稍后再试");
+      sysMsg(player, "race", "当前正在其他流程中，请稍后再试", "info");
       return;
     }
     void openPanel(player); // openPanel 内部自行 lock/unlock
@@ -475,11 +475,11 @@ export function initPanel(): void {
   // 称号=名字前缀、小尾巴=名字后缀（人物菜单内）；全部复用面板现有子菜单。
   const openMySettings = (player: Player): void => {
     if (!getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "请先完成登录");
+      sysMsg(player, "race", "请先完成登录", "error");
       return;
     }
     if (isPlayerLocked(player.id)) {
-      player.sendClientMessage(COLOR_INFO, "当前正在其他流程中，请稍后再试");
+      sysMsg(player, "race", "当前正在其他流程中，请稍后再试", "info");
       return;
     }
     void openMySettingsMenu(player);

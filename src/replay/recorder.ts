@@ -23,7 +23,8 @@ import {
 } from "./storage";
 import { getReplaySession } from "./playback";
 import { isInChallenge } from "./challenge";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_ORANGE } from "@/utils/colors";
+import { COLOR_SUCCESS } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /**
  * 录制会话（自定义二进制录制，非原生 .rec）：
@@ -198,7 +199,7 @@ function checkRecordingBoundary(session: RecordingSession, player: Player): bool
         : null;
   if (reason) {
     session.autoStopTriggered = true;
-    player.sendClientMessage(COLOR_ORANGE, `[回放] ${reason}，自动停止并保存`);
+    sysMsg(player, "replay", `${reason}，自动停止并保存`, "warn");
     void stopRecording(session.playerId, { quiet: true });
     return true;
   }
@@ -300,15 +301,15 @@ export async function startRecording(
 ): Promise<boolean> {
   const auth = getAuthState(player.id);
   if (!auth) {
-    player.sendClientMessage(COLOR_ERROR, "请先登录");
+    sysMsg(player, "replay", "请先登录", "error");
     return false;
   }
   if (getReplaySession(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "回放中不能录制，先 /rp stop");
+    sysMsg(player, "replay", "回放中不能录制，先 /rp stop", "error");
     return false;
   }
   if (isInChallenge(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "影子挑战中不能录制，先 /challenge stop");
+    sysMsg(player, "replay", "影子挑战中不能录制，先 /challenge stop", "error");
     return false;
   }
   if (sessions.has(player.id)) {
@@ -326,20 +327,20 @@ export async function startRecording(
         void stopRecording(player.id, { quiet: true });
       }
     } else {
-      player.sendClientMessage(COLOR_ERROR, "你已在录制中");
+      sysMsg(player, "replay", "你已在录制中", "error");
       return false;
     }
   }
   const veh = getOwnedVehicle(player.id);
   if (!veh || !veh.isValid()) {
-    player.sendClientMessage(COLOR_ERROR, "需要先刷车（/c 车辆ID）才能录制");
+    sysMsg(player, "replay", "需要先刷车（/c 车辆ID）才能录制", "error");
     return false;
   }
   const pos = veh.getPos();
   const q = veh.getRotationQuat();
   const vel = veh.getVelocity();
   if (!q.ret) {
-    player.sendClientMessage(COLOR_ERROR, "车辆状态读取失败，请重试");
+    sysMsg(player, "replay", "车辆状态读取失败，请重试", "error");
     return false;
   }
   // 同步注册会话（先 set 再异步补 bestMs）——消除竞态：beginRace 里
@@ -443,7 +444,7 @@ export async function stopRecording(
   }
   if (session.frames.length < 2) {
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage(COLOR_ERROR, "录制内容过短，已取消");
+      sysMsg(player, "replay", "录制内容过短，已取消", "error");
     }
     return null;
   }
@@ -495,7 +496,7 @@ export async function stopRecording(
   const fileName = `${playerId}_${session.startAt}.rec`;
   if (!saveRecordingFile(fileName, buf)) {
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage(COLOR_ERROR, "回放保存失败（磁盘错误）");
+      sysMsg(player, "replay", "回放保存失败（磁盘错误）", "error");
     }
     return null;
   }
@@ -578,7 +579,7 @@ export async function stopRecording(
     // DB 写入失败：文件已落盘 + 待落库索引已记（见上）——保留文件，启动时按
     // 索引补建 DB 记录（不删文件：删了则整段录像丢失；索引兜底保证最终落库）
     if (player && player.isConnected() && !opts?.quiet) {
-      player.sendClientMessage(COLOR_ERROR, "回放元数据保存失败，录像将在下次启动补录");
+      sysMsg(player, "replay", "回放元数据保存失败，录像将在下次启动补录", "error");
     }
     return null;
   }

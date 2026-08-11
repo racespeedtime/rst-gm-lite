@@ -5,13 +5,12 @@ import { checkLoginAllowed } from "@/core/ban";
 import type { MenuBack } from "@/core/panel";
 import { hashPassword, verifyPassword, isLegacyPassword } from "./password";
 import { showDialog } from "@/utils/dialog";
+import { sysMsg } from "@/utils/msg";
 import { containsSensitiveWord } from "@/utils/sensitive";
 
 const MAX_NAME_LEN = 24;
 const MAX_PASSWORD_LEN = 32;
 const MIN_PASSWORD_LEN = 4;
-
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
 
 /** 单个玩家认证状态（内存态） */
 export interface AuthState {
@@ -152,7 +151,7 @@ export async function runAuthFlow(player: Player): Promise<AuthState | null> {
   // 直接用玩家连接的昵称作为账号名（SA-MP 玩家名即账号，改名连接即新账号）
   const name = player.getName().name;
   if (!isValidName(name)) {
-    player.sendClientMessage(COLOR_ERROR, "你的昵称包含非法字符或长度不正确，无法注册账号");
+    sysMsg(player, "auth", "你的昵称包含非法字符或长度不正确，无法注册账号", "error");
     player.kick();
     return null;
   }
@@ -167,7 +166,7 @@ export async function runAuthFlow(player: Player): Promise<AuthState | null> {
     if (oldId != null && oldId !== player.id) {
       const old = Player.getInstance(oldId);
       if (old) {
-        old.sendClientMessage(COLOR_ERROR, "你的账号在别处登录，你已被挤下线");
+        sysMsg(old, "auth", "你的账号在别处登录，你已被挤下线", "error");
         old.kick();
       }
     }
@@ -188,7 +187,7 @@ export async function runAuthFlow(player: Player): Promise<AuthState | null> {
   // 新用户 → 注册（密码二次验证）。注册前敏感词检测（对齐 backend 注册拦截）：
   // 昵称含敏感词拒绝注册。老用户登录不查——账号名是历史既有数据，注册时已过滤
   if (containsSensitiveWord(name)) {
-    player.sendClientMessage(COLOR_ERROR, "昵称包含敏感内容，无法注册账号");
+    sysMsg(player, "auth", "昵称包含敏感内容，无法注册账号", "error");
     player.kick();
     return null;
   }
@@ -217,7 +216,7 @@ async function doLogin(player: Player, userId: string, name: string): Promise<st
   // 登录前校验：封禁（账号/IP）/ 账号禁用 → 直接拒绝（不进入密码流程）
   const denied = await checkLoginAllowed(userId, player.getIp().ip);
   if (denied) {
-    player.sendClientMessage(COLOR_ERROR, `[系统] ${denied.reason}`);
+    sysMsg(player, "auth", `${denied.reason}`, "error");
     player.kick();
     return null;
   }
@@ -236,13 +235,13 @@ async function doLogin(player: Player, userId: string, name: string): Promise<st
     if (!res) return null;
     if (res.response !== 1) {
       // UX-1：按"离开"/ESC 关闭 → 明确提示，防误触被踢被当成服务器故障
-      player.sendClientMessage(COLOR_WHITE, "已取消登录，再见");
+      sysMsg(player, "auth", "已取消登录，再见", "plain");
       return null;
     }
     const pwd = res.inputText;
     const ok = await verifyPassword(pwd, user.password, user.salt);
     if (!ok) {
-      player.sendClientMessage(COLOR_ERROR, "密码错误，请重试");
+      sysMsg(player, "auth", "密码错误，请重试", "error");
       continue;
     }
     // 旧格式密码登录成功 → 升级为 bcrypt（自动升级）
@@ -256,10 +255,10 @@ async function doLogin(player: Player, userId: string, name: string): Promise<st
     }
     // 创建游戏会话
     const sessionId = await openGameSession(player, user.id);
-    player.sendClientMessage(COLOR_SUCCESS, `欢迎回来，${name}`);
+    sysMsg(player, "auth", `欢迎回来，${name}`, "success");
     return sessionId;
   }
-  player.sendClientMessage(COLOR_ERROR, "密码错误次数过多，已断开连接");
+  sysMsg(player, "auth", "密码错误次数过多，已断开连接", "error");
   return null;
 }
 
@@ -294,7 +293,7 @@ export async function askNewPassword(
     }
     pwd = res1.inputText;
     if (!isValidPassword(pwd)) {
-      player.sendClientMessage(COLOR_ERROR, "密码长度需为 4-32 位，请重新输入");
+      sysMsg(player, "auth", "密码长度需为 4-32 位，请重新输入", "error");
       continue;
     }
     // 二次确认
@@ -313,7 +312,7 @@ export async function askNewPassword(
       return null;
     }
     if (res2.inputText !== pwd) {
-      player.sendClientMessage(COLOR_ERROR, "两次输入的密码不一致，请重新输入");
+      sysMsg(player, "auth", "两次输入的密码不一致，请重新输入", "error");
       continue;
     }
     return pwd;
@@ -352,10 +351,10 @@ export async function changeOwnPassword(player: Player, back?: MenuBack): Promis
       verified = true;
       break;
     }
-    player.sendClientMessage(COLOR_ERROR, "当前密码错误，请重试");
+    sysMsg(player, "auth", "当前密码错误，请重试", "error");
   }
   if (!verified) {
-    player.sendClientMessage(COLOR_ERROR, "当前密码验证失败，操作已取消");
+    sysMsg(player, "auth", "当前密码验证失败，操作已取消", "error");
     return back?.();
   }
 
@@ -369,11 +368,11 @@ export async function changeOwnPassword(player: Player, back?: MenuBack): Promis
       where: { id: user.id },
       data: { password: await hashPassword(pwd), salt: null },
     });
-    player.sendClientMessage(COLOR_SUCCESS, "密码修改成功");
+    sysMsg(player, "auth", "密码修改成功", "success");
     logger.info(`[auth] ${auth.username} 修改了自己的密码`);
   } catch (e) {
     logger.error(`[auth] ${auth.username} 修改密码失败`, e);
-    player.sendClientMessage(COLOR_ERROR, "修改失败，请稍后重试");
+    sysMsg(player, "auth", "修改失败，请稍后重试", "error");
   }
   return back?.();
 }
@@ -390,7 +389,7 @@ async function doRegister(
   const ip = player.getIp().ip;
   const denied = await checkLoginAllowed("", ip);
   if (denied) {
-    player.sendClientMessage(COLOR_ERROR, `[系统] ${denied.reason}`);
+    sysMsg(player, "auth", `${denied.reason}`, "error");
     player.kick();
     return null;
   }
@@ -422,11 +421,11 @@ async function doRegister(
     // 事务外登记会话起始与中间态（内存态不参与事务）
     sessionStartedAt.set(player.id, new Date());
     pendingSessions.set(player.id, { sessionId, userId });
-    player.sendClientMessage(COLOR_SUCCESS, `注册成功，欢迎你，${name}`);
+    sysMsg(player, "auth", `注册成功，欢迎你，${name}`, "success");
     return { userId, sessionId };
   } catch (e) {
     logger.error(`[auth] 注册失败 ${name}`, e);
-    player.sendClientMessage(COLOR_ERROR, "注册失败，请重试");
+    sysMsg(player, "auth", "注册失败，请重试", "error");
     return null;
   }
 }

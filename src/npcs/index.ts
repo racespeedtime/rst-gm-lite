@@ -18,7 +18,7 @@ import { isInRace } from "@/race/room";
 import { clearTimeoutSafe, setTimeoutSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { DEFAULT_CHARSET } from "@/utils/constants";
-import { COLOR_ERROR, COLOR_SUCCESS } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { logger } from "@/logger";
 
@@ -364,17 +364,17 @@ function removePassenger(player: Player): void {
 function rideDrifter(player: Player, def: DrifterDef): void {
   // 基础条件优先校验（世界不对时先提示，不落到满员/切换逻辑）
   if (player.getVirtualWorld() !== PUBLIC_WORLD_ID) {
-    player.sendClientMessage(COLOR_ERROR, "[漂移] 请先回到公共大世界再上车");
+    sysMsg(player, "drift", "请先回到公共大世界再上车", "error");
     return;
   }
   const ent = entities.get(def.id);
   if (!ent || !ent.npc?.isValid() || !ent.vehicle?.isValid()) {
-    player.sendClientMessage(COLOR_ERROR, `[漂移] ${def.rec} 尚未就绪，请稍后再试`);
+    sysMsg(player, "drift", `${def.rec} 尚未就绪，请稍后再试`, "error");
     return;
   }
   // 已在目标车上 → 提示（避免重复上车/反复切换抖动）
   if (ent.passengerSlots.includes(player)) {
-    player.sendClientMessage(COLOR_ERROR, `[漂移] 你已在 ${def.rec} 的车上`);
+    sysMsg(player, "drift", `你已在 ${def.rec} 的车上`, "error");
     return;
   }
   // 切换：先释放玩家在其它 NPC 车上的座位（坐在旧车上直接换到新车，
@@ -382,15 +382,17 @@ function rideDrifter(player: Player, def: DrifterDef): void {
   removePassenger(player);
   const slot = ent.passengerSlots.indexOf(null);
   if (slot === -1) {
-    player.sendClientMessage(COLOR_ERROR, `[漂移] ${def.rec} 的车已满员`);
+    sysMsg(player, "drift", `${def.rec} 的车已满员`, "error");
     return;
   }
   // 座位号 = 槽位 + 1（0 号司机位被 NPC 占用）
   ent.vehicle.putPlayerIn(player, slot + 1);
   ent.passengerSlots[slot] = player;
-  player.sendClientMessage(
-    COLOR_SUCCESS,
-    `[漂移] 已上车：${def.rec}（路线：${def.route}），NPC 开车，按 F 下车`,
+  sysMsg(
+    player,
+    "drift",
+    `已上车：${def.rec}（路线：${def.route}），NPC 开车，按 F 下车`,
+    "success",
   );
 }
 
@@ -485,15 +487,15 @@ export function initDrifterNpcs(): void {
   PlayerEvent.onCommandText("drift", ({ player, next }) => {
     if (player.isNpc()) return next();
     if (!getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "请先登录");
+      sysMsg(player, "drift", "请先登录", "error");
       return next();
     }
     if (isPlayerLocked(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前正在其他流程中，请稍后再试");
+      sysMsg(player, "drift", "当前正在其他流程中，请稍后再试", "error");
       return next();
     }
     if (isInRace(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能乘坐漂移 NPC");
+      sysMsg(player, "drift", "比赛中不能乘坐漂移 NPC", "error");
       return next();
     }
     lockPlayer(player.id);

@@ -11,15 +11,13 @@ import {
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
+import { sysMsg } from "@/utils/msg";
 import { registerObjectCollision, clearObjectCollisions } from "@/core/collision";
 import { teleportTo } from "@/teleport";
 import { setTimeoutSafe } from "@/core/timers";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { RACE_WORLD_BASE } from "@/race/room";
-
-import { COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
-
 /**
  * 房屋物件可见世界区间（按数组传，streamer 支持）：
  * - 普通房屋（不关联赛车/传送点）：公共大世界 0 + 战局 1..1000——赛道（1001..2000）
@@ -514,7 +512,7 @@ export function initHouseCommands(): void {
     } else if (cmd === "goto") {
       await houseGoto(player, subcommand.slice(1).join(" "));
     } else {
-      player.sendClientMessage(COLOR_WHITE, "房屋命令: /house list 列表 · /house goto 名称 传送");
+      sysMsg(player, "house", "房屋命令: /house list 列表 · /house goto 名称 传送", "plain");
     }
     return next();
   });
@@ -527,7 +525,7 @@ async function houseList(player: Player): Promise<void> {
     include: { sysUser: true }, // 房主名（无主房屋 userId 为空）
   });
   if (houses.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "暂无可用房屋");
+    sysMsg(player, "house", "暂无可用房屋", "plain");
     return;
   }
   // TABLIST_HEADERS 多列：名称 / 描述 / 房主（表头不占行号）
@@ -553,7 +551,7 @@ async function houseList(player: Player): Promise<void> {
 
 async function houseGoto(player: Player, name: string): Promise<void> {
   if (!name) {
-    player.sendClientMessage(COLOR_ERROR, "用法: /house goto 房屋名称");
+    sysMsg(player, "house", "用法: /house goto 房屋名称", "error");
     return;
   }
   await teleportToHouse(player, name);
@@ -566,7 +564,7 @@ async function teleportToHouse(player: Player, houseName: string): Promise<void>
     include: { house: true },
   });
   if (!tp) {
-    player.sendClientMessage(COLOR_ERROR, `未找到房屋「${houseName}」的传送点`);
+    sysMsg(player, "house", `未找到房屋「${houseName}」的传送点`, "error");
     return;
   }
   // await 后复查断线（查询期间玩家可能已掉线）
@@ -574,5 +572,5 @@ async function teleportToHouse(player: Player, houseName: string): Promise<void>
   // 用 teleportTo 统一处理：车内 linkToInterior（防人车分离）+ 传送后冻结
   // （房屋 interior 物件流式加载，不冻结会下坠/穿模）
   teleportTo(player, Number(tp.x), Number(tp.y), Number(tp.z), Number(tp.angle), tp.interiorId);
-  player.sendClientMessage(COLOR_WHITE, `[房屋] 已传送到 ${tp.house?.name ?? houseName}`);
+  sysMsg(player, "house", `已传送到 ${tp.house?.name ?? houseName}`, "info");
 }

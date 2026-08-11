@@ -3,11 +3,12 @@ import { getAuthState } from "@/auth/auth";
 import { isPlayerLocked } from "@/core/interaction";
 import { isInRace } from "@/race/room";
 import { showDialog } from "@/utils/dialog";
+import { sysMsg } from "@/utils/msg";
 import { startRecording, stopRecording, isRecording } from "./recorder";
 import { controlReplay, getReplaySession, REPLAY_SPEEDS, toggleReplayLabels } from "./playback";
 import { isInChallenge, exitChallenge, goChallenge, restartChallenge } from "./challenge";
 import { openReplayMenu } from "./menu";
-import { COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
+import { COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
 
 /**
  * 回放命令：
@@ -17,12 +18,12 @@ import { COLOR_ERROR, COLOR_INFO, COLOR_SUCCESS } from "@/utils/colors";
 
 function guard(player: Player, next: () => unknown): boolean {
   if (!getAuthState(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "请先登录");
+    sysMsg(player, "replay", "请先登录", "error");
     next();
     return false;
   }
   if (isPlayerLocked(player.id)) {
-    player.sendClientMessage(COLOR_ERROR, "当前正在其他流程中，请稍后再试");
+    sysMsg(player, "replay", "当前正在其他流程中，请稍后再试", "error");
     next();
     return false;
   }
@@ -36,11 +37,11 @@ export function initReplayCommands(): void {
     if (arg === "start") {
       // 比赛中自动录制由比赛系统触发，手动录制主要用于赛车系统外（漂移等）
       if (isInRace(player.id)) {
-        player.sendClientMessage(COLOR_ERROR, "比赛中已自动录制，无需手动 /rec start");
+        sysMsg(player, "replay", "比赛中已自动录制，无需手动 /rec start", "error");
         return next();
       }
       if (isInChallenge(player.id) || getReplaySession(player.id)) {
-        player.sendClientMessage(COLOR_ERROR, "影子挑战/回放中不能录制");
+        sysMsg(player, "replay", "影子挑战/回放中不能录制", "error");
         return next();
       }
       void (async () => {
@@ -55,12 +56,12 @@ export function initReplayCommands(): void {
       // 比赛中禁止手动停止：比赛自动录制由系统管理，提前停止会丢名次元数据
       //（endRoom 的 raceRecordingStop 找不到会话，完赛录像永远缺 rank/finished）
       if (isInRace(player.id)) {
-        player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中由系统自动录制，比赛结束后自动保存");
+        sysMsg(player, "replay", "比赛中由系统自动录制，比赛结束后自动保存", "info");
         return next();
       }
       void (async () => {
         if (!isRecording(player.id)) {
-          player.sendClientMessage(COLOR_ERROR, "你不在录制中");
+          sysMsg(player, "replay", "你不在录制中", "error");
           return;
         }
         await stopRecording(player.id);

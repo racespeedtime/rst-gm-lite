@@ -12,7 +12,7 @@ import {
 } from "@infernus/core";
 
 import { setIntervalSafe } from "@/core/timers";
-import { COLOR_ORANGE, COLOR_WHITE, COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /** 观察状态 */
 interface ObserveState {
@@ -70,17 +70,14 @@ function cycleObserveTarget(observer: Player, forward: boolean): void {
       const target = Player.getInstance(k);
       if (target && target.isConnected() && target.id !== observer.id) {
         startObservePlayer(observer, target); // 会更新 observeStates + spectate
-        observer.sendClientMessage(
-          COLOR_ORANGE,
-          `[TV] 已切换到 ${target.getName().name}(${target.id})`,
-        );
+        sysMsg(observer, "observe", `已切换到 ${target.getName().name}(${target.id})`, "info");
         return;
       }
     } else {
       const target = Vehicle.getInstance(-k);
       if (target && target.isValid()) {
         startObserveVehicle(observer, target);
-        observer.sendClientMessage(COLOR_ORANGE, `[TV] 已切换到车辆 #${target.id}`);
+        sysMsg(observer, "observe", `已切换到车辆 #${target.id}`, "info");
         return;
       }
     }
@@ -167,14 +164,14 @@ function emitObserveStop(observerId: number): void {
 /** 开始观战玩家（自动跟踪其车辆/步行状态） */
 export function startObservePlayer(observer: Player, target: Player): void {
   if (observer.id === target.id) {
-    observer.sendClientMessage(COLOR_ORANGE, "[TV] 不能观看自己");
+    sysMsg(observer, "observe", "不能观看自己", "warn");
     return;
   }
   if (
     !target.isConnected() ||
     [PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState())
   ) {
-    observer.sendClientMessage(COLOR_ORANGE, "[TV] 对方当前无法被观看");
+    sysMsg(observer, "observe", "对方当前无法被观看", "warn");
     return;
   }
   if (target.isInAnyVehicle()) {
@@ -196,7 +193,7 @@ export function startObservePlayer(observer: Player, target: Player): void {
     observer.setInterior(target.getInterior());
     observer.toggleSpectating(true);
     observer.spectatePlayer(target, SpectateModesEnum.NORMAL);
-    observer.sendClientMessage(COLOR_WHITE, `[TV] 正在观看 ${target.getName().name}(${target.id})`);
+    sysMsg(observer, "observe", `正在观看 ${target.getName().name}(${target.id})`, "info");
     emitObserveStart(observer.id);
   }
 }
@@ -228,7 +225,7 @@ export function startObserveVehicle(
 export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
   const state = observeStates.get(player.id);
   if (!state) {
-    player.sendClientMessage(COLOR_ERROR, "[TV] 你不在观战状态");
+    sysMsg(player, "observe", "你不在观战状态", "warn");
     return;
   }
   observeStates.delete(player.id);
@@ -238,7 +235,7 @@ export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
   player.setVirtualWorld(state.prevWorld);
   player.setInterior(state.prevInterior);
   if (!opts?.quiet) {
-    player.sendClientMessage(COLOR_ORANGE, "[TV] 已关闭观战");
+    sysMsg(player, "observe", "已关闭观战", "info");
   }
   emitObserveStop(player.id);
 }
@@ -340,7 +337,7 @@ async function suggestStop(observer: Player): Promise<void> {
       observer.toggleSpectating(false);
       observer.setVirtualWorld(prevWorld);
       observer.setInterior(prevInterior);
-      observer.sendClientMessage(COLOR_ORANGE, "[TV] 已关闭观战");
+      sysMsg(observer, "observe", "已关闭观战", "info");
     }
   } else {
     // 保留观战状态（stopObserve 仍可正常关闭）。期间已 /tv off（stopObserve
@@ -348,7 +345,7 @@ async function suggestStop(observer: Player): Promise<void> {
     if (state && !observeStates.has(observer.id)) {
       observeStates.set(observer.id, state);
     }
-    observer.sendClientMessage(COLOR_ORANGE, "可通过 /tv off 停止观战");
+    sysMsg(observer, "observe", "可通过 /tv off 停止观战", "plain");
   }
 }
 
@@ -395,9 +392,11 @@ export function initObserve(): void {
   PlayerEvent.onCommandText(["tv", "ob", "spec"], ({ player, subcommand, next }) => {
     const arg = subcommand[0];
     if (!arg) {
-      player.sendClientMessage(
-        COLOR_ORANGE,
-        "[TV] 用法: /tv 玩家ID 观战 · /tv off 关闭 · /tv next 下一个 · /tv prev 上一个",
+      sysMsg(
+        player,
+        "observe",
+        "用法: /tv 玩家ID 观战 · /tv off 关闭 · /tv next 下一个 · /tv prev 上一个",
+        "info",
       );
       return next();
     }
@@ -407,7 +406,7 @@ export function initObserve(): void {
     }
     if (arg === "next" || arg === "prev") {
       if (!observeStates.has(player.id)) {
-        player.sendClientMessage(COLOR_ORANGE, "[TV] 你不在观战中，先 /tv 玩家ID 开始观战");
+        sysMsg(player, "observe", "你不在观战中，先 /tv 玩家ID 开始观战", "warn");
         return next();
       }
       cycleObserveTarget(player, arg === "next");
@@ -415,11 +414,11 @@ export function initObserve(): void {
     }
     const target = Player.getInstance(+arg);
     if (!target) {
-      player.sendClientMessage(COLOR_ORANGE, "[TV] 对方未在线");
+      sysMsg(player, "observe", "对方未在线", "warn");
       return next();
     }
     if (getObserveTarget(target.id)) {
-      player.sendClientMessage(COLOR_ORANGE, "[TV] 对方正处于观战状态");
+      sysMsg(player, "observe", "对方正处于观战状态", "warn");
       return next();
     }
     startObservePlayer(player, target);

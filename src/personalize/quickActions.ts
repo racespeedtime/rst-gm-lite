@@ -8,7 +8,7 @@ import {
   WeaponEnum,
 } from "@infernus/core";
 import { pickOption, notifySaved } from "./settings";
-import { COLOR_ERROR, COLOR_RACE } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import { setTimeoutSafe } from "@/core/timers";
 import { startObservePlayer, stopObserve, isObserving } from "@/core/observe";
 import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";
@@ -121,7 +121,7 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
         const pos = player.getPos();
         const dir = Math.random() < 0.5 ? -1 : 1;
         player.setPos(pos.x + dir * 3, pos.y, pos.z + 1);
-        player.sendClientMessage("#ffffff", "已尝试脱离卡死（随机左右）");
+        sysMsg(player, "action", "已尝试脱离卡死（随机左右）", "plain");
       },
     });
     rows.push({
@@ -130,7 +130,7 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
         // 垂直方向抬升（对齐原版 /xiufu 的 Z+2.8，对卡在墙缝/室内有效）
         const pos = player.getPos();
         player.setPos(pos.x, pos.y, pos.z + 5);
-        player.sendClientMessage("#ffffff", "已尝试脱离卡死（垂直方向）");
+        sysMsg(player, "action", "已尝试脱离卡死（垂直方向）", "plain");
       },
     });
     rows.push({
@@ -148,12 +148,12 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
               const land = findNearestLand(pos.x, pos.y);
               if (land) {
                 player.setPos(land.x, land.y, land.z);
-                player.sendClientMessage("#ffffff", "已脱离卡死（传送到最近陆地）");
+                sysMsg(player, "action", "已脱离卡死（传送到最近陆地）", "plain");
                 return;
               }
               // 附近找不到陆地（罕见/远离岸边）：退化为浮出水面兜底
               player.setPos(pos.x, pos.y, pos.z + water.playerDepth + 0.5);
-              player.sendClientMessage("#ffffff", "附近未找到陆地，已浮出水面");
+              sysMsg(player, "action", "附近未找到陆地，已浮出水面", "plain");
               return;
             }
           } catch {
@@ -163,13 +163,13 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
           if (Math.abs(ground - pos.z) > 0.5) {
             // 抬高 0.8 防半身埋地（colandreas 地面高度可能略低于实际地表/流式 obj）
             player.setPos(pos.x, pos.y, ground + 0.8);
-            player.sendClientMessage("#ffffff", "已脱离卡死（传送到最近地面）");
+            sysMsg(player, "action", "已脱离卡死（传送到最近地面）", "plain");
             return;
           }
-          player.sendClientMessage("#ffffff", "已在安全位置或无法检测地面，可尝试垂直抬升");
+          sysMsg(player, "action", "已在安全位置或无法检测地面，可尝试垂直抬升", "plain");
         } else {
           player.setPos(pos.x, pos.y, pos.z + 5);
-          player.sendClientMessage("#ffffff", "室内无法检测地面，已尝试垂直抬升");
+          sysMsg(player, "action", "室内无法检测地面，已尝试垂直抬升", "plain");
         }
       },
     });
@@ -231,7 +231,7 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
       // 车辆翻正：对齐原版 /f（抬升 2 让物理重新落正）
       const vehicle = Vehicle.getInstances().find((v) => v.isPlayerIn(player));
       if (!vehicle) {
-        player.sendClientMessage(COLOR_ERROR, "你不在车内，无法翻正车辆");
+        sysMsg(player, "action", "你不在车内，无法翻正车辆", "error");
         return;
       }
       flipVehicle(vehicle, 2);
@@ -249,7 +249,7 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
     run: () => {
       const now = Date.now();
       if ((djsCooldownUntil.get(player.id) ?? 0) > now) {
-        player.sendClientMessage(COLOR_ERROR, "[倒计时] 请稍后再发起（每 5 秒一次）");
+        sysMsg(player, "countdown", "请稍后再发起（每 5 秒一次）", "warn");
         return;
       }
       djsCooldownUntil.set(player.id, now + DJS_COOLDOWN_MS);
@@ -276,12 +276,12 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
         // B5：空输入/非数字会解析成 0/NaN → 误观战 0 号玩家，先校验
         const input = res.inputText.trim();
         if (!/^\d+$/.test(input)) {
-          player.sendClientMessage(COLOR_ERROR, "请输入有效的玩家ID");
+          sysMsg(player, "action", "请输入有效的玩家ID", "error");
           return;
         }
         const target = Player.getInstance(+input);
         if (!target) {
-          player.sendClientMessage(COLOR_ERROR, "对方未在线");
+          sysMsg(player, "action", "对方未在线", "error");
           return;
         }
         startObservePlayer(player, target);
@@ -315,11 +315,11 @@ export function initQuickCommands(): void {
   PlayerEvent.onCommandText("fxq", ({ player, next }) => {
     // U3：命令入口统一拦截（未认证/流程锁中不可执行，对齐 /skin 无参路径）
     if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      sysMsg(player, "action", "当前流程中不可操作", "error");
       return next();
     }
     if (isInRace(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能获取喷气背包");
+      sysMsg(player, "match", "比赛中不能获取喷气背包", "error");
       return next();
     }
     player.setSpecialAction(2); // USEJETPACK
@@ -330,11 +330,11 @@ export function initQuickCommands(): void {
   // /jetpack 原版别名（= /fxq，原版 CMD:jetpack 同样调 SetPlayerSpecialAction(2)）
   PlayerEvent.onCommandText("jetpack", ({ player, next }) => {
     if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      sysMsg(player, "action", "当前流程中不可操作", "error");
       return next();
     }
     if (isInRace(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能获取喷气背包");
+      sysMsg(player, "match", "比赛中不能获取喷气背包", "error");
       return next();
     }
     player.setSpecialAction(2); // USEJETPACK
@@ -347,15 +347,15 @@ export function initQuickCommands(): void {
   // 编辑中会干扰摆位）
   PlayerEvent.onCommandText(["stuck", "xiufu"], ({ player, next }) => {
     if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      sysMsg(player, "action", "当前流程中不可操作", "error");
       return next();
     }
     if (isInRace(player.id)) {
-      player.sendClientMessage(COLOR_RACE, "[比赛] 比赛中请用 /kill 重生回检查点脱卡");
+      sysMsg(player, "match", "比赛中请用 /kill 重生回检查点脱卡", "warn");
       return next();
     }
     if (isEditing(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "[赛车] 编辑模式中不可脱卡，请移动位置");
+      sysMsg(player, "race", "编辑模式中不可脱卡，请移动位置", "error");
       return next();
     }
     const pos = player.getPos();
@@ -368,16 +368,16 @@ export function initQuickCommands(): void {
   // 音效 1056/1057，用于拍视频/飙车配合）。发起人每 5 秒冷却，防连发刷屏
   PlayerEvent.onCommandText(["djs", "count", "daojishi"], ({ player, next }) => {
     if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      sysMsg(player, "action", "当前流程中不可操作", "error");
       return next();
     }
     if (isInRace(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能发起倒计时");
+      sysMsg(player, "match", "比赛中不能发起倒计时", "error");
       return next();
     }
     const now = Date.now();
     if ((djsCooldownUntil.get(player.id) ?? 0) > now) {
-      player.sendClientMessage(COLOR_ERROR, "[倒计时] 请稍后再发起（每 5 秒一次）");
+      sysMsg(player, "countdown", "请稍后再发起（每 5 秒一次）", "warn");
       return next();
     }
     djsCooldownUntil.set(player.id, now + DJS_COOLDOWN_MS);
@@ -387,11 +387,11 @@ export function initQuickCommands(): void {
 
   PlayerEvent.onCommandText("jls", ({ player, next }) => {
     if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      sysMsg(player, "action", "当前流程中不可操作", "error");
       return next();
     }
     if (isInRace(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "[比赛] 比赛中不能获取降落伞");
+      sysMsg(player, "match", "比赛中不能获取降落伞", "error");
       return next();
     }
     player.giveWeapon(WeaponEnum.PARACHUTE, 1);
@@ -403,12 +403,12 @@ export function initQuickCommands(): void {
   // "车辆翻正"同一实现；车内任意模式可用（比赛内翻车自救也支持）。
   PlayerEvent.onCommandText("f", ({ player, next }) => {
     if (isPlayerLocked(player.id) || !getAuthState(player.id)) {
-      player.sendClientMessage(COLOR_ERROR, "当前流程中不可操作");
+      sysMsg(player, "action", "当前流程中不可操作", "error");
       return next();
     }
     const vehicle = Vehicle.getInstances().find((v) => v.isPlayerIn(player));
     if (!vehicle) {
-      player.sendClientMessage(COLOR_ERROR, "你不在车内，无法翻正车辆");
+      sysMsg(player, "action", "你不在车内，无法翻正车辆", "error");
       return next();
     }
     flipVehicle(vehicle, 2);

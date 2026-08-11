@@ -6,7 +6,7 @@ import { getSetting, invalidateSettingCache } from "@/personalize/settings";
 import { swapSortIndex, compactSortIndex, nextSortIndex } from "@/utils/sort";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
-import { COLOR_ERROR, COLOR_SUCCESS, COLOR_WHITE } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import type { MenuBack } from "@/core/panel";
 import {
   MAX_PLAYER_ATTIRE,
@@ -171,7 +171,7 @@ export async function playerPresetMenu(player: Player, back?: MenuBack): Promise
   if (skinRes.response !== 1) return back?.();
   const skinId = skinRes.inputText.trim() ? Number(skinRes.inputText.trim()) : currentSkin;
   if (!Number.isInteger(skinId) || skinId < 0 || skinId > 311) {
-    player.sendClientMessage(COLOR_ERROR, "皮肤ID需为 0-311 的整数");
+    sysMsg(player, "attire", "皮肤ID需为 0-311 的整数", "error");
     return back?.();
   }
   await showPlayerPresetList(player, skinId, back);
@@ -253,16 +253,13 @@ async function reorderPreset(
   if (res.response !== 1) return back?.();
   const target = res.listItem === 0 ? presets[idx - 1] : presets[idx + 1];
   if (!target) {
-    player.sendClientMessage(
-      COLOR_ERROR,
-      res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设",
-    );
+    sysMsg(player, "attire", res.listItem === 0 ? "已是第一个预设" : "已是最后一个预设", "error");
     return back?.();
   }
   await swapSortIndex(presets[idx], target, (id, index) =>
     prisma.playerPreset.update({ where: { id }, data: { index } }),
   );
-  player.sendClientMessage(COLOR_SUCCESS, `预设${label} 已${res.listItem === 0 ? "上移" : "下移"}`);
+  sysMsg(player, "attire", `预设${label} 已${res.listItem === 0 ? "上移" : "下移"}`, "success");
   await showPlayerPresetList(player, skinId, back);
 }
 
@@ -273,7 +270,7 @@ async function createPlayerPreset(
   back?: MenuBack,
 ): Promise<void> {
   if (presets.length >= 3) {
-    player.sendClientMessage(COLOR_ERROR, "每个皮肤最多 3 套预设");
+    sysMsg(player, "attire", "每个皮肤最多 3 套预设", "error");
     return back?.();
   }
   const nameRes = await showDialog(
@@ -297,11 +294,11 @@ async function createPlayerPreset(
         name: nameRes.inputText.trim() || null,
       },
     });
-    player.sendClientMessage(COLOR_SUCCESS, `预设创建成功，正在编辑装扮`);
+    sysMsg(player, "attire", `预设创建成功，正在编辑装扮`, "success");
     await playerPresetDetail(player, preset.id, skinId);
   } catch (e) {
     logger.error(`[attire] 创建人物预设失败`, e);
-    player.sendClientMessage(COLOR_ERROR, "创建失败");
+    sysMsg(player, "attire", "创建失败", "error");
   }
 }
 
@@ -347,9 +344,11 @@ async function playerPresetDetail(
   if (idx === 0) {
     // B9：应用结果与实际一致（装扮显示关闭时提示"未展示"）
     const applied = await applyPlayerPreset(player, presetId);
-    player.sendClientMessage(
-      applied ? COLOR_SUCCESS : COLOR_ERROR,
+    sysMsg(
+      player,
+      "attire",
       applied ? "已应用人物预设" : "装扮显示已关闭，未展示（可到「界面个性化」打开）",
+      applied ? "success" : "error",
     );
     await toThis();
   } else if (idx === 1) {
@@ -362,7 +361,7 @@ async function playerPresetDetail(
       data: { defaultPlayerPresetId: presetId },
     });
     invalidateSettingCache(auth.userId); // 直接写库后使设置缓存失效，防脏读
-    player.sendClientMessage(COLOR_SUCCESS, "已设为默认人物预设");
+    sysMsg(player, "attire", "已设为默认人物预设", "success");
     await toThis();
   } else if (idx === options.length - 1) {
     await confirmDeletePreset(player, presetId, "人物");
@@ -413,7 +412,7 @@ async function editPlayerPresetItem(
     await changePlayerPresetBone(player, item.id, item.attire.name, presetId, skinId, back);
   } else if (res.listItem === 3) {
     await prisma.playerPresetItem.delete({ where: { id: item.id } });
-    player.sendClientMessage(COLOR_SUCCESS, `已移除装扮 ${item.attire.name}`);
+    sysMsg(player, "attire", `已移除装扮 ${item.attire.name}`, "success");
     // 仅当该预设正应用时重应用（未上身的预设不移除时强制替换当前装扮）
     await reapplyIfActive(player, presetId);
     await playerPresetDetail(player, presetId, skinId, back);
@@ -439,21 +438,18 @@ async function startEditPlayerAttire(
     // 重应用该预设（幂等：重新 setAttachedObject + 重建槽位映射，视觉无变化）
     const applied = await applyPlayerPreset(player, presetId);
     if (!applied) {
-      player.sendClientMessage(COLOR_ERROR, "该装扮未穿戴在身上（先应用此预设），无法实时编辑");
+      sysMsg(player, "attire", "该装扮未穿戴在身上（先应用此预设），无法实时编辑", "error");
       return false;
     }
     slot = findSlot();
     if (slot == null) {
-      player.sendClientMessage(COLOR_ERROR, "该装扮未穿戴在身上（先应用此预设），无法实时编辑");
+      sysMsg(player, "attire", "该装扮未穿戴在身上（先应用此预设），无法实时编辑", "error");
       return false;
     }
   }
   // 登记编辑态：onPlayerEditAttached 回调按 playerId 取到 presetId/itemId 落库
   playerEditing.set(player.id, { presetId, itemId });
-  player.sendClientMessage(
-    COLOR_WHITE,
-    "[装扮] 拖拽调整位置，按保存键确认（Enter/点击保存）保存，Esc 取消",
-  );
+  sysMsg(player, "attire", "拖拽调整位置，按保存键确认（Enter/点击保存）保存，Esc 取消", "plain");
   player.editAttachedObject(slot);
   return true;
 }
@@ -487,10 +483,7 @@ async function adjustPlayerPresetItem(
     ? res.inputText.trim().split(/\s+/).map(Number)
     : [item.x, item.y, item.z, item.rX, item.rY, item.rZ, item.sX, item.sY, item.sZ].map(Number);
   if (nums.length !== 9 || nums.some((n) => !Number.isFinite(n))) {
-    player.sendClientMessage(
-      COLOR_ERROR,
-      "需要 9 个数字（X Y Z 偏移 / 旋转 / 缩放），留空保持当前",
-    );
+    sysMsg(player, "attire", "需要 9 个数字（X Y Z 偏移 / 旋转 / 缩放），留空保持当前", "error");
     return back?.();
   }
   await prisma.playerPresetItem.update({
@@ -507,7 +500,7 @@ async function adjustPlayerPresetItem(
       sZ: nums[8],
     },
   });
-  player.sendClientMessage(COLOR_SUCCESS, `已调整装扮「${name}」的位置/旋转/缩放`);
+  sysMsg(player, "attire", `已调整装扮「${name}」的位置/旋转/缩放`, "success");
   // 仅当该预设正应用时重应用（调整未上身的预设不强制替换当前装扮）
   await reapplyIfActive(player, presetId);
   return back?.();
@@ -541,11 +534,11 @@ async function changePlayerPresetBone(
   if (boneRes.response !== 1) return back?.();
   const boneId = boneRes.listItem + 1;
   if (boneId === item.boneId) {
-    player.sendClientMessage(COLOR_WHITE, "骨骼未变化");
+    sysMsg(player, "attire", "骨骼未变化", "plain");
     return back?.();
   }
   await prisma.playerPresetItem.update({ where: { id: itemId }, data: { boneId } });
-  player.sendClientMessage(COLOR_SUCCESS, `「${name}」已挂到骨骼 ${bones[boneId - 1]}`);
+  sysMsg(player, "attire", `「${name}」已挂到骨骼 ${bones[boneId - 1]}`, "success");
   // 仅当该预设正应用时重应用（换骨未上身的预设不强制替换当前装扮）
   await reapplyIfActive(player, presetId);
   return back?.();
@@ -560,7 +553,7 @@ async function addPlayerPresetItem(
 ): Promise<void> {
   const count = await prisma.playerPresetItem.count({ where: { presetId } });
   if (count >= MAX_PLAYER_ATTIRE) {
-    player.sendClientMessage(COLOR_ERROR, `人物预设最多 ${MAX_PLAYER_ATTIRE} 件装扮`);
+    sysMsg(player, "attire", `人物预设最多 ${MAX_PLAYER_ATTIRE} 件装扮`, "error");
     return back?.();
   }
   const attires = await prisma.attire.findMany({
@@ -568,7 +561,7 @@ async function addPlayerPresetItem(
     orderBy: { name: "asc" },
   });
   if (attires.length === 0) {
-    player.sendClientMessage(COLOR_WHITE, "系统装扮库为空，请联系管理员添加");
+    sysMsg(player, "attire", "系统装扮库为空，请联系管理员添加", "plain");
     return back?.();
   }
   const r = await showPagedDialog(player, {
@@ -629,7 +622,7 @@ async function addPlayerPresetItem(
         Number(attire.sZ),
       ];
   if (nums.length !== 9 || nums.some((n) => !Number.isFinite(n))) {
-    player.sendClientMessage(COLOR_ERROR, "需要 9 个数字（X Y Z 偏移 / 旋转 / 缩放）");
+    sysMsg(player, "attire", "需要 9 个数字（X Y Z 偏移 / 旋转 / 缩放）", "error");
     return back?.();
   }
   try {
@@ -649,13 +642,13 @@ async function addPlayerPresetItem(
         sZ: nums[8],
       },
     });
-    player.sendClientMessage(COLOR_SUCCESS, `已添加装扮 ${attire.name}`);
+    sysMsg(player, "attire", `已添加装扮 ${attire.name}`, "success");
     // U1：该预设已应用时重应用（添加后身上的挂件即时出现，与移除路径一致）
     await reapplyIfActive(player, presetId);
     await playerPresetDetail(player, presetId, skinId, back);
   } catch (e) {
     logger.error(`[attire] 添加人物装扮失败`, e);
-    player.sendClientMessage(COLOR_ERROR, "添加失败（可能已存在该装扮）");
+    sysMsg(player, "attire", "添加失败（可能已存在该装扮）", "error");
     return back?.();
   }
 }
@@ -711,9 +704,9 @@ export async function confirmDeletePreset(
         }
       }
     });
-    player.sendClientMessage(COLOR_SUCCESS, `${kind}预设已删除`);
+    sysMsg(player, "attire", `${kind}预设已删除`, "success");
   } catch (e) {
     logger.error(`[attire] 删除预设失败`, e);
-    player.sendClientMessage(COLOR_ERROR, "删除失败");
+    sysMsg(player, "attire", "删除失败", "error");
   }
 }

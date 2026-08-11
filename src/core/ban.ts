@@ -2,6 +2,7 @@ import { Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { getAuthState, getPendingAuthUserId, hasSuperAdminRole } from "@/auth/auth";
 import { logger } from "@/logger";
+import { sysMsg } from "@/utils/msg";
 
 /**
  * 封禁系统：
@@ -124,7 +125,7 @@ function kickOnlineForBan(
         (auth?.userId === target.userId || getPendingAuthUserId(p.id) === target.userId)) ||
       (target.ip && target.ip !== "" && pIp === target.ip);
     if (match) {
-      p.sendClientMessage("#ff5555", `[系统] 你已被封禁：${reason}`);
+      sysMsg(p, "system", `你已被封禁：${reason}`, "error");
       p.kick();
     }
   }
@@ -141,17 +142,17 @@ export async function banUser(
 ): Promise<void> {
   const user = await prisma.sysUser.findUnique({ where: { username } });
   if (!user) {
-    op.sendClientMessage("#ff5555", `用户 ${username} 不存在`);
+    sysMsg(op, "system", `用户 ${username} 不存在`, "error");
     return;
   }
   // 自我保护：不能封禁自己或其他 OP（误操作会导致管理失能且难以解封）
   const opUserId = getAuthState(op.id)?.userId ?? null;
   if (user.id === opUserId) {
-    op.sendClientMessage("#ff5555", "不能封禁自己");
+    sysMsg(op, "system", "不能封禁自己", "error");
     return;
   }
   if (await hasSuperAdminRole(user.id)) {
-    op.sendClientMessage("#ff5555", `不能封禁管理员 ${username}`);
+    sysMsg(op, "system", `不能封禁管理员 ${username}`, "error");
     return;
   }
   const endAt = minutes > 0 ? new Date(Date.now() + minutes * 60_000) : null;
@@ -174,7 +175,7 @@ export async function banUser(
     });
   }
   const untilText = minutes > 0 ? `${minutes} 分钟` : "永久";
-  op.sendClientMessage("#55ff55", `已封禁 ${username}（${untilText}，原因：${reason}）`);
+  sysMsg(op, "system", `已封禁 ${username}（${untilText}，原因：${reason}）`, "success");
   logger.info(`[ban] OP ${op.getName().name} 封禁 ${username} ${untilText}：${reason}`);
   // 即时踢出在线玩家（无需等其掉线重连）
   kickOnlineForBan({ userId: user.id }, `${reason}（${untilText}）`);
@@ -198,7 +199,7 @@ export async function banIp(
     await prisma.sysUserBan.create({ data: { ip, reason, endAt, bannedById: opUserId } });
   }
   const untilText = minutes > 0 ? `${minutes} 分钟` : "永久";
-  op.sendClientMessage("#55ff55", `已封禁 IP ${ip}（${untilText}，原因：${reason}）`);
+  sysMsg(op, "system", `已封禁 IP ${ip}（${untilText}，原因：${reason}）`, "success");
   logger.info(`[ban] OP ${op.getName().name} 封禁 IP ${ip} ${untilText}：${reason}`);
   kickOnlineForBan({ ip }, `${reason}（${untilText}）`);
 }
@@ -207,7 +208,7 @@ export async function banIp(
 export async function unbanUser(op: Player, username: string): Promise<void> {
   const user = await prisma.sysUser.findUnique({ where: { username } });
   if (!user) {
-    op.sendClientMessage("#ff5555", `用户 ${username} 不存在`);
+    sysMsg(op, "system", `用户 ${username} 不存在`, "error");
     return;
   }
   const res = await prisma.sysUserBan.updateMany({

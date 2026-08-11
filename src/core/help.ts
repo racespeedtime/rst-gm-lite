@@ -3,6 +3,7 @@ import { getAuthState } from "@/auth/auth";
 import { isPlayerLocked } from "@/core/interaction";
 import { showDialog } from "@/utils/dialog";
 import { COLOR_INFO } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 
 /** 登录欢迎消息（服务器名 + 核心玩法指引） */
 export function sendWelcomeMessage(player: Player): void {
@@ -57,7 +58,7 @@ export function initHelpCommand(): void {
   PlayerEvent.onCommandText("help", ({ player, next }) => {
     if (!getAuthState(player.id)) return next();
     if (isPlayerLocked(player.id)) {
-      player.sendClientMessage(COLOR_INFO, "当前正在其他流程中，请稍后再试");
+      sysMsg(player, "system", "当前正在其他流程中，请稍后再试", "info");
       return next();
     }
     void openHelp(player);

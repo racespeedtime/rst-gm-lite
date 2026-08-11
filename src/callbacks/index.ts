@@ -60,7 +60,8 @@ import {
   startWorldClockTimers,
 } from "@/core/worldenv";
 
-import { COLOR_INFO, COLOR_ERROR } from "@/utils/colors";
+import { COLOR_ERROR } from "@/utils/colors";
+import { sysMsg } from "@/utils/msg";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 
 /**
@@ -134,7 +135,7 @@ async function handlePlayerConnect(player: Player) {
       // 解除连接时的观战模式，恢复可见（比赛世界）
       player.toggleSpectating(false);
       if (auth.isSuperAdmin) {
-        player.sendClientMessage(COLOR_INFO, "你已登录为系统管理员，按 Y 打开万能面板");
+        sysMsg(player, "system", "你已登录为系统管理员，按 Y 打开万能面板", "info");
       }
       return;
     }
@@ -163,7 +164,7 @@ async function handlePlayerConnect(player: Player) {
     // 登录欢迎（服务器名 + 核心玩法指引）
     sendWelcomeMessage(player);
     if (auth.isSuperAdmin) {
-      player.sendClientMessage(COLOR_INFO, "你已登录为系统管理员，按 Y 打开万能面板");
+      sysMsg(player, "system", "你已登录为系统管理员，按 Y 打开万能面板", "info");
     }
   } catch (e) {
     logger.error(`[auth] 玩家 ${player.getName().name} 认证流程异常`, e);
@@ -326,10 +327,7 @@ PlayerEvent.onCommandError(({ player, command, cmdText, error, getSuggestion, ne
     // 比赛中未知命令也统一按比赛隔离拒绝（onCommandReceived 只拦截已注册命令，
     // 未知命令会绕过隔离直接到这里；fallbackTeleport 只报"比赛中不能传送"，误导）
     if (isInRace(player.id)) {
-      player.sendClientMessage(
-        COLOR_ERROR,
-        "[比赛] 比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生",
-      );
+      sysMsg(player, "match", "比赛中只能使用 /r l 离开、/pm 私聊、/tv 观战或 /kill 重生", "error");
       return true;
     }
     // 同步 return true 抑制客户端默认的 "Unknown command" 提示；
@@ -347,7 +345,7 @@ PlayerEvent.onCommandError(({ player, command, cmdText, error, getSuggestion, ne
           `命令不存在: ${used}，你是不是想输入 /${suggestion}？`,
         );
       } else {
-        player.sendClientMessage(COLOR_ERROR, `命令不存在: ${used}`);
+        sysMsg(player, "system", `命令不存在: ${used}`, "error");
       }
     })();
     return true;
