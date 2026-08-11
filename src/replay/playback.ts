@@ -214,8 +214,9 @@ interface Ghost {
   warnedEmulateFail: boolean;
   /** 已播完（playTime 到终点）：停止 emulate 驱动标志（seek 回看时重置） */
   stopped: boolean;
-  /** 当前车辆的装扮挂件（applyReplayVehicleAttire 套玩家当前爱车装扮；随车销毁） */
-  attireObjs: DynamicObject[];
+  /** 当前车辆的装扮挂件 + description 3D 标签（applyReplayVehicleAttire 套玩家
+   *  当前爱车装扮；随车销毁） */
+  attireObjs: (DynamicObject | Dynamic3DTextLabel)[];
   /** 上次自动补氮气**播放时间**（timer 录制 15s 兜底：对齐录制节奏，慢放时
    *  播放 15 秒 = 现实更长，补给落在录制者补管的时段） */
   lastAutoNitroAt: number;
@@ -1178,7 +1179,7 @@ export async function spawnReplay(
       // ghosts，必须在本迭代销毁
       let vehicle: Vehicle | undefined;
       let label: Dynamic3DTextLabel | undefined;
-      let attireObjs: DynamicObject[] = [];
+      let attireObjs: (DynamicObject | Dynamic3DTextLabel)[] = [];
       try {
         const npcPlayer = npc.getPlayer();
         vehicle = new Vehicle({

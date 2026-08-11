@@ -1,15 +1,18 @@
-import { DynamicObject, Player, Vehicle } from "@infernus/core";
+import { Dynamic3DTextLabel, DynamicObject, Player, Vehicle } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { addVehicleComponentIfPossible } from "@/vehicles";
 import { applyPlayerPreset } from "@/attire";
 import { MAX_VEHICLE_ATTIRE } from "@/attire/state";
+import { filterSensitiveWords } from "@/utils/sensitive";
+import { DEFAULT_CHARSET } from "@/utils/constants";
 
 /**
  * 回放 ghost 的装扮应用（按玩家**当前**设置查库，不按回放当时存储——装扮变动
  * 无所谓，每次进回放用最新设置套）。
  * - 车辆：user_vehicle.defaultPresetId → vehiclePreset（颜色/paintjob/改装件 + 挂件）
+ *   + 爱车 description 3D 文字标签（对齐 vehicles spawnVehicle：有描述才挂）
  * - 人物（NPC）：sysUserSetting.skinId + defaultPlayerPresetId → applyPlayerPreset
  * 关键约束：ghost 车挂件**独立管理**（返回数组、调用方随车销毁），不登记进玩家的
  * 爱车挂件 map（appliedVehicleObjs/vehicleObjMap 按 playerId 键控——登记进去会把
@@ -18,8 +21,8 @@ import { MAX_VEHICLE_ATTIRE } from "@/attire/state";
  * 与回放一致可在此复用。
  */
 
-/** 销毁 ghost 车挂件对象数组（换车型/会话销毁时清理挂件实体，车 destroy 不会带挂件） */
-export function destroyAttireObjs(objs: DynamicObject[] | undefined): void {
+/** 销毁 ghost 车挂件/3D 标签对象数组（换车型/会话销毁时清理实体，车 destroy 不会带） */
+export function destroyAttireObjs(objs: (DynamicObject | Dynamic3DTextLabel)[] | undefined): void {
   for (const obj of objs ?? []) {
     try {
       if (obj.isValid()) obj.destroy();
@@ -30,14 +33,15 @@ export function destroyAttireObjs(objs: DynamicObject[] | undefined): void {
 }
 
 /**
- * 给 ghost 车套玩家当前爱车装扮：颜色/paintjob/挂件（DynamicObject attach）。
- * 挂件返回数组由调用方随车销毁。无该车型爱车或未设默认预设 → 不套（保持默认外观）。
+ * 给 ghost 车套玩家当前爱车装扮：颜色/paintjob/改装件 + 挂件（DynamicObject attach）
+ * + description 3D 文字标签（对齐刷车 spawnVehicle：有描述才挂）。
+ * 返回创建的对象数组由调用方随车销毁。无该车型爱车或未设默认预设 → 不套（保持默认外观）。
  */
 export async function applyReplayVehicleAttire(
   veh: Vehicle,
   modelId: number,
   playerId: number,
-): Promise<DynamicObject[]> {
+): Promise<(DynamicObject | Dynamic3DTextLabel)[]> {
   const auth = getAuthState(playerId);
   if (!auth || !veh.isValid()) return [];
   const uv = await prisma.userVehicle.findUnique({
@@ -62,7 +66,28 @@ export async function applyReplayVehicleAttire(
       if (Number.isInteger(id) && id > 0) addVehicleComponentIfPossible(veh, id);
     }
   }
-  const objs: DynamicObject[] = [];
+  const objs: (DynamicObject | Dynamic3DTextLabel)[] = [];
+  // 爱车 description 3D 文字标签（对齐 vehicles spawnVehicle：附着车辆时
+  // x/y/z 是相对偏移，传 0,0,0；有描述才挂；敏感词掩码展示）
+  if (uv.description) {
+    try {
+      const label = new Dynamic3DTextLabel({
+        text: filterSensitiveWords(uv.description),
+        color: "#ffd700",
+        x: 0,
+        y: 0,
+        z: 0,
+        drawDistance: 30,
+        testLOS: false,
+        attachedVehicle: veh.id,
+        charset: DEFAULT_CHARSET,
+      });
+      label.create();
+      objs.push(label);
+    } catch (e) {
+      logger.error(`[replay] ghost 车 description 3D 标签创建失败`, e);
+    }
+  }
   let slot = 0;
   for (const item of preset.items) {
     if (slot >= MAX_VEHICLE_ATTIRE) break;
