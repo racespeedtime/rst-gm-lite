@@ -1,4 +1,4 @@
-import { DynamicCheckpoint, DynamicMapIcon, GameMode, Player, TextLabel } from "@infernus/core";
+import { DynamicCheckpoint, DynamicMapIcon, Player, TextLabel } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -77,7 +77,11 @@ let lastNotifiedHour = new Date().getHours();
 /** 同步大世界时间（现实时间）与天气，并同步给跟随的玩家 */
 export async function syncWorldClock(): Promise<void> {
   const now = new Date();
-  GameMode.setWorldTime(now.getHours());
+  // 注意：不能调 GameMode.setWorldTime（服务器全局时间）——open.mp 的 SetWorldTime
+  // 会强制**所有**玩家的时间变成现实小时，包括个人时间玩家（syncGameTime=false）：
+  // 其 1s 流逝定时器从 12:00 正常推进，每 60s 被这里拉回现实小时（如 22:00）再从
+  // 那里继续 +1 → "个人时间过一段时间突然变晚上"。跟随世界时间的玩家由下方
+  // per-player setTime 设置，无需全局时间。
   // 整点提醒（跨整点触发，仅跟随服务器时间的玩家——自定义时间玩家不被提醒错乱）：
   // 与同步循环同一次遍历，先收集再广播
   const hourChanged = now.getHours() !== lastNotifiedHour;
@@ -127,7 +131,9 @@ async function rotateWeather(): Promise<void> {
   }
   // 只在天气实际变化时提示（分时段基准可能连续相同，避免刷提示）
   const changed = currentWeather !== oldWeather;
-  GameMode.setWeather(currentWeather);
+  // 同 syncWorldClock：不能调 GameMode.setWeather（全局强制会劫持个人天气玩家
+  // 的 setWeather）——跟随者由下方 per-player setWeather 设置，getWorldWeather()
+  // 读内存 currentWeather 不依赖全局
   const msg = `大世界天气已变化：${WEATHER_NAMES[currentWeather] ?? `ID ${currentWeather}`}`;
   for (const player of Player.getInstances()) {
     if (player.isNpc() || !player.isConnected()) continue;
@@ -192,10 +198,11 @@ const WORLD_ENV_RETRY = 5;
 const WORLD_ENV_RETRY_MS = 30_000;
 
 export async function initWorldEnvironment(attempt = 1): Promise<void> {
-  // 1. 全局时间天气（现实时间同步 + 分时段天气）
+  // 1. 时间天气基准（现实时间同步 + 分时段天气）——仅初始化内存 currentWeather
+  // 与跟随玩家的 per-player 时间天气（不做全局 setWorldTime/setWeather，理由见
+  // syncWorldClock / rotateWeather 注释：全局强制会劫持个人时间/天气玩家）
   syncWorldClock();
   currentWeather = weatherByTime(new Date().getHours());
-  GameMode.setWeather(currentWeather);
   logger.info(`[worldenv] 全局时间 ${new Date().getHours()}:00 天气 ${currentWeather}`);
 
   const icons: DynamicMapIcon[] = [];
