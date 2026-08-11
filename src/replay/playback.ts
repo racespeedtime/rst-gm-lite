@@ -28,6 +28,7 @@ import {
   detachObservingVehicle,
   registerObserveCandidate,
   unregisterObserveCandidate,
+  startRideVehicle,
 } from "@/core/observe";
 import {
   parseReplayFile,
@@ -650,11 +651,19 @@ function ensureGhostVehicle(session: ReplaySession, ghost: Ghost, model: number)
         destroyAttireObjs(objs);
       }
     });
-    // 重挂到新车：镜头观战保留 originPlayerId 重跟踪
-    for (const { playerId, originPlayerId } of reattach) {
+    // 重挂到新车：副驾保持副驾（再上车），镜头观战保留 originPlayerId 重跟踪
+    for (const { playerId, originPlayerId, mode } of reattach) {
       const w = Player.getInstance(playerId);
       if (w && w.isConnected()) {
-        startObserveVehicle(w, v, originPlayerId);
+        if (mode === "ride") {
+          // 副驾重挂失败（座位被占等）→ 兜底回镜头观战（保留可 /tv off 的退出路径，
+          // 否则玩家无观察态站在回放世界）
+          if (!startRideVehicle(w, v)) {
+            startObserveVehicle(w, v, originPlayerId);
+          }
+        } else {
+          startObserveVehicle(w, v, originPlayerId);
+        }
       }
     }
   } catch (e) {
@@ -1453,7 +1462,9 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       break;
     }
     case "watch": {
-      // 观看自己的回放（观战 ghost 车；比赛回放额外挂比赛信息 TD）
+      // 观看自己的回放（观战 ghost 车；比赛回放额外挂比赛信息 TD）。
+      // 已处于副驾模式（/rp ride 且仍在观战态）→ 视为"在看"，切走时统一由
+      // stopReplaySession 下车，这里不重复处理
       if (!isObserving(player.id)) {
         startObserveVehicle(player, session.ghosts[0].vehicle);
         session.watchers.add(player.id); // 会话停止时统一退出观战
@@ -1463,8 +1474,16 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         }
         sysMsg(player, "replay", "已切换为观看回放视角", "info");
       } else if (!session.watchers.has(player.id)) {
-        session.watchers.add(player.id);
+        session.watchers.add(player.id); // 副驾已在看：登记统一清理
       }
+      break;
+    }
+    case "ride": {
+      // 副驾模式：真实坐在 ghost 车里跟随（NPC 开车），而非镜头观战。
+      // 切换上一个/下一个快捷键与观战一致（FIRE/←→/Q/E，见 observe.ts）。
+      // 多次调用幂等（同车同模式跳过）；已在别的车副驾 → 换车
+      startRideVehicle(player, session.ghosts[0].vehicle);
+      session.watchers.add(player.id); // 会话停止时统一下车（stopReplaySession → stopObserve → removeFromVehicle）
       break;
     }
     case "stop": {
