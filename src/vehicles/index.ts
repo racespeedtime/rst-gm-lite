@@ -509,6 +509,11 @@ export function initVehicleCommands(): void {
   });
 
   PlayerEvent.onCommandText(["c", "veh"], ({ player, subcommand, next }) => {
+    // 诊断：定位"/c 无提示"问题（命令是否分发到本 handler、arg/认证/锁状态）
+    logger.info(
+      `[veh] /c dispatch player=${player.getName().name}(${player.id}) arg=${subcommand[0] ?? "(空)"} ` +
+        `authed=${!!getAuthState(player.id)} locked=${isPlayerLocked(player.id)}`,
+    );
     // B6：刷车需已认证且不在流程锁中（未登录/大厅对话框期间 /c 会触发
     // getOrCreateUserVehicle 的 auth! 空断言 → 报错被吞，只留"刷车失败"）
     if (!getAuthState(player.id) || isPlayerLocked(player.id)) {

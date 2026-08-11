@@ -194,12 +194,18 @@ export async function openRaceDetailPanel(
     ...(mine ? ["编辑赛道", "删除赛道（二次验证）"] : []),
   ];
   // 详情信息头（名称/长度/作者）后接分隔空行，其后才是操作项。
-  // INFO_LINES = 信息头行数 + 1（分隔空行）：按结构计算而非魔法数 4——
-  // 未来加信息头行时偏移自动跟随，不会错位
+  // INFO_LINES = 信息头行数 + 1（分隔空行）：按结构计算。
+  // 关键：信息头文本必须单行（不能换行）——SA LIST 对话框按渲染宽度自动换行，
+  // 赛道名（VarChar 255）/作者昵称过长会折行，listItem 偏移按"逻辑行数"算就错位
+  // （点"开始比赛"实际命中"查看回放"）。名称/作者截断到安全宽度（中文双宽，
+  // 28 字符 ≈ 56 列，在 ~64 列换行阈值内），杜绝折行。
+  const name = race.name.length > 28 ? `${race.name.slice(0, 28)}…` : race.name;
+  const author = race.sysUser?.username ?? "?";
+  const authorSafe = author.length > 12 ? `${author.slice(0, 12)}…` : author;
   const headerLines = [
-    `{FFD700}${race.name}`,
+    `{FFD700}${name}`,
     `长度 ${Math.round(Number(race.totalLength))}m · ${race.laps ?? 1} 圈`,
-    `作者 ${race.sysUser?.username ?? "?"} · 纪录 ${recs} 条`,
+    `作者 ${authorSafe} · 纪录 ${recs} 条`,
   ];
   const INFO_LINES = headerLines.length + 1;
   const info = [...headerLines, "", ...actions.map((o, i) => `${i + 1}. ${o}`)].join("\n");
