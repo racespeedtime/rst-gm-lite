@@ -307,12 +307,15 @@ async function createRaceByCommand(player: Player, name: string): Promise<void> 
 async function handleRaceEditCommand(player: Player, rest: string[]): Promise<void> {
   const sub = rest[0];
   if (!sub) {
+    // 拆两条短消息：SA 客户端聊天单条上限 128 字节（gbk），整条 usage 139 字节
+    // 会被客户端静默丢弃（"无提示"）
     sysMsg(
       player,
       "race",
-      "用法: /r edit 赛道名 进入编辑 · /r edit cp 放置CP · /r edit cpsize [值] 设置CP尺寸 · /r edit trg 脚本说明 · /r edit d 菜单 · /r edit q 退出",
+      "用法: /r edit 赛道名 进编辑 · /r edit cp 放CP · /r edit cpsize [值] 设尺寸",
       "info",
     );
+    sysMsg(player, "race", " /r edit trg 脚本说明 · /r edit d 菜单 · /r edit q 退出", "info");
     return;
   }
   if (sub === "cp") {

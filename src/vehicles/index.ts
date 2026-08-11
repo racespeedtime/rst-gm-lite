@@ -527,9 +527,15 @@ export function initVehicleCommands(): void {
       return next();
     }
     if (!arg || Number.isNaN(+arg)) {
+      // 拆两条短消息：SA 客户端聊天单条上限 128 字节（gbk），整条 usage 143
+      // 字节会被静默丢弃（"什么都没提示"的根因）
       player.sendClientMessage(
         COLOR_WHITE,
-        "刷车: /c [车辆ID400-611] · /c list 图片选车 · /c wode 召唤 · /cc 色1 色2 · /c lock · /c chepai 文字 · /c kick · /c 3d 3D速度表 · /c 2d 2D速度表",
+        "刷车: /c [车辆ID400-611] · /c list 选车 · /c wode 召唤",
+      );
+      player.sendClientMessage(
+        COLOR_WHITE,
+        " /cc 色1 色2 · /c lock · /c chepai 文字 · /c kick · /c 3d/2d 速度表",
       );
       return next();
     }
