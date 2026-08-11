@@ -17,7 +17,7 @@ import { getAuthState } from "@/auth/auth";
 import { addNitro } from "@/vehicles";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { isInRace } from "@/race/room";
-import { clearTimeoutSafe, setTimeoutSafe } from "@/core/timers";
+import { setIntervalSafe, clearTimeoutSafe, setTimeoutSafe } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { sysMsg } from "@/utils/msg";
@@ -478,26 +478,47 @@ export function initDrifterNpcs(): void {
     return next();
   });
 
-  // 漂移 NPC 车乘客按 KEY_FIRE（鼠标左键）→ 给 NPC 车补一管氮气。
-  // NPC 车用 .rec 播放无人开（不同于回放 ghost 的帧 keys 驱动），车上的氮气
-  // 喷完即消失、没有自动补给——乘客按 FIRE 触发补给（无冷却、按键即补，按住只
-  // 触发一次上升沿 = 一管，连点持续喷；对齐回放 ghost 的 FIRE 上升沿补给语义，
-  // 组件装一管不会打断正在进行的喷射）。只响应真实玩家（NPC 无按键事件）。
+  // 漂移 NPC 车乘客按 KEY_FIRE（左键）/ KEY_ACTION（右键）→ 给 NPC 车补氮气
+  //（点按模式：按住持续补，对齐 vehicleAuto hold）。NPC 车用 .rec 播放无人开，
+  // 车上氮气喷完即消失、无自动补给——乘客按下瞬间补一管（即时反馈），每秒 tick
+  // 检测仍按住继续补（SA 氮气一管约 3-4 秒，每秒补维持连续喷射，松开停补）。
+  // 只响应真实玩家（NPC 无按键事件）。
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
-    const pressed = isPressed(newKeys, oldKeys, KeysEnum.FIRE); // 按下瞬间
+    const pressed =
+      isPressed(newKeys, oldKeys, KeysEnum.FIRE) || isPressed(newKeys, oldKeys, KeysEnum.ACTION);
     if (!pressed || !player.isInAnyVehicle()) return next();
     const veh = player.getVehicle();
     if (!veh) return next();
     // 是否在某个漂移 NPC 车上（乘客位）
     for (const ent of entities.values()) {
       if (ent.vehicle === veh && ent.npc?.isValid()) {
-        addNitro(veh);
+        addNitro(veh); // 按下瞬间补一管（即时反馈）
         break;
       }
     }
     return next();
   });
+
+  // 按住持续补（每秒）：drift 车上有乘客按住 FIRE/ACTION → 续氮气。
+  // 对齐 vehicleAuto hold 点按逻辑（每秒检测按住补一管）；setIntervalSafe 登记制
+  // 由 GameMode.onExit 统一清理。
+  setIntervalSafe(() => {
+    for (const ent of entities.values()) {
+      if (!ent.vehicle?.isValid() || !ent.npc?.isValid()) continue;
+      if (!ent.passengerSlots.some((p) => p && p.isConnected())) continue;
+      let holding = false;
+      for (const p of ent.passengerSlots) {
+        if (!p || !p.isConnected()) continue;
+        const k = p.getKeys().keys & 0xffff;
+        if ((k & (KeysEnum.FIRE | KeysEnum.ACTION)) !== 0) {
+          holding = true;
+          break;
+        }
+      }
+      if (holding) addNitro(ent.vehicle);
+    }
+  }, 1000);
 
   // 断线 → 释放座位（含在 NPC 车里断线的情况）
   PlayerEvent.onDisconnect(({ player, next }) => {
