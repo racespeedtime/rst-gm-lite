@@ -32,3 +32,9 @@ export function formatShortDate(d: Date): string {
   const pad2 = (n: number): string => String(n).padStart(2, "0");
   return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
+
+/** 完整日期（YYYY-MM-DD HH:MM，排行榜等需要具体年月日的场景；固定格式同 formatShortDate） */
+export function formatFullDate(d: Date): string {
+  const pad2 = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}

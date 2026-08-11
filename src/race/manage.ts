@@ -6,7 +6,7 @@ import { isSuperAdmin } from "@/admin/op";
 import { pickOption } from "@/personalize/settings";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
-import { formatTime, formatDuration, formatShortDate } from "@/utils/format";
+import { formatTime, formatDuration, formatShortDate, formatFullDate } from "@/utils/format";
 import { sysMsg } from "@/utils/msg";
 import { swapSortIndex, nextSortIndex, compactSortIndex } from "@/utils/sort";
 import type { MenuBack } from "@/core/panel";
@@ -279,8 +279,9 @@ async function listRaceReplays(player: Player, raceId: string, back?: MenuBack):
   await openReplayActions(player, r.item, { back, allowDelete: false });
 }
 
-/** 排行榜：多列分页展示前 100 条纪录（名次/玩家/用时/日期）。
- * 对齐 shadow 选择等列表的分页交互，热门赛道也能翻到靠后的名次 */
+/** 排行榜：多列分页展示前 100 条纪录（名次/玩家/用时/完整年月日）。
+ * 分页 + 手输页码跳转由 showPagedDialog 内置（多页自动出现"输入页码跳转"）；
+ * cacheKey 记住该赛道排行榜的停留页（per-race，重开回同页）。 */
 async function leaderboardFlow(player: Player, raceId: string, back?: MenuBack): Promise<void> {
   const records = await prisma.raceRecord.findMany({
     where: { raceId, deletedAt: null },
@@ -300,12 +301,14 @@ async function leaderboardFlow(player: Player, raceId: string, back?: MenuBack):
       String(index + 1),
       r.sysUser?.username ?? "?",
       formatTime(r.record),
-      formatShortDate(r.createdAt),
+      formatFullDate(r.createdAt),
     ],
     // 纯浏览：点行无选中语义，仅翻页/确定返回（防"点了没反应"的困惑）
     selectable: false,
     button1: "确定",
     button2: "返回",
+    // per-race 页码记忆（raceId 是稳定 uuid，作静态 key 安全）
+    cacheKey: `race:leaderboard:${raceId}`,
   });
   return back?.();
 }
