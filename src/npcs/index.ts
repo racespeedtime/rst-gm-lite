@@ -3,6 +3,8 @@ import {
   DialogStylesEnum,
   Dynamic3DTextLabel,
   GameMode,
+  isPressed,
+  KeysEnum,
   Npc,
   NpcEvent,
   Player,
@@ -472,6 +474,27 @@ export function initDrifterNpcs(): void {
     if (player.isNpc()) return next();
     if (oldState === PlayerStateEnum.PASSENGER || oldState === PlayerStateEnum.DRIVER) {
       removePassenger(player);
+    }
+    return next();
+  });
+
+  // 漂移 NPC 车乘客按 KEY_FIRE（鼠标左键）→ 给 NPC 车补一管氮气。
+  // NPC 车用 .rec 播放无人开（不同于回放 ghost 的帧 keys 驱动），车上的氮气
+  // 喷完即消失、没有自动补给——乘客按 FIRE 触发补给（无冷却、按键即补，按住只
+  // 触发一次上升沿 = 一管，连点持续喷；对齐回放 ghost 的 FIRE 上升沿补给语义，
+  // 组件装一管不会打断正在进行的喷射）。只响应真实玩家（NPC 无按键事件）。
+  PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
+    if (player.isNpc()) return next();
+    const pressed = isPressed(newKeys, oldKeys, KeysEnum.FIRE); // 按下瞬间
+    if (!pressed || !player.isInAnyVehicle()) return next();
+    const veh = player.getVehicle();
+    if (!veh) return next();
+    // 是否在某个漂移 NPC 车上（乘客位）
+    for (const ent of entities.values()) {
+      if (ent.vehicle === veh && ent.npc?.isValid()) {
+        addNitro(veh);
+        break;
+      }
     }
     return next();
   });
