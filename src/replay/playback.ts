@@ -1495,6 +1495,18 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       break;
     }
     case "watch": {
+      // /rp watch off：退出观战/副驾但**保留回放继续播放**——留在回放世界可
+      // 自由活动看车跑（stopObserve stayInWorld 不恢复 prevWorld，tickSession
+      // 的"owner 离开回放世界自动停止"判定不触发）；再 /rp watch 重新观战
+      if (arg === "off") {
+        if (isObserving(player.id)) {
+          stopObserve(player, { quiet: true, stayInWorld: true });
+          sysMsg(player, "replay", "已退出观战（回放继续播放，/rp watch 可重新观看）", "info");
+        } else {
+          sysMsg(player, "replay", "你当前不在观战/副驾状态", "warn");
+        }
+        break;
+      }
       // 观看自己的回放（观战 ghost 车；比赛回放额外挂比赛信息 TD）。
       // 已处于副驾模式（/rp ride 且仍在观战态）→ 视为"在看"，切走时统一由
       // stopReplaySession 下车，这里不重复处理

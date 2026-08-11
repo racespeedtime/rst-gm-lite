@@ -194,7 +194,8 @@ CP 进度与实时名次不走缓存：由 `noteCpProgress`（room 过 CP）/ `n
 
 - **镜头观战（watch）**：发起人 `startObserveVehicle`（比赛回放自动切独立世界 + 自动观战）；观察者切车键：**方向键 ←/→**（观战/副驾下方向键不触发 onKeyStateChange，统一由 getKeys 轮询边沿检测驱动，见 `pollObserveKeys`。Q/E 不做切换——观战模式客户端把 Q/E 当本地镜头键不上传，实机验证收不到）。
 - **副驾模式（ride）**：真实坐进 ghost 乘客座跟随 NPC 开车（`startRideVehicle`，非镜头观战）。切换键同样只用**方向键 ←/→**（FIRE 让位给氮气）；只切车辆目标（不会切到真人玩家）。换车型/重挂失败兜底回镜头观战。
-- 比赛信息 TD（C P / TIME / BEST / RANK）从**第一个 ghost 的当前帧状态**渲染：CP 进度、实时名次、时间/天气全在帧里 → seek/变速天然同步，内容去重（变化才 setString）；
+- **退出观战保留回放（`/rp watch off`）**：`stopObserve(stayInWorld)` 不恢复观战前世界——玩家留在回放世界自由活动（回放继续播放），`tickSession` 的"owner 离开回放世界自动停止"判定不触发；再 `/rp watch` 重新观战。
+- 比赛信息 TD（C P / TIME / BEST / RANK）从**视觉头车（leadGhost）的当前帧状态**渲染：CP 进度、实时名次、时间/天气全在帧里 → seek/变速天然同步，内容去重（变化才 setString）；
 - 3D CP 箭头 + 小地图图标：按帧 `cpProgress` 计算当前要过的 CP，进度推进播 1056 音效；
 - 时间/天气随帧应用到观察者视角（CP 脚本 time/weather 的效果"状态化"重放）。
 
@@ -242,4 +243,6 @@ CP 脚本是离散事件（cveh 换车、time/weather、fix/damage），NPC 回�
 - 玩家开自己的爱车（坐主驾），选一条"自己的该赛道比赛回放"作影子：`sampleAt` 采样 + `emulateDriverSync` 驱动影子 NPC（与回放同一套）；
 - 复用 playback 的 NPC 池 / 世界段（`REPLAY_WORLD_BASE=2001` 起）/ sync 屏蔽集；
 - 赛道 CP 检测（与比赛共用 RaceCpEvent 入口）、AFK/掉线/结算各自独立；
-- 影子播完边界 = 播放终点，`CHALLENGE_END_GRACE_MS=20s` 宽限。
+- 影子播完边界 = 播放终点，`CHALLENGE_END_GRACE_MS=20s` 宽限；
+- **玩家与影子并排起步**：影子车起点 = 回放录制起点（`data.header.startX/Y/Z`），玩家爱车 `seatPlayerAtStart` 也放到同一录制起点（此前用第一个 CP `cps[0]`，与影子错位）；起步朝向 0（header 未存录制角度），与影子车一致；CP 箭头仍指向第一个 CP。
+- 挑战**不进入观战**：玩家开自己车实时 PK（观战是回放 watch 的事，两套互斥入口——挑战中 `/rp` 被拦截）。

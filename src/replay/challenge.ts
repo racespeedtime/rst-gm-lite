@@ -372,19 +372,20 @@ function resetChallengeCheckpoint(player: Player, ch: ChallengeSession): void {
   RaceCheckpoint.set(player, 0, first.x, first.y, first.z, nxt2.x, nxt2.y, nxt2.z, first.size);
 }
 
-/** 玩家位置挪到起点 CP（车就位 + 放回车里；restart 与首进共用）。
+/** 玩家位置挪到录制起点（车就位 + 放回车里；restart 与首进共用）。
+ * 起点 = 回放录制者的**录制起点**（data.header.startX/Y/Z），与影子车同位置——
+ * 玩家与影子并排起步，公平对齐（此前用第一个 CP cps[0]，与影子起点分离，
+ * 玩家起步位置与影子错位）。restart 与首进共用。
  * async：无车时刷车是异步的，调用方 await 后需自行做断线检查。
  * 入口 pendingRespawn 短路：restart↔go 交错时（restart 的 seatPlayerAtStart 不 await
  * 就 go），在途刷车未完成则跳过本次——车由在途那次刷到位，防双 spawnVehicle 并发
  * 销毁对方刚建的车/残留孤儿实体。 */
 async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<void> {
-  const first = ch.cps[0];
-  if (!first) return;
   if (pendingRespawn.has(player.id)) return; // 刷车在途 → 跳过（在途那次会就位）
   const owned = getOwnedVehicle(player.id);
   if (owned && owned.isValid()) {
-    owned.setPos(first.x, first.y, first.z);
-    owned.setZAngle(first.angle);
+    owned.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
+    owned.setZAngle(0); // 朝向 0 对齐影子车（header 未存录制起点角度）
     owned.setVirtualWorld(ch.worldId);
     owned.setHealth(1000);
     owned.repair();
@@ -409,8 +410,8 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
     if (spawned) {
       const veh = getOwnedVehicle(player.id);
       if (veh && veh.isValid()) {
-        veh.setPos(first.x, first.y, first.z);
-        veh.setZAngle(first.angle);
+        veh.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
+        veh.setZAngle(0);
         veh.setVirtualWorld(ch.worldId);
       }
     }
@@ -421,7 +422,7 @@ async function seatPlayerAtStart(player: Player, ch: ChallengeSession): Promise<
   // 人到起点，跳过后玩家仍在车内就位。
   player.setVirtualWorld(ch.worldId);
   if (!player.isInAnyVehicle()) {
-    player.setPos(first.x, first.y, first.z);
+    player.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
     const veh = getOwnedVehicle(player.id);
     if (veh && veh.isValid()) veh.putPlayerIn(player, 0);
   }

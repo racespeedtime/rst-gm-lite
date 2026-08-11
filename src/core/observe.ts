@@ -255,9 +255,14 @@ export function startObserveVehicle(
   emitObserveStart(observer.id);
 }
 
-/** 停止观战（回到观战前的世界/室内）。quiet=true 时跳过"已关闭观战"提示
- *（换车重挂等瞬态场景，避免误导刷屏——重挂紧接着 startObserveVehicle） */
-export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
+/** 停止观战。quiet=true 时跳过"已关闭观战"提示（换车重挂等瞬态场景，避免误导
+ * 刷屏——重挂紧接着 startObserveVehicle）；stayInWorld=true 时不恢复观战前的
+ * 世界/室内（玩家留在观战所在世界——回放"退出观战但保留回放"场景：留在回放
+ * 世界可自由活动，tickSession 的"owner 离开回放世界自动停止"判定不触发） */
+export function stopObserve(
+  player: Player,
+  opts?: { quiet?: boolean; stayInWorld?: boolean },
+): void {
   const state = observeStates.get(player.id);
   if (!state) {
     sysMsg(player, "observe", "你不在观战状态", "warn");
@@ -275,9 +280,11 @@ export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
     }
   }
   player.toggleSpectating(false);
-  // 恢复观战前所在战局（世界）与室内
-  player.setVirtualWorld(state.prevWorld);
-  player.setInterior(state.prevInterior);
+  // 恢复观战前所在战局（世界）与室内；stayInWorld 则保留当前世界
+  if (!opts?.stayInWorld) {
+    player.setVirtualWorld(state.prevWorld);
+    player.setInterior(state.prevInterior);
+  }
   if (!opts?.quiet) {
     sysMsg(player, "observe", "已关闭观战", "info");
   }
