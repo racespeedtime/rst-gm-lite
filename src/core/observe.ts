@@ -288,9 +288,14 @@ export function stopObserve(player: Player, opts?: { quiet?: boolean }): void {
  *   → 2 座车被误判"已满"）
  * - 调用者自己：可能已上车但 observeStates 被外部清（幂等不命中），自己占的
  *   座不算"满"——已在车上由 startRideVehicle 复用座位兜底
+ * 注意：摩托等车型 GetVehicleSeats 返回 1（SA 语义只有司机位），但 open.mp
+ * 允许 putPlayerIn(seat 1) 坐后座——乘客座枚举下限固定到 1（至少副驾可坐），
+ * 上限 4（putPlayerIn 支持 0-4）
  */
 function findFreePassengerSeat(veh: Vehicle, observerId: number): number | null {
-  const maxSeat = Math.min(veh.getSeats(), 5); // 0-4 共 5 座（0=司机）
+  const total = veh.getSeats();
+  // 多座车（bus/train）只枚举到 4（putPlayerIn 上限）；普通车至少枚举 seat 1
+  const maxSeat = Math.max(2, Math.min(total, 5));
   const occupied = new Set<number>();
   for (const p of Player.getInstances()) {
     if (p.isNpc() || !p.isConnected() || p.id === observerId) continue;
@@ -498,34 +503,16 @@ export function initObserve(): void {
   });
 
   // 观战切换（按下瞬间触发；只响应观战者）：
-  // 左键（FIRE）→ 下一个；Q（LOOK_LEFT）/E（LOOK_RIGHT）→ 上一个/下一个。
-  // SA-MP 键位：Q=LOOK_LEFT(256)、E=LOOK_RIGHT(64)，两者都触发
-  // onKeyStateChange；鼠标右键（瞄准）观战中客户端不发送不可用；←/→ 方向键
-  // 不触发 onKeyStateChange（文档明确），由 pollObserveKeys 的 getKeys 轮询。
+  // Q（LOOK_LEFT）/E（LOOK_RIGHT）→ 上一个/下一个；←/→ 方向键由 pollObserveKeys
+  // 的 getKeys 轮询（onKeyStateChange 收不到方向键）。
+  // **FIRE（左键）不绑定切换**：SA 里左键是默认瞄准/射击键，观战/副驾中玩家
+  // 点左键会触发客户端行为（瞄准、氮气等）——若 FIRE 同时切车，玩家观战时点
+  // 左键就反复 spectateVehicle 切 ghost 车（"一直反复切观战/视角乱跳"）。
+  // 切换入口：Q/E、←/→ 方向键、/tv next|prev 命令。
   PlayerEvent.onKeyStateChange(({ player, newKeys, oldKeys, next }) => {
     if (player.isNpc()) return next();
     const st = observeStates.get(player.id);
     if (!st) return next(); // 非观战不处理
-    // 副驾模式（mode="ride"）：FIRE 是**点按氮气键**（vehicleAuto hold / drift
-    // NPC 都监听 FIRE）——若 FIRE 同时触发观战切换，按 FIRE 喷氮气会切 ghost 车
-    // → startRideVehicle 反复 removeFromVehicle+putPlayerIn，视角反复跳、没法
-    // 稳定跟随（"一直在反复切观战"）。副驾下 FIRE 让位给氮气；方向键/Q/E 保留
-    // 切换 ghost 车（与观战一致）
-    if (st.mode === "ride") {
-      if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_RIGHT)) {
-        cycleObserveTarget(player, true); // E 键 → 下一个
-        return next();
-      }
-      if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_LEFT)) {
-        cycleObserveTarget(player, false); // Q 键 → 上一个
-        return next();
-      }
-      return next();
-    }
-    if (isPressed(newKeys, oldKeys, KeysEnum.FIRE)) {
-      cycleObserveTarget(player, true); // 左键 → 下一个
-      return next();
-    }
     if (isPressed(newKeys, oldKeys, KeysEnum.LOOK_RIGHT)) {
       cycleObserveTarget(player, true); // E 键 → 下一个
       return next();
