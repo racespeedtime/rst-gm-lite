@@ -130,8 +130,10 @@ const NITRO_SIM_MS = 300;
 /** FIRE 按住期间按**墙钟**补氮气的间隔（毫秒）：客户端喷氮气罐按现实时间消耗
  * （约 1-2 秒喷完），而补管节流是播放时间——慢放 0.25x 下播放 1s = 现实 4s，
  * 点按补管间隔被拉到 4s 现实，罐子喷完到下次补管之间会断（0.5x 也有 2s 空窗）。
- * 故 FIRE 持续期间每 NITRO_TOPDUP_MS 墙钟补一管保持罐子满（addNitro 幂等，多补
- * 无害；快进 4x 下点按补本就每 250ms 一次，早已验证频繁补安全） */
+ * 故 FIRE 持续期间每 NITRO_TOPDUP_MS 墙钟补一管保持罐子满。addNitro 幂等，多补
+ * 无害；快进 4x 下点按补本就每 250ms 一次，早已验证频繁补安全。
+ * **只在慢放（speed<1）启用**：≥1x 时播放时间补管间隔 ≤1s 现实，罐子不空，
+ * 兜底纯冗余（challenge 影子固定 1x，同样不启用）。 */
 const NITRO_TOPDUP_MS = 1000;
 
 /** 找回放 ghost 车所属会话的倍速（非回放/挑战车返回 null）。
@@ -808,10 +810,10 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
         ghost.nitroSimUntil = now + NITRO_SIM_MS; // 模拟窗口用墙钟（客户端物理按现实时间跑）
         addNitro(ghost.vehicle);
       }
-      // 墙钟兜底：客户端喷氮气罐按**现实时间**消耗（约 1-2s 喷完），播放时间补管
-      // 间隔在慢放被拉长（0.25x 下 1s 播放 = 4s 现实）会断罐——FIRE 持续期间按
-      // 墙钟补管保持罐子满（addNitro 幂等，与播放时间补管叠加无害）
-      if (now - ghost.lastNitroTopupAt >= NITRO_TOPDUP_MS) {
+      // 墙钟兜底（仅慢放）：客户端喷氮气罐按**现实时间**消耗（约 1-2s 喷完），
+      // 播放时间补管间隔在慢放被拉长（0.25x 下 1s 播放 = 4s 现实）会断罐——
+      // FIRE 持续期间按墙钟补管保持罐子满。≥1x 时间隔 ≤1s 现实不空，跳过
+      if (session.speed < 1 && now - ghost.lastNitroTopupAt >= NITRO_TOPDUP_MS) {
         ghost.lastNitroTopupAt = now;
         addNitro(ghost.vehicle);
       }

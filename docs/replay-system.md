@@ -173,9 +173,10 @@ CP 进度与实时名次不走缓存：由 `noteCpProgress`（room 过 CP）/ `n
 
 ### 4.7 倍速
 
-- 档位 `REPLAY_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4]`；
+- 档位 `REPLAY_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4]`；
 - 播放时间按 `elapsed × speed` 推进，`renderGhost` 里**速度字段同步乘倍速**（位置按倍速跳变，速度字段不缩放会出现"位置快、速度慢"的抽动）；
-- 车速表侧 `getReplaySpeedScaleForVehicle` 反向除回倍速显示**录制原始速度**。
+- 车速表侧 `getReplaySpeedScaleForVehicle` 反向除回倍速显示**录制原始速度**；
+- **慢放断氮气兜底**：客户端氮气罐按**现实时间**消耗（约 1-2s 喷完），而补管节流是**播放时间**——0.25x 下播放 1s = 现实 4s，点按补管间隔被拉到 4s 现实会断罐。修复：FIRE 按住期间叠加**墙钟兜底**（`NITRO_TOPDUP_MS=1s` 现实补一管，`addNitro` 幂等）；只在 `speed<1` 启用（≥1x 播放时间间隔 ≤1s 现实，罐子不断；challenge 影子固定 1x 不启用）。
 
 **不支持倒放**：倒放时帧间速度插值方向与录制速度矛盾，客户端物理按正向速度处理，车辆会一抽一抽。支持 seek 回看即可。
 
@@ -188,9 +189,10 @@ CP 进度与实时名次不走缓存：由 `noteCpProgress`（room 过 CP）/ `n
 
 帧里 `vehicleModel` 变化（cveh 换车）时：**先摘除旧车所有观战者**（`detachObservingVehicle`——否则 destroy 触发 onStreamOut → suggestStop 弹"对象已无法跟踪"对话框，用户点"是"会撤销后面的重挂）→ 销毁旧车 → 建新车（位置延续、带氮气、注册观战候选）→ NPC 立即上车 → 同一同步函数内重挂观战者。
 
-### 4.10 观战 HUD（帧状态渲染）
+### 4.10 观战与副驾
 
-- 发起人 `startObserveVehicle`（比赛回放自动切独立世界 + 自动观战）；
+- **镜头观战（watch）**：发起人 `startObserveVehicle`（比赛回放自动切独立世界 + 自动观战）；观察者切车键：**Q/E + 方向键 ←/→**（spectate 模式 Q/E 是客户端本地镜头键不上传 onKeyStateChange，方向键 SA-MP 本就不走该事件——统一由 getKeys 轮询边沿检测驱动，见 `pollObserveKeys`）。
+- **副驾模式（ride）**：真实坐进 ghost 乘客座跟随 NPC 开车（`startRideVehicle`，非镜头观战）。切换键只用**方向键 ←/→**（Q/E 是本地镜头键不该占，FIRE 让位给氮气）；只切车辆目标（不会切到真人玩家）。换车型/重挂失败兜底回镜头观战。
 - 比赛信息 TD（C P / TIME / BEST / RANK）从**第一个 ghost 的当前帧状态**渲染：CP 进度、实时名次、时间/天气全在帧里 → seek/变速天然同步，内容去重（变化才 setString）；
 - 3D CP 箭头 + 小地图图标：按帧 `cpProgress` 计算当前要过的 CP，进度推进播 1056 音效；
 - 时间/天气随帧应用到观察者视角（CP 脚本 time/weather 的效果"状态化"重放）。
@@ -201,7 +203,7 @@ CP 进度与实时名次不走缓存：由 `noteCpProgress`（room 过 CP）/ `n
 
 ### 4.12 控制命令（controlReplay）
 
-`/rp pause|play|speed|seek|watch|stop`（各看各的：只作用于自己发起的会话）。pause 立即发一帧静止帧（即时反馈，不等 tick）；play 解除暂停继续推进（全部停发则提示"已播完"）。
+`/rp pause|play|speed|seek|watch|ride|stop`（各看各的：只作用于自己发起的会话）。pause 立即发一帧静止帧（即时反馈，不等 tick）；play 解除暂停继续推进（全部停发则提示"已播完"）。
 
 ### 4.13 清理（stopReplaySession）
 
@@ -221,7 +223,7 @@ CP 脚本是离散事件（cveh 换车、time/weather、fix/damage），NPC 回�
 
 ### 5.3 为什么不接管真实玩家的车
 
-你无法主动设置真实玩家的 CarSync/FootSync。现状回放是**旁观/竞技**定位：ghost 车锁门只可看，比赛回放独立世界观战，挑战是玩家开自己的车 vs NPC 影子——没有"NPC 接管玩家主驾"的使用场景，所以那套"副驾→接管→换回"逻辑未实现。
+你无法主动设置真实玩家的 CarSync/FootSync。现状回放是**旁观/竞技**定位：ghost 车锁门只可看；**副驾模式（/rp ride）是真实坐进 ghost 乘客座跟随 NPC 开车**（`startRideVehicle`，服务端 `putPlayerIn` 入座，非接管主驾——司机仍是录制 NPC），比赛中副驾主视角也可用；挑战是玩家开自己的车 vs NPC 影子。没有"NPC 接管玩家主驾"的场景，所以那套"副驾→接管→换回"逻辑未实现。
 
 ---
 

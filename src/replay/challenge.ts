@@ -67,8 +67,6 @@ interface ChallengeGhost {
   lastAutoNitroAt: number;
   /** 上次氮气按住持续补**播放时间**（点按模式录制：帧 FIRE 位按住每播放 1 秒补一管） */
   lastNitroAt: number;
-  /** 上次 FIRE 按住期间按**墙钟**补氮气时间（慢放保持罐子不空，见 playback NITRO_TOPDUP_MS） */
-  lastNitroTopupAt: number;
   /** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的**墙钟**截止点：补组件那帧
    *  采样可能恰好是录制者松油门瞬间（帧 keys 无 SPRINT），客户端有组件没按键
    *  不喷——窗口内强制 SPRINT 保证喷起来；窗口结束恢复录制按键 */
@@ -267,12 +265,8 @@ function renderGhost(ch: ChallengeSession): void {
         ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
         addNitro(ch.ghost.vehicle);
       }
-      // 墙钟兜底：客户端喷氮气罐按**现实时间**消耗，播放时间补管间隔在慢放被
-      // 拉长会断罐——FIRE 持续期间按墙钟补管保持罐子满（与播放时间补管叠加无害）
-      if (now - ch.ghost.lastNitroTopupAt >= NITRO_TOPDUP_MS) {
-        ch.ghost.lastNitroTopupAt = now;
-        addNitro(ch.ghost.vehicle);
-      }
+      // 无墙钟兜底（playback 的 NITRO_TOPDUP_MS 仅慢放需要）：影子固定 1x，
+      // 播放时间补管间隔 ≤1s 现实，罐子不会断
     } else if (!atEnd && pt - ch.ghost.lastAutoNitroAt >= 15_000) {
       ch.ghost.lastAutoNitroAt = pt;
       ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
@@ -341,9 +335,6 @@ const CHALLENGE_END_GRACE_MS = 20_000;
 const NITRO_REFILL_MS = 1000;
 /** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的时长（墙钟毫秒，对齐 playback） */
 const NITRO_SIM_MS = 300;
-/** FIRE 按住期间按**墙钟**补氮气间隔（毫秒，对齐 playback NITRO_TOPDUP_MS：
- *  客户端氮气罐按现实时间消耗，慢放下播放时间补管间隔被拉长会断罐） */
-const NITRO_TOPDUP_MS = 1000;
 
 /**
  * 挑战用车兜底：玩家应始终在车上（对齐比赛"无车兜底"语义）。
@@ -1023,7 +1014,6 @@ async function startChallengeCore(
       warnedEmulateFail: false,
       lastAutoNitroAt: 0,
       lastNitroAt: 0,
-      lastNitroTopupAt: 0,
       nitroSimUntil: -1,
       online: true, // 起始帧在线（掉线重连回放才可能翻转为 false）
     };

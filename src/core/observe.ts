@@ -84,10 +84,15 @@ function cycleObserveTarget(observer: Player, forward: boolean): void {
     } else {
       const target = Vehicle.getInstance(-k);
       if (target && target.isValid()) {
-        // 副驾模式切换 → 换一辆车坐（仍是副驾）；镜头观战 → 原切换逻辑
+        // 切到的还是当前目标（候选只有一辆时循环回自己）：跳过无意义切换——
+        // 否则 spectate 反复 spectateVehicle 同一辆会重置镜头（f4b6d41 的坑）。
+        // 仅 kind=vehicle 时可比（玩家 id 与车辆 id 独立命名空间，数值可能撞号）
+        if (st.kind === "vehicle" && target.id === st.targetId) continue;
         if (st.mode === "ride") {
-          startRideVehicle(observer, target);
-          sysMsg(observer, "observe", `已切换副驾到车辆 #${target.id}`, "info");
+          // 副驾切换失败（座位满等）：内部已提示原因，不追加"已切换"误报
+          if (startRideVehicle(observer, target)) {
+            sysMsg(observer, "observe", `已切换副驾到车辆 #${target.id}`, "info");
+          }
         } else {
           startObserveVehicle(observer, target);
           sysMsg(observer, "observe", `已切换到车辆 #${target.id}`, "info");
@@ -472,6 +477,14 @@ function retracePlayer(observer: Player, state: ObserveState): void {
     // kind === "vehicle"：targetId 是车辆 id（不能用 Player.getInstance 取）
     const veh = Vehicle.getInstance(state.targetId);
     if (veh && veh.isValid()) {
+      if (state.mode === "ride") {
+        // 副驾保持副驾（再上车）；座位被占/上车失败 → 兜底回镜头观战（不破坏
+        // 观察态，保留 /tv off 退出路径，玩家不至于被晾在无观战态的回放世界）
+        if (!startRideVehicle(observer, veh)) {
+          startObserveVehicle(observer, veh);
+        }
+        return;
+      }
       startObserveVehicle(observer, veh);
       return;
     }
@@ -545,7 +558,7 @@ export function initObserve(): void {
       sysMsg(
         player,
         "observe",
-        "用法: /tv 玩家ID 观战 · /tv off 关闭 · /tv next 下一个 · /tv prev 上一个",
+        "用法: /tv 玩家ID 观战 · /tv off 关闭 · /tv next|prev 切换（观战中 Q/E + 方向键 也可切车）",
         "info",
       );
       return next();
