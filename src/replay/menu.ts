@@ -333,7 +333,7 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       info: [
         "1. 播放 / 继续",
         "2. 暂停",
-        "3. 倍速（0.5 / 0.75 / 1 / 1.25 / 1.5 / 2 / 4）",
+        "3. 倍速（0.25 / 0.5 / 0.75 / 1 / 1.25 / 1.5 / 2 / 4）",
         "4. 跳转时间（秒）",
         "5. 切换视角（镜头观战 / 副驾模式）",
         "6. 显示/隐藏 ghost 标签",

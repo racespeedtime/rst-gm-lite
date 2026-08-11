@@ -116,7 +116,7 @@ export function freeReplayWorld(worldId: number): void {
 /** 播放推进帧间隔（60fps） */
 const TICK_MS = 16;
 /** 支持的倍速档位（/rp speed、面板倍速选择共用校验） */
-export const REPLAY_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2, 4];
+export const REPLAY_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4];
 /** emulate 发包节流：对齐 open.mp in_vehicle_sync_rate=30（30Hz）——60fps tick
  *  每 2 tick 发一个 DriverSync 模拟包（发太多服务器会合并/浪费） */
 const EMULATE_INTERVAL_MS = 33;
@@ -127,6 +127,12 @@ const NITRO_REFILL_MS = 1000;
 /** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的时长（墙钟毫秒）：客户端
  *  喷氮气物理按现实时间跑，窗口内（约 9 帧 @30Hz）每帧带 SPRINT 保证喷起来 */
 const NITRO_SIM_MS = 300;
+/** FIRE 按住期间按**墙钟**补氮气的间隔（毫秒）：客户端喷氮气罐按现实时间消耗
+ * （约 1-2 秒喷完），而补管节流是播放时间——慢放 0.25x 下播放 1s = 现实 4s，
+ * 点按补管间隔被拉到 4s 现实，罐子喷完到下次补管之间会断（0.5x 也有 2s 空窗）。
+ * 故 FIRE 持续期间每 NITRO_TOPDUP_MS 墙钟补一管保持罐子满（addNitro 幂等，多补
+ * 无害；快进 4x 下点按补本就每 250ms 一次，早已验证频繁补安全） */
+const NITRO_TOPDUP_MS = 1000;
 
 /** 找回放 ghost 车所属会话的倍速（非回放/挑战车返回 null）。
  * 速度表反向除倍速用：emulate 驱动把 velocity×倍速推进（物理位置与速度一致），
@@ -211,6 +217,8 @@ interface Ghost {
   lastAutoNitroAt: number;
   /** 上次氮气按住持续补**播放时间**（点按录制：帧 FIRE 位按住每播放 1s 补一管） */
   lastNitroAt: number;
+  /** 上次 FIRE 按住期间按**墙钟**补氮气时间（慢放保持罐子不空，见 NITRO_TOPDUP_MS） */
+  lastNitroTopupAt: number;
   /** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的**墙钟**截止点：补组件那帧
    *  采样可能恰好是录制者松油门瞬间（帧 keys 无 SPRINT），客户端有组件没按键
    *  不喷——窗口内强制 SPRINT 保证喷起来；窗口结束恢复录制按键 */
@@ -784,13 +792,13 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS && !atEnd) return;
     ghost.lastEmulateAt = now;
     // 氮气补给：按**播放时间**（ghost.playTime）节流，而非墙钟——回放慢放/
-    // 快进时补管时机始终对齐录制者补氮气的路线时段（0.5x 下录制 15s = 播放
-    // 15s = 现实 30s，按播放时间补正好落在录制者补管处；按墙钟会错位）。
+    // 快进时补管时机始终对齐录制者补氮气的路线时段（0.25x 下录制 15s = 播放
+    // 15s = 现实 60s，按播放时间补正好落在录制者补管处；按墙钟会错位）。
     // 双模式互斥（一个 tick 只走一条，防同帧双补打断喷射）：
     // - 点按补：帧 keys 带 FIRE（录制者点按喷氮气）→ 每 NITRO_REFILL_MS(1s) 一管
     // - 兜底补：其余时段（timer 录制帧无 FIRE / 点按松键段）→ 每 15s 一管；
     //   **始终生效**——不因录像某帧带过 FIRE 位而停用（会话级 nitroFireSeen
-    //   误判会让非 FIRE 段完全不补，0.5x 下尤其明显）
+    //   误判会让非 FIRE 段完全不补，慢放下尤其明显）
     // 播完（atEnd）不再补
     const pt = ghost.playTime;
     const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
@@ -798,6 +806,13 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
       if (pt - ghost.lastNitroAt >= NITRO_REFILL_MS) {
         ghost.lastNitroAt = pt;
         ghost.nitroSimUntil = now + NITRO_SIM_MS; // 模拟窗口用墙钟（客户端物理按现实时间跑）
+        addNitro(ghost.vehicle);
+      }
+      // 墙钟兜底：客户端喷氮气罐按**现实时间**消耗（约 1-2s 喷完），播放时间补管
+      // 间隔在慢放被拉长（0.25x 下 1s 播放 = 4s 现实）会断罐——FIRE 持续期间按
+      // 墙钟补管保持罐子满（addNitro 幂等，与播放时间补管叠加无害）
+      if (now - ghost.lastNitroTopupAt >= NITRO_TOPDUP_MS) {
+        ghost.lastNitroTopupAt = now;
         addNitro(ghost.vehicle);
       }
     } else if (!atEnd && pt - ghost.lastAutoNitroAt >= 15_000) {
@@ -1184,6 +1199,7 @@ export async function spawnReplay(
           stopped: false,
           lastAutoNitroAt: 0,
           lastNitroAt: 0,
+          lastNitroTopupAt: 0,
           nitroSimUntil: -1,
           attireObjs,
           labelNo,
@@ -1438,6 +1454,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         // seek 后重置氮气节流基准（播放时间）：跳转后首个 FIRE 帧立即补组件
         g.lastNitroAt = g.playTime - NITRO_REFILL_MS;
         g.lastAutoNitroAt = g.playTime - 15_000;
+        g.lastNitroTopupAt = 0; // 墙钟兜底基准重置（seek 后立即允许补管）
         g.nitroSimUntil = -1;
         // 恢复驱动：seek 回看重新开始发包（seek 到结尾会发一次尾帧后由
         // renderGhost 重新标记停发）
