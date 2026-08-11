@@ -140,7 +140,7 @@ export function initReplayCommands(): void {
                 "  label     显示/隐藏 ghost 身份标签（默认显示）",
                 "  stop      停止回放",
                 "",
-                "观战中 Q/E + 方向键切车 · 副驾下方向键切车",
+                "观战/副驾中方向键 ←/→ 切车",
                 "",
                 "面板入口：/p → 回放 分组，功能与命令一致",
               ].join("\n"),

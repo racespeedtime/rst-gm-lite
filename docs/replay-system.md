@@ -191,8 +191,8 @@ CP 进度与实时名次不走缓存：由 `noteCpProgress`（room 过 CP）/ `n
 
 ### 4.10 观战与副驾
 
-- **镜头观战（watch）**：发起人 `startObserveVehicle`（比赛回放自动切独立世界 + 自动观战）；观察者切车键：**Q/E + 方向键 ←/→**（spectate 模式 Q/E 是客户端本地镜头键不上传 onKeyStateChange，方向键 SA-MP 本就不走该事件——统一由 getKeys 轮询边沿检测驱动，见 `pollObserveKeys`）。
-- **副驾模式（ride）**：真实坐进 ghost 乘客座跟随 NPC 开车（`startRideVehicle`，非镜头观战）。切换键只用**方向键 ←/→**（Q/E 是本地镜头键不该占，FIRE 让位给氮气）；只切车辆目标（不会切到真人玩家）。换车型/重挂失败兜底回镜头观战。
+- **镜头观战（watch）**：发起人 `startObserveVehicle`（比赛回放自动切独立世界 + 自动观战）；观察者切车键：**方向键 ←/→**（观战/副驾下方向键不触发 onKeyStateChange，统一由 getKeys 轮询边沿检测驱动，见 `pollObserveKeys`。Q/E 不做切换——观战模式客户端把 Q/E 当本地镜头键不上传，实机验证收不到）。
+- **副驾模式（ride）**：真实坐进 ghost 乘客座跟随 NPC 开车（`startRideVehicle`，非镜头观战）。切换键同样只用**方向键 ←/→**（FIRE 让位给氮气）；只切车辆目标（不会切到真人玩家）。换车型/重挂失败兜底回镜头观战。
 - 比赛信息 TD（C P / TIME / BEST / RANK）从**第一个 ghost 的当前帧状态**渲染：CP 进度、实时名次、时间/天气全在帧里 → seek/变速天然同步，内容去重（变化才 setString）；
 - 3D CP 箭头 + 小地图图标：按帧 `cpProgress` 计算当前要过的 CP，进度推进播 1056 音效；
 - 时间/天气随帧应用到观察者视角（CP 脚本 time/weather 的效果"状态化"重放）。
