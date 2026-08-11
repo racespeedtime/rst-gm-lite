@@ -323,7 +323,7 @@ export async function openReplayMenuPanel(player: Player, back?: MenuBack): Prom
   }
 }
 
-/** 回放控制菜单（播放/暂停/倍速/跳转/停止/标签显隐；回放只支持正放） */
+/** 回放控制菜单（播放/暂停/倍速/跳转/视角切换/标签显隐；回放只支持正放） */
 export async function openReplayControlMenu(player: Player, back?: MenuBack): Promise<void> {
   const res = await showDialog(
     player,
@@ -335,7 +335,7 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
         "2. 暂停",
         "3. 倍速（0.5 / 0.75 / 1 / 1.25 / 1.5 / 2 / 4）",
         "4. 跳转时间（秒）",
-        "5. 观看视角",
+        "5. 切换视角（镜头观战 / 副驾模式）",
         "6. 显示/隐藏 ghost 标签",
         "7. 停止回放",
       ].join("\n"),
@@ -391,11 +391,30 @@ export async function openReplayControlMenu(player: Player, back?: MenuBack): Pr
       controlReplay(player, "seek", t.inputText.trim());
       return back?.();
     }
-    case 4:
-      // 观看视角 = 切入观战画面：不弹回对话框（玩家按 /tv off 或 /rp stop 退出；
-      // 若已观战中，watch 为幂等登记，同样不弹回）
-      controlReplay(player, "watch");
-      return;
+    case 4: {
+      // 切换视角：镜头观战（/rp watch）/ 副驾模式（/rp ride，真实坐进 ghost 车
+      // 跟随 NPC 开车）。两种视角可来回切（observe.ts 处理 ride↔观战的切换），
+      // 切换后留在画面（不弹回对话框），/tv off 或 /rp stop 退出
+      const v = await showDialog(
+        player,
+        new Dialog({
+          style: DialogStylesEnum.LIST,
+          caption: "切换视角",
+          info: ["1. 镜头观战（自由视角看 ghost）", "2. 副驾模式（坐进车里跟随 NPC 开车）"].join(
+            "\n",
+          ),
+          button1: "确定",
+          button2: "取消",
+        }),
+      );
+      if (!v || v.response !== 1) return back?.();
+      if (v.listItem === 0) {
+        controlReplay(player, "watch");
+      } else {
+        controlReplay(player, "ride");
+      }
+      return; // 切入视角后留在画面
+    }
     case 5: {
       // 显示/隐藏 ghost 标签（对齐 /rp label：回放 ghost 与挑战影子共用偏好）
       const visible = toggleReplayLabels(player);
