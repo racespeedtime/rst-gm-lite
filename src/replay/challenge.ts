@@ -62,14 +62,12 @@ interface ChallengeGhost {
   lastEmulateAt: number;
   /** emulate/send 失败是否已警告过（一次性防刷屏） */
   warnedEmulateFail: boolean;
-  /** 上次自动补氮气**播放时间**（timer 模式录制者 15 秒自动补、帧里无按键信号——
-   *  影子每播放 15 秒自动补一管兜底，对齐录制节奏） */
-  lastAutoNitroAt: number;
-  /** 上次氮气按住持续补**播放时间**（点按模式录制：帧 FIRE 位按住每播放 1 秒补一管） */
+  /** 上次补氮气的**播放时间**（间隔 = NITRO_AUTO_MS，影子固定 1x = 15s 现实；
+   *  见 playback NITRO_AUTO_MS 注释） */
   lastNitroAt: number;
-  /** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的**墙钟**截止点：补组件那帧
-   *  采样可能恰好是录制者松油门瞬间（帧 keys 无 SPRINT），客户端有组件没按键
-   *  不喷——窗口内强制 SPRINT 保证喷起来；窗口结束恢复录制按键 */
+  /** 补氮气后强制模拟按键（模拟玩家按下氮气键）的**墙钟**截止点：补罐那帧
+   *  采样可能恰好是录制者松键瞬间（帧 keys 无 FIRE/ACTION），客户端有组件没按键
+   *  不喷——窗口内强制 FIRE|ACTION 保证喷起来；窗口结束恢复录制按键 */
   nitroSimUntil: number;
   /** 当前标签显示的在线状态（录制者掉线时标签追加红字"掉线"；变化时 updateText） */
   online: boolean;
@@ -247,34 +245,26 @@ function renderGhost(ch: ChallengeSession): void {
     const now = Date.now();
     if (now - ch.ghost.lastEmulateAt < 33) return;
     ch.ghost.lastEmulateAt = now;
-    // 氮气：按住持续补，节流基准用**播放时间**（playTime）对齐录制节奏——
-    // 录制时 vehicleAuto 按现实时间补（timer 15s / 点按按键即补），回放按播放
-    // 时间补 = 复现"录制者补氮气的那段路线"。慢放时录制 15 秒 = 播放 15 秒 =
-    // 现实更长，按播放时间补正好落在录制者补管的时段（按墙钟补会落在录制者
-    // 根本没喷的时段）。**补组件同时模拟玩家按下氮气键**：SA 喷氮气 = 车有
-    // 组件 + 按住 FIRE（左键）或 W（SPRINT）。我们的点按交互是 FIRE/ACTION，
-    // 补组件那帧采样可能恰好是录制者松键瞬间（帧 keys 无 FIRE）——补了组件
-    // 客户端也不喷。补组件起墙钟窗口内强制 FIRE|ACTION（不用 SPRINT——W 是
-    // 油门会干扰录制速度物理），窗口结束恢复录制按键。与 playback renderGhost
-    // 同一套。起始/播完后 atEnd 不再补。
+    // 氮气：统一"单管 15s 现实寿命"模型（与 playback renderGhost 同一套）——
+    // 一罐氮气对现实时间只能撑 15s，补管间隔（播放时间）= NITRO_AUTO_MS × speed
+    //（影子固定 1x = 15s 播放 = 15s 现实），罐子刚好在耗尽前补上。timer 录制者
+    // vehicleAuto 也是现实每 15s 补罐（对齐录制节奏）。播完（atEnd）不再补。
+    // 补罐那帧采样可能恰好是录制者松键瞬间（帧 keys 无氮气键），补了组件客户端
+    // 也不喷——补罐起墙钟窗口内强制 FIRE|ACTION（点按氮气键；不用 SPRINT，W 是
+    // 油门会干扰录制速度物理），窗口结束恢复录制按键
     const pt = ch.ghost.playTime;
-    const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
-    if (nitroOn && !atEnd) {
-      if (pt - ch.ghost.lastNitroAt >= NITRO_REFILL_MS) {
-        ch.ghost.lastNitroAt = pt;
-        ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
-        addNitro(ch.ghost.vehicle);
-      }
-      // 无墙钟兜底（playback 的 NITRO_TOPDUP_MS 仅慢放需要）：影子固定 1x，
-      // 播放时间补管间隔 ≤1s 现实，罐子不会断
-    } else if (!atEnd && pt - ch.ghost.lastAutoNitroAt >= 15_000) {
-      ch.ghost.lastAutoNitroAt = pt;
+    if (!atEnd && pt - ch.ghost.lastNitroAt >= NITRO_AUTO_MS) {
+      ch.ghost.lastNitroAt = pt;
       ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
       addNitro(ch.ghost.vehicle);
     }
-    // 补氮气后的模拟窗口内：强制 FIRE/ACTION（模拟玩家按下点按氮气键），组件
-    // 刚补上即喷
-    if (!atEnd && now < ch.ghost.nitroSimUntil) {
+    // 补罐后的模拟窗口内：强制 FIRE/ACTION（模拟玩家按下点按氮气键），组件
+    // 刚补上即喷；仅 FIRE|ACTION 段生效（timer 段无按键不喷、无需模拟）
+    if (
+      !atEnd &&
+      (s.keys & (KeysEnum.FIRE | KeysEnum.ACTION)) !== 0 &&
+      now < ch.ghost.nitroSimUntil
+    ) {
       s.keys |= KeysEnum.FIRE | KeysEnum.ACTION;
     }
     emulateDriverSync(ch.ghost.npcPlayerId, ch.ghost.vehicle, s, atEnd);
@@ -330,10 +320,10 @@ function ghostProgress(ch: ChallengeSession): { cp: number; dist: number } {
 
 /** 影子挑战冲线倒计时（对齐真人比赛 END_GRACE：第一名冲线 → 20 秒宽限） */
 const CHALLENGE_END_GRACE_MS = 20_000;
-/** 氮气按住持续补间隔（**播放时间**毫秒，对齐 playback：补给随播放时间轴落在
- *  录制者按管时段） */
-const NITRO_REFILL_MS = 1000;
-/** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的时长（墙钟毫秒，对齐 playback） */
+/** 单管氮气现实寿命（毫秒，对齐 playback NITRO_AUTO_MS）：一罐氮气对现实时间
+ *  只能撑 15s，补管间隔（播放时间）= NITRO_AUTO_MS × speed（影子固定 1x = 15s） */
+const NITRO_AUTO_MS = 15_000;
+/** 补氮气后强制模拟按键（模拟玩家按下氮气键）的时长（墙钟毫秒，对齐 playback） */
 const NITRO_SIM_MS = 300;
 
 /**
@@ -448,9 +438,8 @@ function standbyAtStart(player: Player, ch: ChallengeSession): void {
   // 影子重置到录制起点（车就位 + 修复），强制重渲染起始帧
   ch.ghost.playTime = 0;
   ch.ghost.lastEmulateAt = 0;
-  // 重置氮气补给状态并补一管：上一轮可能喷完空管（持续补/兜底节流未复位）——
-  // 不重置则重开后影子一管都没有
-  ch.ghost.lastAutoNitroAt = 0;
+  // 重置氮气补给状态并补一管：上一轮可能喷完空管（节流未复位）——不重置则
+  // 重开后影子一管都没有
   ch.ghost.lastNitroAt = 0;
   ch.ghost.nitroSimUntil = -1;
   try {
@@ -1018,7 +1007,6 @@ async function startChallengeCore(
       npcPlayerId: shadowPlayer.id,
       lastEmulateAt: 0,
       warnedEmulateFail: false,
-      lastAutoNitroAt: 0,
       lastNitroAt: 0,
       nitroSimUntil: -1,
       online: true, // 起始帧在线（掉线重连回放才可能翻转为 false）

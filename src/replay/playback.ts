@@ -122,21 +122,15 @@ export const REPLAY_SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 4];
 /** emulate 发包节流：对齐 open.mp in_vehicle_sync_rate=30（30Hz）——60fps tick
  *  每 2 tick 发一个 DriverSync 模拟包（发太多服务器会合并/浪费） */
 const EMULATE_INTERVAL_MS = 33;
-/** 氮气按住持续补间隔（**播放时间**毫秒）：对齐录制节奏——点按模式录制者
- *  每 1 秒补一管，回放每播放 1 秒补一管（慢放 0.5x 时播放 1 秒 = 现实 2 秒，
- *  补给随播放时间轴落在录制者按管时段） */
-const NITRO_REFILL_MS = 1000;
-/** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的时长（墙钟毫秒）：客户端
- *  喷氮气物理按现实时间跑，窗口内（约 9 帧 @30Hz）每帧带 SPRINT 保证喷起来 */
+/** 单管氮气现实寿命（毫秒）：无论倍速，一罐氮气对**现实时间**只能撑 15 秒
+ * （实机确认）。补管间隔按播放时间 = NITRO_AUTO_MS × speed——任何倍速下
+ * 现实恒定 15s，罐子刚好在耗尽前补上（0.25x→3750ms 播放=15s 现实、1x→15s、
+ * 4x→60s 播放=15s 现实），慢放断罐从根上消失。timer 录制者 vehicleAuto 也是
+ * 现实每 15s 补罐，本间隔即对齐录制节奏（录制者下次按 FIRE 喷时有罐子用） */
+const NITRO_AUTO_MS = 15_000;
+/** 补氮气后强制模拟按键（模拟玩家按下氮气键）的时长（墙钟毫秒）：客户端喷氮气
+ * 物理按现实时间跑，窗口内（约 9 帧 @30Hz）每帧带 FIRE|ACTION 保证喷起来 */
 const NITRO_SIM_MS = 300;
-/** FIRE 按住期间按**墙钟**补氮气的间隔（毫秒）：客户端喷氮气罐按现实时间消耗
- * （约 1-2 秒喷完），而补管节流是播放时间——慢放 0.25x 下播放 1s = 现实 4s，
- * 点按补管间隔被拉到 4s 现实，罐子喷完到下次补管之间会断（0.5x 也有 2s 空窗）。
- * 故 FIRE 持续期间每 NITRO_TOPDUP_MS 墙钟补一管保持罐子满。addNitro 幂等，多补
- * 无害；快进 4x 下点按补本就每 250ms 一次，早已验证频繁补安全。
- * **只在慢放（speed<1）启用**：≥1x 时播放时间补管间隔 ≤1s 现实，罐子不空，
- * 兜底纯冗余（challenge 影子固定 1x，同样不启用）。 */
-const NITRO_TOPDUP_MS = 1000;
 
 /** 找回放 ghost 车所属会话的倍速（非回放/挑战车返回 null）。
  * 速度表反向除倍速用：emulate 驱动把 velocity×倍速推进（物理位置与速度一致），
@@ -217,16 +211,12 @@ interface Ghost {
   /** 当前车辆的装扮挂件 + description 3D 标签（applyReplayVehicleAttire 套玩家
    *  当前爱车装扮；随车销毁） */
   attireObjs: (DynamicObject | Dynamic3DTextLabel)[];
-  /** 上次自动补氮气**播放时间**（timer 录制 15s 兜底：对齐录制节奏，慢放时
-   *  播放 15 秒 = 现实更长，补给落在录制者补管的时段） */
-  lastAutoNitroAt: number;
-  /** 上次氮气按住持续补**播放时间**（点按录制：帧 FIRE 位按住每播放 1s 补一管） */
+  /** 上次补氮气的**播放时间**（间隔 = NITRO_AUTO_MS × speed：任何倍速下现实
+   *  恒定 15s，罐子在耗尽前补上，见 NITRO_AUTO_MS 注释） */
   lastNitroAt: number;
-  /** 上次 FIRE 按住期间按**墙钟**补氮气时间（慢放保持罐子不空，见 NITRO_TOPDUP_MS） */
-  lastNitroTopupAt: number;
-  /** 补氮气后强制模拟 SPRINT（模拟玩家按下氮气键）的**墙钟**截止点：补组件那帧
-   *  采样可能恰好是录制者松油门瞬间（帧 keys 无 SPRINT），客户端有组件没按键
-   *  不喷——窗口内强制 SPRINT 保证喷起来；窗口结束恢复录制按键 */
+  /** 补氮气后强制模拟按键（模拟玩家按下氮气键）的**墙钟**截止点：补罐那帧
+   *  采样可能恰好是录制者松键瞬间（帧 keys 无 FIRE/ACTION），客户端有组件没按键
+   *  不喷——窗口内强制 FIRE|ACTION 保证喷起来；窗口结束恢复录制按键 */
   nitroSimUntil: number;
   /** 分身编号（1..N，头车=1；标签显示用） */
   labelNo: number;
@@ -796,42 +786,25 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     const now = Date.now();
     if (now - ghost.lastEmulateAt < EMULATE_INTERVAL_MS && !atEnd) return;
     ghost.lastEmulateAt = now;
-    // 氮气补给：按**播放时间**（ghost.playTime）节流，而非墙钟——回放慢放/
-    // 快进时补管时机始终对齐录制者补氮气的路线时段（0.25x 下录制 15s = 播放
-    // 15s = 现实 60s，按播放时间补正好落在录制者补管处；按墙钟会错位）。
-    // 双模式互斥（一个 tick 只走一条，防同帧双补打断喷射）：
-    // - 点按补：帧 keys 带 FIRE（录制者点按喷氮气）→ 每 NITRO_REFILL_MS(1s) 一管
-    // - 兜底补：其余时段（timer 录制帧无 FIRE / 点按松键段）→ 每 15s 一管；
-    //   **始终生效**——不因录像某帧带过 FIRE 位而停用（会话级 nitroFireSeen
-    //   误判会让非 FIRE 段完全不补，慢放下尤其明显）
-    // 播完（atEnd）不再补
+    // 氮气补给：统一"单管 15s 现实寿命"模型——一罐氮气对现实时间只能撑 15s，
+    // 补管间隔（播放时间）= NITRO_AUTO_MS × speed，任何倍速下现实恒定 15s，
+    // 罐子刚好在耗尽前补上（0.25x→3750ms 播放=15s 现实；1x→15s；4x→60s 播放
+    // =15s 现实），慢放断罐从根上消失。timer 录制者 vehicleAuto 也是现实每
+    // 15s 补罐（对齐录制节奏，录制者下次按 FIRE 喷时有罐子用）。播完（atEnd）不再补
     const pt = ghost.playTime;
-    const nitroOn = (s.keys & KeysEnum.FIRE) !== 0; // KEY_FIRE = 点按氮气触发键
-    if (nitroOn && !atEnd) {
-      if (pt - ghost.lastNitroAt >= NITRO_REFILL_MS) {
-        ghost.lastNitroAt = pt;
-        ghost.nitroSimUntil = now + NITRO_SIM_MS; // 模拟窗口用墙钟（客户端物理按现实时间跑）
-        addNitro(ghost.vehicle);
-      }
-      // 墙钟兜底（仅慢放）：客户端喷氮气罐按**现实时间**消耗（约 1-2s 喷完），
-      // 播放时间补管间隔在慢放被拉长（0.25x 下 1s 播放 = 4s 现实）会断罐——
-      // FIRE 持续期间按墙钟补管保持罐子满。≥1x 时间隔 ≤1s 现实不空，跳过
-      if (session.speed < 1 && now - ghost.lastNitroTopupAt >= NITRO_TOPDUP_MS) {
-        ghost.lastNitroTopupAt = now;
-        addNitro(ghost.vehicle);
-      }
-    } else if (!atEnd && pt - ghost.lastAutoNitroAt >= 15_000) {
-      ghost.lastAutoNitroAt = pt;
-      ghost.nitroSimUntil = now + NITRO_SIM_MS;
+    if (!atEnd && pt - ghost.lastNitroAt >= NITRO_AUTO_MS * session.speed) {
+      ghost.lastNitroAt = pt;
+      ghost.nitroSimUntil = now + NITRO_SIM_MS; // 模拟窗口用墙钟（客户端物理按现实时间跑）
       addNitro(ghost.vehicle);
     }
-    // 补组件后的模拟窗口内：强制 FIRE|ACTION（点按氮气键）——SA 客户端喷氮气 =
-    // 车有组件 + 按住 FIRE（左键）/W（SPRINT），而补组件那帧的采样可能恰好是
-    // 录制者松键瞬间（帧 keys 无 FIRE），不按下去客户端就不会喷。窗口期内持续
+    // 补罐后的模拟窗口内：强制 FIRE|ACTION（点按氮气键）——SA 客户端喷氮气 =
+    // 车有组件 + 按住 FIRE（左键）/ACTION（右键），而补罐那帧的采样可能恰好是
+    // 录制者松键瞬间（帧 keys 无氮气键），不按下去客户端就不会喷。窗口期内持续
     // 伪造"按着氮气键"让客户端喷，窗口结束恢复录制按键（保持录制原始操作）。
-    // 用 FIRE|ACTION 而非 SPRINT：W 是油门会干扰录制速度物理。窗口用墙钟——
-    // 客户端喷氮气的物理按现实时间消耗，播放时间会随倍速失真
-    if (!atEnd && now < ghost.nitroSimUntil) {
+    // 仅 FIRE|ACTION 段生效（timer 段无按键不喷、无需模拟）；用 FIRE|ACTION 而
+    // 非 SPRINT：W 是油门会干扰录制速度物理。窗口用墙钟——客户端喷氮气物理按
+    // 现实时间消耗
+    if (!atEnd && (s.keys & (KeysEnum.FIRE | KeysEnum.ACTION)) !== 0 && now < ghost.nitroSimUntil) {
       s.keys |= KeysEnum.FIRE | KeysEnum.ACTION;
     } // 血量由 emulate 的 vehicleHealth 处理，无需显式 setHealth（重复操作）
     emulateDriverSync(ghost.npcPlayerId, ghost.vehicle, s, atEnd);
@@ -1240,9 +1213,7 @@ export async function spawnReplay(
           lastEmulateAt: 0,
           warnedEmulateFail: false,
           stopped: false,
-          lastAutoNitroAt: 0,
           lastNitroAt: 0,
-          lastNitroTopupAt: 0,
           nitroSimUntil: -1,
           attireObjs,
           labelNo,
@@ -1508,10 +1479,8 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         // seek 后强制立即发包：重置节流时间戳，否则距上次发包 <33ms 时
         // renderGhost 会被节流跳过，ghost 位置延迟最多 1 tick
         g.lastEmulateAt = 0;
-        // seek 后重置氮气节流基准（播放时间）：跳转后首个 FIRE 帧立即补组件
-        g.lastNitroAt = g.playTime - NITRO_REFILL_MS;
-        g.lastAutoNitroAt = g.playTime - 15_000;
-        g.lastNitroTopupAt = 0; // 墙钟兜底基准重置（seek 后立即允许补管）
+        // seek 后重置氮气补给基准（播放时间）：跳转后首个补管点立即补
+        g.lastNitroAt = g.playTime - NITRO_AUTO_MS * session.speed;
         g.nitroSimUntil = -1;
         // 恢复驱动：seek 回看重新开始发包（seek 到结尾会发一次尾帧后由
         // renderGhost 重新标记停发）
