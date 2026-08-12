@@ -65,10 +65,6 @@ interface ChallengeGhost {
   /** 上次补氮气的**播放时间**（间隔 = NITRO_AUTO_MS，影子固定 1x = 15s 现实；
    *  见 playback NITRO_AUTO_MS 注释） */
   lastNitroAt: number;
-  /** 补氮气后强制模拟按键（模拟玩家按下氮气键）的**墙钟**截止点：补罐那帧
-   *  采样可能恰好是录制者松键瞬间（帧 keys 无 FIRE/ACTION），客户端有组件没按键
-   *  不喷——窗口内强制 FIRE|ACTION 保证喷起来；窗口结束恢复录制按键 */
-  nitroSimUntil: number;
   /** 当前标签显示的在线状态（录制者掉线时标签追加红字"掉线"；变化时 updateText） */
   online: boolean;
 }
@@ -249,23 +245,14 @@ function renderGhost(ch: ChallengeSession): void {
     // 一罐氮气对现实时间只能撑 15s，补管间隔（播放时间）= NITRO_AUTO_MS × speed
     //（影子固定 1x = 15s 播放 = 15s 现实），罐子刚好在耗尽前补上。timer 录制者
     // vehicleAuto 也是现实每 15s 补罐（对齐录制节奏）。播完（atEnd）不再补。
-    // 补罐那帧采样可能恰好是录制者松键瞬间（帧 keys 无氮气键），补了组件客户端
-    // 也不喷——补罐起墙钟窗口内强制 FIRE|ACTION（点按氮气键；不用 SPRINT，W 是
-    // 油门会干扰录制速度物理），窗口结束恢复录制按键
+    // 喷氮气由录制帧 keys 驱动（录制者按 FIRE/ACTION → 包带位 → 客户端喷），
+    // 补罐只保证"罐是满的"；补罐帧顺带强制 FIRE|ACTION 一次（兜底补罐点恰好
+    // 落在录制者松键瞬间——帧 keys 无氮气键，不按客户端不喷）
     const pt = ch.ghost.playTime;
     if (!atEnd && pt - ch.ghost.lastNitroAt >= NITRO_AUTO_MS) {
       ch.ghost.lastNitroAt = pt;
-      ch.ghost.nitroSimUntil = now + NITRO_SIM_MS;
-      addNitro(ch.ghost.vehicle);
-    }
-    // 补罐后的模拟窗口内：强制 FIRE/ACTION（模拟玩家按下点按氮气键），组件
-    // 刚补上即喷；仅 FIRE|ACTION 段生效（timer 段无按键不喷、无需模拟）
-    if (
-      !atEnd &&
-      (s.keys & (KeysEnum.FIRE | KeysEnum.ACTION)) !== 0 &&
-      now < ch.ghost.nitroSimUntil
-    ) {
       s.keys |= KeysEnum.FIRE | KeysEnum.ACTION;
+      addNitro(ch.ghost.vehicle);
     }
     emulateDriverSync(ch.ghost.npcPlayerId, ch.ghost.vehicle, s, atEnd);
   } catch (e) {
@@ -323,8 +310,6 @@ const CHALLENGE_END_GRACE_MS = 20_000;
 /** 单管氮气现实寿命（毫秒，对齐 playback NITRO_AUTO_MS）：一罐氮气对现实时间
  *  只能撑 15s，补管间隔（播放时间）= NITRO_AUTO_MS × speed（影子固定 1x = 15s） */
 const NITRO_AUTO_MS = 15_000;
-/** 补氮气后强制模拟按键（模拟玩家按下氮气键）的时长（墙钟毫秒，对齐 playback） */
-const NITRO_SIM_MS = 300;
 
 /**
  * 挑战用车兜底：玩家应始终在车上（对齐比赛"无车兜底"语义）。
@@ -441,7 +426,6 @@ function standbyAtStart(player: Player, ch: ChallengeSession): void {
   // 重置氮气补给状态并补一管：上一轮可能喷完空管（节流未复位）——不重置则
   // 重开后影子一管都没有
   ch.ghost.lastNitroAt = 0;
-  ch.ghost.nitroSimUntil = -1;
   try {
     ch.ghost.vehicle.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
     ch.ghost.vehicle.setZAngle(0);
@@ -1008,7 +992,6 @@ async function startChallengeCore(
       lastEmulateAt: 0,
       warnedEmulateFail: false,
       lastNitroAt: 0,
-      nitroSimUntil: -1,
       online: true, // 起始帧在线（掉线重连回放才可能翻转为 false）
     };
     // NPC 连接建立是异步的：刚 create 后立即 putInVehicle 可能未生效（NPC 未就绪

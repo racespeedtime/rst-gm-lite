@@ -128,9 +128,6 @@ const EMULATE_INTERVAL_MS = 33;
  * 4x→60s 播放=15s 现实），慢放断罐从根上消失。timer 录制者 vehicleAuto 也是
  * 现实每 15s 补罐，本间隔即对齐录制节奏（录制者下次按 FIRE 喷时有罐子用） */
 const NITRO_AUTO_MS = 15_000;
-/** 补氮气后强制模拟按键（模拟玩家按下氮气键）的时长（墙钟毫秒）：客户端喷氮气
- * 物理按现实时间跑，窗口内（约 9 帧 @30Hz）每帧带 FIRE|ACTION 保证喷起来 */
-const NITRO_SIM_MS = 300;
 
 /** 找回放 ghost 车所属会话的倍速（非回放/挑战车返回 null）。
  * 速度表反向除倍速用：emulate 驱动把 velocity×倍速推进（物理位置与速度一致），
@@ -214,10 +211,6 @@ interface Ghost {
   /** 上次补氮气的**播放时间**（间隔 = NITRO_AUTO_MS × speed：任何倍速下现实
    *  恒定 15s，罐子在耗尽前补上，见 NITRO_AUTO_MS 注释） */
   lastNitroAt: number;
-  /** 补氮气后强制模拟按键（模拟玩家按下氮气键）的**墙钟**截止点：补罐那帧
-   *  采样可能恰好是录制者松键瞬间（帧 keys 无 FIRE/ACTION），客户端有组件没按键
-   *  不喷——窗口内强制 FIRE|ACTION 保证喷起来；窗口结束恢复录制按键 */
-  nitroSimUntil: number;
   /** 分身编号（1..N，头车=1；标签显示用） */
   labelNo: number;
   /** 当前标签显示的在线状态（掉线时标签追加红字"掉线"；变化时 updateText） */
@@ -790,22 +783,15 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     // 补管间隔（播放时间）= NITRO_AUTO_MS × speed，任何倍速下现实恒定 15s，
     // 罐子刚好在耗尽前补上（0.25x→3750ms 播放=15s 现实；1x→15s；4x→60s 播放
     // =15s 现实），慢放断罐从根上消失。timer 录制者 vehicleAuto 也是现实每
-    // 15s 补罐（对齐录制节奏，录制者下次按 FIRE 喷时有罐子用）。播完（atEnd）不再补
+    // 15s 补罐（对齐录制节奏，录制者下次按 FIRE 喷时有罐子用）。播完（atEnd）不再补。
+    // 喷氮气由录制帧 keys 本身驱动（录制者按 FIRE/ACTION → 包带位 → 客户端喷），
+    // 补罐只保证"罐是满的"；补罐帧顺带强制 FIRE|ACTION 一次（兜底补罐点恰好落在
+    // 录制者松键瞬间——帧 keys 无氮气键，不按客户端不喷；一帧 33ms 概率极低）
     const pt = ghost.playTime;
     if (!atEnd && pt - ghost.lastNitroAt >= NITRO_AUTO_MS * session.speed) {
       ghost.lastNitroAt = pt;
-      ghost.nitroSimUntil = now + NITRO_SIM_MS; // 模拟窗口用墙钟（客户端物理按现实时间跑）
-      addNitro(ghost.vehicle);
-    }
-    // 补罐后的模拟窗口内：强制 FIRE|ACTION（点按氮气键）——SA 客户端喷氮气 =
-    // 车有组件 + 按住 FIRE（左键）/ACTION（右键），而补罐那帧的采样可能恰好是
-    // 录制者松键瞬间（帧 keys 无氮气键），不按下去客户端就不会喷。窗口期内持续
-    // 伪造"按着氮气键"让客户端喷，窗口结束恢复录制按键（保持录制原始操作）。
-    // 仅 FIRE|ACTION 段生效（timer 段无按键不喷、无需模拟）；用 FIRE|ACTION 而
-    // 非 SPRINT：W 是油门会干扰录制速度物理。窗口用墙钟——客户端喷氮气物理按
-    // 现实时间消耗
-    if (!atEnd && (s.keys & (KeysEnum.FIRE | KeysEnum.ACTION)) !== 0 && now < ghost.nitroSimUntil) {
       s.keys |= KeysEnum.FIRE | KeysEnum.ACTION;
+      addNitro(ghost.vehicle);
     } // 血量由 emulate 的 vehicleHealth 处理，无需显式 setHealth（重复操作）
     emulateDriverSync(ghost.npcPlayerId, ghost.vehicle, s, atEnd);
   } catch (e) {
@@ -1214,7 +1200,6 @@ export async function spawnReplay(
           warnedEmulateFail: false,
           stopped: false,
           lastNitroAt: 0,
-          nitroSimUntil: -1,
           attireObjs,
           labelNo,
           online: true,
@@ -1481,7 +1466,6 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         g.lastEmulateAt = 0;
         // seek 后重置氮气补给基准（播放时间）：跳转后首个补管点立即补
         g.lastNitroAt = g.playTime - NITRO_AUTO_MS * session.speed;
-        g.nitroSimUntil = -1;
         // 恢复驱动：seek 回看重新开始发包（seek 到结尾会发一次尾帧后由
         // renderGhost 重新标记停发）
         g.stopped = false;
