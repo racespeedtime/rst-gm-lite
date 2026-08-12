@@ -60,6 +60,8 @@ export const PREFIX = {
   settings: "[设置]",
   /** 人物个性化（皮肤/前缀后缀等） */
   character: "[人物]",
+  /** 无敌（被打目标无敌时对攻击者的提示） */
+  invincible: "[无敌]",
 } as const;
 export type MsgTag = keyof typeof PREFIX;
 

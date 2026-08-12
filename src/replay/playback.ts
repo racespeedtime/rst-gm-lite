@@ -1555,7 +1555,11 @@ export function stopReplaySession(playerId: number): void {
   // 先统一退出观战（发起人 + 非发起人 watch 者），再销毁车：destroy 车辆会触发
   // onStreamOut，若观战态还在会弹 suggestStop"是否停止观战"对话框——点"否"会把
   // 过期观战状态写回（observeStates 保留指向已销毁 ghost），玩家卡在观战态。
-  for (const pid of session.watchers) {
+  // 先快照 watchers：下面退出观战后立即 clear，但后面取消开场倒计时还要遍历
+  // 这些玩家（此前 clear 后再 `[...session.watchers]` 恒为空，watchers 的倒计时
+  // 动画不会被取消）
+  const watchers = [...session.watchers];
+  for (const pid of watchers) {
     const w = Player.getInstance(pid);
     if (w && w.isConnected() && isObserving(pid)) {
       try {
@@ -1586,8 +1590,9 @@ export function stopReplaySession(playerId: number): void {
   }
   // 独立世界（比赛回放）的会话：会话销毁后世界无人使用 → 回收世界 id 供复用
   if (session.replayType === "race") freeReplayWorld(session.worldId);
-  // 取消进行中的开场倒计时动画（owner + watchers 的 TD/句柄一并清）
-  for (const pid of [session.ownerId, ...session.watchers]) {
+  // 取消进行中的开场倒计时动画（owner + watchers 的 TD/句柄一并清；watchers 用
+  // 上方快照——session.watchers 已 clear，owner 与 watchers 可能重叠，去重防重复调用）
+  for (const pid of new Set([session.ownerId, ...watchers])) {
     cancelCountdownFx(pid);
   }
   // 恢复观察者视角时间/天气：syncObserverTds 随帧给 TD 持有者 setTime/setWeather，

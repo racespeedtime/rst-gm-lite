@@ -426,9 +426,14 @@ function standbyAtStart(player: Player, ch: ChallengeSession): void {
   // 重置氮气补给状态并补一管：上一轮可能喷完空管（节流未复位）——不重置则
   // 重开后影子一管都没有
   ch.ghost.lastNitroAt = 0;
+  // 录制起点朝向：首帧四元数 → GTA 角度，与 seatPlayerAtStart（玩家车）/
+  // teleportToReplayStart（回放）同款——影子车就位即朝向录制起点方向，而非
+  // 拍脑袋 0=北（此前玩家车朝录制方向、影子朝北，起步前有一帧错位）。
+  const s0 = sampleAt(ch.data, 0);
+  const startAngle = s0 ? quatToZAngle(s0.qw, s0.qx, s0.qy, s0.qz) : 0;
   try {
     ch.ghost.vehicle.setPos(ch.data.header.startX, ch.data.header.startY, ch.data.header.startZ);
-    ch.ghost.vehicle.setZAngle(0);
+    ch.ghost.vehicle.setZAngle(startAngle);
     ch.ghost.vehicle.setHealth(1000);
     ch.ghost.vehicle.repair();
     addNitro(ch.ghost.vehicle); // 起始补一管（与第一次进挑战一致）
@@ -436,7 +441,6 @@ function standbyAtStart(player: Player, ch: ChallengeSession): void {
     /* 已失效，清理兜底 */
   }
   // 直接复位影子标签（不发"重新上线"的聊天提示；renderGhost 检测不到翻转即静默）
-  const s0 = sampleAt(ch.data, 0);
   if (s0) {
     ch.ghost.online = s0.online;
     try {

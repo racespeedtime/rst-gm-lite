@@ -2,6 +2,7 @@ import { BulletHitTypesEnum, Player, PlayerEvent, Vehicle } from "@infernus/core
 import { BulletSync, IPacket, PacketIdList } from "@infernus/raknet";
 import { getSetting } from "@/personalize/settings";
 import { applyDefaultArmor } from "@/core/armor";
+import { sysMsg } from "@/utils/msg";
 import { logger } from "@/logger";
 
 /**
@@ -83,7 +84,7 @@ export function initInvincible(): void {
       const now = Date.now();
       if ((lastGiveNotify.get(key) ?? 0) < now - GIVE_NOTIFY_MS) {
         lastGiveNotify.set(key, now);
-        attacker.sendClientMessage("#ffd700", `[无敌] ${victim.getName().name} 处于无敌状态`);
+        sysMsg(attacker, "invincible", `${victim.getName().name} 处于无敌状态`, "warn");
       }
     }
     return next();
