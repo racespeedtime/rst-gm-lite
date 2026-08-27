@@ -160,7 +160,9 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   // 3d 速度表（总开关 + showSpeed3d + 需在车内 attach 车辆；换车时重建）
   const want3d = setting.showSpeed && setting.showSpeed3d;
   const vehicle = want3d ? getPlayerVehicle(player) : null;
-  const speedo3dAlive = !gui.speedo3d || gui.speedo3d.isValid();
+  // alive = "已存在且未失效"：null（未创建）不算存活，应创建；gmx 等场景 TD 被
+  // 销毁但引用残留（_id 回 65535），isValid()=false 同样触发重建
+  const speedo3dAlive = gui.speedo3d != null && gui.speedo3d.isValid();
   if (want3d && vehicle && (!speedo3dAlive || gui.speedo3dVehId !== vehicle.id)) {
     destroySpeed3d(gui.speedo3d);
     gui.speedo3d = createSpeed3d(player, vehicle);
@@ -172,7 +174,8 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   }
 
   // 网络信息 GUI
-  const netstatAlive = !gui.netstat || (gui.netstat.tds.length > 0 && gui.netstat.tds[0].isValid());
+  const netstatAlive =
+    gui.netstat != null && gui.netstat.tds.length > 0 && gui.netstat.tds[0].isValid();
   if (setting.showNetstat && !netstatAlive) {
     if (gui.netstat) destroyNetstat(gui.netstat); // 失效残留：先销毁再重建
     gui.netstat = createNetstat(player);
@@ -184,9 +187,10 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   // 调试信息 GUI（底部居中，数据库开关 showDebugInfo 控制）。
   // 构建版本 TD（右下角）与 debug 联动：同开同关——版本属于调试信息，
   // 玩家关 debug 时右下角版本号一并收起（避免残留角落 UI）
-  const debugAlive = !gui.debugInfo || gui.debugInfo.td.isValid();
+  const debugAlive = gui.debugInfo != null && gui.debugInfo.td.isValid();
   if (setting.showDebugInfo && !debugAlive) {
     if (gui.debugInfo) destroyDebugInfo(gui.debugInfo); // 失效残留：先销毁再重建
+    if (gui.buildTd) destroyBuildVersionTd(gui.buildTd); // 失效残留 buildTd 一并清
     gui.debugInfo = createDebugInfo(player);
     gui.buildTd = createBuildVersionTd(player);
   } else if (gui.debugInfo && debugAlive && !setting.showDebugInfo) {
@@ -197,7 +201,7 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   }
 
   // 右上角时间 TD（showTimeGui 控制）
-  const timeAlive = !gui.timeTd || gui.timeTd.td.isValid();
+  const timeAlive = gui.timeTd != null && gui.timeTd.td.isValid();
   if (setting.showTimeGui && !timeAlive) {
     if (gui.timeTd) destroyTimeTd(gui.timeTd); // 失效残留：先销毁再重建
     gui.timeTd = createTimeTd(player);
@@ -209,7 +213,7 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   // 漂移积分 TD（showDriftScore 控制，纯展示；关闭期间不 tick 不累计，
   // 重开保留战果但重置连击——连击是进行时，关了再开重新起连击）
   const driftAlive =
-    !gui.driftTd || (gui.driftTd.scoreTd.isValid() && gui.driftTd.badgeTd.isValid());
+    gui.driftTd != null && gui.driftTd.scoreTd.isValid() && gui.driftTd.badgeTd.isValid();
   if (setting.showDriftScore && !driftAlive) {
     resetDriftCombo(player.id);
     if (gui.driftTd) destroyDriftTd(gui.driftTd); // 失效残留：先销毁再重建
