@@ -45,7 +45,13 @@ function lockPlayerMoney(): void {
   }
 }
 
-/** 初始化金钱系统（timer/事件由 GameMode 统一管理） */
+/** 启动锁钱 tick（持久 interval：onInit 注册、onExit 统一清理） */
+export function startMoneyTicks(): void {
+  // 全局锁钱：定时校正任何 money 变动（特技/改装等），timer 登记制随 onExit 清理
+  setIntervalSafe(lockPlayerMoney, LOCK_INTERVAL_MS);
+}
+
+/** 初始化金钱系统（事件注册，模块加载时注册一次） */
 export function initMoneySystem(): void {
   // 进入改装店时补给：改装是扣钱场景，确保任何时候都有钱改装
   PlayerEvent.onEnterExitModShop(({ player, enterExit, next }) => {
@@ -56,6 +62,4 @@ export function initMoneySystem(): void {
     }
     return next();
   });
-  // 全局锁钱：定时校正任何 money 变动（特技/改装等），timer 登记制随 onExit 清理
-  setIntervalSafe(lockPlayerMoney, LOCK_INTERVAL_MS);
 }

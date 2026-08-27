@@ -439,6 +439,30 @@ async function openDrifterMenu(player: Player): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
+ * 启动漂移 NPC 持久 tick（乘客续氮气，1 秒轮询；onInit 注册、onExit 统一清理）。
+ * 从 initDrifterNpcs 拆出：initDrifterNpcs 只注册事件（模块加载一次），interval
+ * 必须 onInit 重注册——gmx 的 onExit 会 clearAllTimers，顶层注册的 tick 会死掉。
+ */
+export function startDrifterNpcTicks(): void {
+  setIntervalSafe(() => {
+    for (const ent of entities.values()) {
+      if (!ent.vehicle?.isValid() || !ent.npc?.isValid()) continue;
+      if (!ent.passengerSlots.some((p) => p && p.isConnected())) continue;
+      let holding = false;
+      for (const p of ent.passengerSlots) {
+        if (!p || !p.isConnected()) continue;
+        const k = p.getKeys().keys & 0xffff;
+        if ((k & (KeysEnum.FIRE | KeysEnum.ACTION)) !== 0) {
+          holding = true;
+          break;
+        }
+      }
+      if (holding) addNitro(ent.vehicle);
+    }
+  }, 1000);
+}
+
+/**
  * 初始化漂移 NPC 系统（callbacks init 序列中调用）：
  * 注册循环播放/下车清理/命令，并在 GameMode.onInit 后启动错峰加载链。
  */
@@ -503,22 +527,7 @@ export function initDrifterNpcs(): void {
   // 按住持续补（每秒）：drift 车上有乘客按住 FIRE/ACTION → 续氮气。
   // 对齐 vehicleAuto hold 点按逻辑（每秒检测按住补一管）；setIntervalSafe 登记制
   // 由 GameMode.onExit 统一清理。
-  setIntervalSafe(() => {
-    for (const ent of entities.values()) {
-      if (!ent.vehicle?.isValid() || !ent.npc?.isValid()) continue;
-      if (!ent.passengerSlots.some((p) => p && p.isConnected())) continue;
-      let holding = false;
-      for (const p of ent.passengerSlots) {
-        if (!p || !p.isConnected()) continue;
-        const k = p.getKeys().keys & 0xffff;
-        if ((k & (KeysEnum.FIRE | KeysEnum.ACTION)) !== 0) {
-          holding = true;
-          break;
-        }
-      }
-      if (holding) addNitro(ent.vehicle);
-    }
-  }, 1000);
+  // （interval 本体抽到 startDrifterNpcTicks，onInit 注册——本函数只管事件注册）
 
   // 断线 → 释放座位（含在 NPC 车里断线的情况）
   PlayerEvent.onDisconnect(({ player, next }) => {

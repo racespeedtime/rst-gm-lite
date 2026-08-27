@@ -141,11 +141,15 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   }
 
   // 2d 速度表（总开关 + showSpeed2d）。show 只在创建/从 hideAllGui 恢复时发
-  //（见上 hidden 恢复块）——TD 已可见时每 tick 再 show 是纯冗余 native
+  //（见上 hidden 恢复块）——TD 已可见时每 tick 再 show 是纯冗余 native。
+  // isValid 守卫：gmx 等场景下 infernus 销毁 TD 但缓存数组仍在（_id 回 65535），
+  // 非空数组跳过重建会让 UI 永久消失——失效即清空重建
   const want2d = setting.showSpeed && setting.showSpeed2d;
-  if (want2d && gui.speedoTd.length === 0) {
+  const speedoAlive = gui.speedoTd.length > 0 && gui.speedoTd[0].isValid();
+  if (want2d && !speedoAlive) {
+    if (gui.speedoTd.length > 0) destroySpeed2d(gui.speedoTd); // 失效残留句柄：先销毁
     gui.speedoTd = createSpeed2d(player);
-  } else if (gui.speedoTd.length > 0 && !want2d) {
+  } else if (speedoAlive && !want2d) {
     destroySpeed2d(gui.speedoTd);
     gui.speedoTd = [];
     // 销毁时重置分档缓存：重建后首次刷新必调 updateSpeed2d——否则残留旧值
@@ -156,20 +160,23 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   // 3d 速度表（总开关 + showSpeed3d + 需在车内 attach 车辆；换车时重建）
   const want3d = setting.showSpeed && setting.showSpeed3d;
   const vehicle = want3d ? getPlayerVehicle(player) : null;
-  if (want3d && vehicle && (!gui.speedo3d || gui.speedo3dVehId !== vehicle.id)) {
+  const speedo3dAlive = !gui.speedo3d || gui.speedo3d.isValid();
+  if (want3d && vehicle && (!speedo3dAlive || gui.speedo3dVehId !== vehicle.id)) {
     destroySpeed3d(gui.speedo3d);
     gui.speedo3d = createSpeed3d(player, vehicle);
     gui.speedo3dVehId = vehicle.id;
-  } else if ((!want3d || !vehicle) && gui.speedo3d) {
+  } else if ((!want3d || !vehicle) && gui.speedo3d && speedo3dAlive) {
     destroySpeed3d(gui.speedo3d);
     gui.speedo3d = null;
     gui.speedo3dVehId = null;
   }
 
   // 网络信息 GUI
-  if (setting.showNetstat && !gui.netstat) {
+  const netstatAlive = !gui.netstat || (gui.netstat.tds.length > 0 && gui.netstat.tds[0].isValid());
+  if (setting.showNetstat && !netstatAlive) {
+    if (gui.netstat) destroyNetstat(gui.netstat); // 失效残留：先销毁再重建
     gui.netstat = createNetstat(player);
-  } else if (gui.netstat && !setting.showNetstat) {
+  } else if (gui.netstat && netstatAlive && !setting.showNetstat) {
     destroyNetstat(gui.netstat);
     gui.netstat = null;
   }
@@ -177,38 +184,39 @@ async function syncGui(player: Player, setting: SysUserSettingModel) {
   // 调试信息 GUI（底部居中，数据库开关 showDebugInfo 控制）。
   // 构建版本 TD（右下角）与 debug 联动：同开同关——版本属于调试信息，
   // 玩家关 debug 时右下角版本号一并收起（避免残留角落 UI）
-  if (setting.showDebugInfo && !gui.debugInfo) {
+  const debugAlive = !gui.debugInfo || gui.debugInfo.td.isValid();
+  if (setting.showDebugInfo && !debugAlive) {
+    if (gui.debugInfo) destroyDebugInfo(gui.debugInfo); // 失效残留：先销毁再重建
     gui.debugInfo = createDebugInfo(player);
     gui.buildTd = createBuildVersionTd(player);
-  } else if (gui.debugInfo && !setting.showDebugInfo) {
+  } else if (gui.debugInfo && debugAlive && !setting.showDebugInfo) {
     destroyDebugInfo(gui.debugInfo);
     gui.debugInfo = null;
     destroyBuildVersionTd(gui.buildTd);
     gui.buildTd = null;
-  } else if (gui.debugInfo) {
-    // 已创建：隐藏所有 GUI 关闭后重新显示
   }
 
   // 右上角时间 TD（showTimeGui 控制）
-  if (setting.showTimeGui && !gui.timeTd) {
+  const timeAlive = !gui.timeTd || gui.timeTd.td.isValid();
+  if (setting.showTimeGui && !timeAlive) {
+    if (gui.timeTd) destroyTimeTd(gui.timeTd); // 失效残留：先销毁再重建
     gui.timeTd = createTimeTd(player);
-  } else if (gui.timeTd && !setting.showTimeGui) {
+  } else if (gui.timeTd && timeAlive && !setting.showTimeGui) {
     destroyTimeTd(gui.timeTd);
     gui.timeTd = null;
-  } else if (gui.timeTd) {
-    // 已创建：重新显示（hideAllGui 关闭后）
   }
 
   // 漂移积分 TD（showDriftScore 控制，纯展示；关闭期间不 tick 不累计，
   // 重开保留战果但重置连击——连击是进行时，关了再开重新起连击）
-  if (setting.showDriftScore && !gui.driftTd) {
+  const driftAlive =
+    !gui.driftTd || (gui.driftTd.scoreTd.isValid() && gui.driftTd.badgeTd.isValid());
+  if (setting.showDriftScore && !driftAlive) {
     resetDriftCombo(player.id);
+    if (gui.driftTd) destroyDriftTd(gui.driftTd); // 失效残留：先销毁再重建
     gui.driftTd = createDriftTd(player);
-  } else if (gui.driftTd && !setting.showDriftScore) {
+  } else if (gui.driftTd && driftAlive && !setting.showDriftScore) {
     destroyDriftTd(gui.driftTd);
     gui.driftTd = null;
-  } else if (gui.driftTd) {
-    // 已创建：重新显示（hideAllGui 关闭后）
   }
 }
 
@@ -343,9 +351,15 @@ export function cleanupGui(playerId: number): void {
   guis.delete(playerId);
 }
 
-/** 初始化 GUI 系统：定时刷新所有在线玩家的 GUI（timer 由 GameMode.onExit 统一清理） */
-export function initGui(): void {
+/** 启动 GUI 刷新 tick（100ms 轮询，持久 interval：onInit 注册、onExit 统一清理） */
+export function startGuiTicks(): void {
   setIntervalSafe(() => {
     void refreshAllGuis();
   }, REFRESH_INTERVAL_MS);
+}
+
+/** 初始化 GUI 系统（事件注册，模块加载时注册一次；刷新 tick 由 startGuiTicks 在 onInit 注册） */
+export function initGui(): void {
+  // 事件注册（断线清理等）在此；tick 启动拆到 startGuiTicks——gmx 的 onExit
+  // 会 clearAllTimers，若 tick 只在顶层注册一次则 gmx 后 GUI 永不刷新
 }

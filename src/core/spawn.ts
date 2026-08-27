@@ -237,12 +237,15 @@ async function respawnBySetting(player: Player): Promise<void> {
   player.setFacingAngle(pos.angle);
 }
 
-/** 初始化出生系统：定时保存在线位置 + 大世界重生按设置自动定位（timer 由 GameMode.onExit 统一清理） */
-export function initSpawnSystem(): void {
+/** 启动出生系统位置保存 tick（持久 interval：onInit 注册、onExit 统一清理） */
+export function startSpawnTicks(): void {
   setIntervalSafe(() => {
     void saveAllOnlinePositions();
   }, SAVE_INTERVAL_MS);
+}
 
+/** 初始化出生系统（事件注册，模块加载时注册一次） */
+export function initSpawnSystem(): void {
   // 出生请求闸门：open.mp 的 RequestSpawn 处理对观战状态不做任何检查，观战
   // （spect）中的玩家仍会被客户端的自动出生请求直接放行（toSpawn_=true）强制
   // 出生。而服务器侧 spectateData.spectating 只有 Player::spawn() 会清除——

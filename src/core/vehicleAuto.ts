@@ -163,8 +163,8 @@ async function vehicleTick(player: Player): Promise<void> {
   }
 }
 
-/** 初始化车辆自动系统（timer 由 GameMode.onExit 统一清理） */
-export function initVehicleAuto(): void {
+/** 启动车辆自动 tick（1 秒轮询，持久 interval：onInit 注册、onExit 统一清理） */
+export function startVehicleAutoTicks(): void {
   // 1 秒轮询：所有在线玩家车辆的自动逻辑（对齐原版 startSecondTimer）
   setIntervalSafe(() => {
     void (async () => {
@@ -178,7 +178,10 @@ export function initVehicleAuto(): void {
       }
     })();
   }, VEHICLE_TICK_MS);
+}
 
+/** 初始化车辆自动系统（事件注册，模块加载时注册一次） */
+export function initVehicleAuto(): void {
   // autoFix 主防护：拦截打向玩家车辆的子弹（对齐原版 autoFix 的 onWeaponShot）
   // 同步读取 autoFixSet 缓存（async handler 返回值会被 infernus 忽略，必须同步 return false）
   PlayerEvent.onWeaponShot(({ hitType, hitId, next }) => {

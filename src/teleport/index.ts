@@ -493,8 +493,8 @@ export function updateTpTimeouts(): void {
   }
 }
 
-/** tpa 超时轮询（timer 由 GameMode.onExit 统一清理） */
-export function initTpTimeoutLoop(): void {
+/** tpa 超时轮询（持久 interval：onInit 注册、onExit 统一清理） */
+export function startTpTimeoutLoop(): void {
   setIntervalSafe(() => updateTpTimeouts(), 1000);
 }
 

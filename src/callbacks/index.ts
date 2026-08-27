@@ -11,12 +11,17 @@ import { initRateLimit, cleanupRateLimit } from "@/core/ratelimit";
 import { sessionManager } from "@/sessions/manager";
 import { getSetting, invalidateSettingCache } from "@/personalize/settings";
 import { cleanupChat, initChat, initChatState } from "@/chat";
-import { initSpawnSystem, savePlayerPosition, cleanupLoginSpawned } from "@/core/spawn";
+import {
+  initSpawnSystem,
+  savePlayerPosition,
+  cleanupLoginSpawned,
+  startSpawnTicks,
+} from "@/core/spawn";
 import { runLobby } from "@/personalize/lobby";
-import { cleanupGui, initGui } from "@/interface/gui";
+import { cleanupGui, initGui, startGuiTicks } from "@/interface/gui";
 import { initVehicleCommands, onPlayerDisconnectVehicle, startVehicleSaveTimer } from "@/vehicles";
 import { initMyVehicleCommands } from "@/vehicles/menu";
-import { cleanupTeleport, fallbackTeleport, initTeleport, initTpTimeoutLoop } from "@/teleport";
+import { cleanupTeleport, fallbackTeleport, initTeleport, startTpTimeoutLoop } from "@/teleport";
 import {
   initHouseCommands,
   loadAllHouseObjects,
@@ -25,21 +30,28 @@ import {
   applyHouseRemovedBuildings,
 } from "@/house";
 import { applyPlayerPreset, cleanupAttire, cleanupOrphanPresets, initAttireEditor } from "@/attire";
-import { initRaceSystem, cleanupRacePlayer, tryReconnectRace, isInRace } from "@/race/room";
+import {
+  initRaceSystem,
+  cleanupRacePlayer,
+  tryReconnectRace,
+  isInRace,
+  startRaceTicks,
+} from "@/race/room";
 import { initRaceUi } from "@/race/roomUi";
 import { initRaceEditor, exitEdit } from "@/race/editor";
 import { initRaceCommands } from "@/race/manage";
-import { initObserve, cleanupObserve } from "@/core/observe";
+import { initObserve, cleanupObserve, startObserveTicks } from "@/core/observe";
 import { initPlayerInfo } from "@/core/profile";
 import { initInvincible, applyInvincibleState, cleanupInvincible } from "@/core/invincible";
 import { initArmor } from "@/core/armor";
-import { initMoneySystem, giveInfinityMoney } from "@/core/money";
+import { initMoneySystem, giveInfinityMoney, startMoneyTicks } from "@/core/money";
 import {
   initVehicleAuto,
   cleanupVehicleAuto,
   syncVehicleAutoState,
   syncStuntState,
   syncNoCollisionState,
+  startVehicleAutoTicks,
 } from "@/core/vehicleAuto";
 import { cleanupDriftScore, initDriftScore } from "@/core/driftScore";
 import { cancelCountdownFx, disposeCountdownFxAll } from "@/interface/countdownFx";
@@ -50,7 +62,7 @@ import { initActionCommands, initActionCleanup, cleanupAction } from "@/personal
 import { initHelpCommand, sendWelcomeMessage } from "@/core/help";
 import { initColandreas } from "@/core/colandreas";
 import { initElevators } from "@/elevator";
-import { initDrifterNpcs } from "@/npcs";
+import { initDrifterNpcs, startDrifterNpcTicks } from "@/npcs";
 import { initReplay, cleanupReplay, shutdownReplay } from "@/replay";
 import {
   applyWorldEnv,
@@ -290,7 +302,6 @@ initElevators();
 
 // 漂移 NPC 系统（8 个 Drifter NPC 沿 .rec 路线循环漂移 + /drift 随行）
 initDrifterNpcs();
-
 // 万能面板快捷键（Y 键）
 initPanel();
 
@@ -300,15 +311,15 @@ initChat();
 // 指令/聊天全局限频
 initRateLimit();
 
-// 出生系统（定时保存在线位置）
+// 出生系统（事件注册；位置保存 tick 在 onInit 启动）
 initSpawnSystem();
 
-// GUI 系统（速度表 / 网络信息，每 100ms 刷新，timer 由 GameMode.onExit 统一清理）
+// GUI 系统（速度表 / 网络信息，每 100ms 刷新，timer 由 GameMode.onExit 统一清理；
+// 刷新 tick 在 onInit 启动）
 initGui();
 
 // 爱车系统（刷车命令 + 位置定时保存 + 改装店 mod 存储）
 initVehicleCommands();
-startVehicleSaveTimer();
 // 原版爱车命令兼容（/cars|/ac /wdac /llac）
 initMyVehicleCommands();
 
@@ -317,7 +328,6 @@ initMoneySystem();
 
 // 传送系统（/s /l /tpa 等 + 未知命令兜底 / // 传送点）
 initTeleport();
-initTpTimeoutLoop();
 PlayerEvent.onCommandError(({ player, command, cmdText, error, getSuggestion, next }) => {
   // 命令不存在 → 尝试当作传送点（/名称 或 //名称）
   // 注意：command 已被解析器剥离斜杠，必须用 cmdText（保留原始 "/ls" 或 "//ls"）判断前缀
@@ -368,7 +378,7 @@ initRaceUi(); // /r 命令入口 + 赛道列表/创建/编辑对话框（与比�
 initRaceEditor();
 initRaceCommands();
 
-// 观察系统（/tv 观战，比赛完成后自动观战）
+// 观察系统（/tv 观战，比赛完成后自动观战；轮询 tick 在 onInit 启动）
 initObserve();
 
 // 点击玩家 → 查看其信息汇总
@@ -391,7 +401,7 @@ initInvincible();
 // 默认护甲：每次出生/重生补满护甲（不依赖无敌，所有人默认有甲）
 initArmor();
 
-// 车辆自动系统：翻车自动翻正/自动修复/定时换色/氮气补充
+// 车辆自动系统：翻车自动翻正/自动修复/定时换色/氮气补充（轮询 tick 在 onInit 启动）
 initVehicleAuto();
 
 // 漂移积分系统：车身损伤状态变化（碰撞等）→ 打断当前积分归 0（检测/计分由 gui tick 驱动）
@@ -403,8 +413,8 @@ initAttireEditor();
 // 回放系统（/rec 录制 · /rp 回放控制 · 比赛自动录制 · RakNet 拦截采样）
 initReplay();
 
-// 游戏会话心跳：定时更新 last_heartbeat_at + 更正异常掉线会话
-startSessionHeartbeat();
+// 游戏会话心跳：定时更新 last_heartbeat_at + 更正异常掉线会话（tick 在 onInit 启动）
+// 注意：startSessionHeartbeat 是纯 interval，不在此顶层调用，统一放 onInit 注册
 
 GameMode.onInit(({ next }) => {
   logger.info("RST GameMode 已启动");
@@ -426,6 +436,19 @@ GameMode.onInit(({ next }) => {
   void initWorldEnvironment();
   // 大世界时间流逝（现实同步）+ 天气轮换
   startWorldClockTimers();
+  // 持久 interval 统一在此注册（onExit 的 clearAllTimers 会清掉全部 timer——
+  // 这些全局 tick 若只在模块顶层注册一次，gmx 后永不复活；显式 onInit 注册、
+  // onExit 清理，生命周期与游戏模式一致。玩家级/临时 interval 不在其中）
+  startGuiTicks();
+  startSessionHeartbeat();
+  startSpawnTicks();
+  startVehicleSaveTimer();
+  startMoneyTicks();
+  startTpTimeoutLoop();
+  startObserveTicks();
+  startVehicleAutoTicks();
+  startRaceTicks();
+  startDrifterNpcTicks();
   return next();
 });
 

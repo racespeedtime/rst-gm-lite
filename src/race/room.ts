@@ -1428,7 +1428,15 @@ function tickRooms(): void {
   }
 }
 
-/** 初始化比赛系统 */
+/** 启动比赛持久 tick（实时排名 + 比赛 TD 刷新；onInit 注册、onExit 统一清理） */
+export function startRaceTicks(): void {
+  // 实时排名定时器
+  setIntervalSafe(() => tickRooms(), 200);
+  // 比赛信息 TD 高频刷新（60fps，对齐回放观战效果；只对变化内容调 native）
+  setIntervalSafe(() => syncRaceTds(), 16);
+}
+
+/** 初始化比赛系统（事件注册，模块加载时注册一次） */
 export function initRaceSystem(): void {
   // /r(race) 命令入口（/r s|j|l|info|create|edit|page + 赛道列表）已拆到 roomUi.ts 的
   // initRaceUi()，callbacks 里在 initRaceSystem() 后调用——本函数只管比赛核心事件。
@@ -1447,11 +1455,6 @@ export function initRaceSystem(): void {
     }
     return next();
   });
-
-  // 实时排名定时器（GameMode.onExit 统一清理）
-  setIntervalSafe(() => tickRooms(), 200);
-  // 比赛信息 TD 高频刷新（60fps，对齐回放观战效果；只对变化内容调 native）
-  setIntervalSafe(() => syncRaceTds(), 16);
 
   // 比赛中的命令隔离：非白名单命令一律拒绝
   // 注意：onCommandReceived 的 command 是完整命令串（如 "r l"），strictMainCmd

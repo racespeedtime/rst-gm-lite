@@ -517,14 +517,8 @@ async function suggestStop(observer: Player): Promise<void> {
   }
 }
 
-/** 初始化观察系统 */
-export function initObserve(): void {
-  // 在线玩家都登记为可切换观战候选（断线时注销；观战者自己在切换时排除）
-  PlayerEvent.onConnect(({ player, next }) => {
-    if (!player.isNpc()) registerObserveCandidate(player.id, "player");
-    return next();
-  });
-
+/** 启动观战方向键轮询 tick（持久 interval：onInit 注册、onExit 统一清理） */
+export function startObserveTicks(): void {
   // 观战切换：方向键 ←/→ 由 getKeys 轮询驱动（pollObserveKeys，见该函数注释）
   // ——观战/副驾下方向键不触发 onKeyStateChange（SA-MP 文档明确），需主动读
   // getKeys().leftRight。Q/E 不做切换：观战模式下客户端把 Q/E 当本地镜头键
@@ -534,6 +528,15 @@ export function initObserve(): void {
   // spectateVehicle 切 ghost 车（"视角乱跳"）。副驾下 FIRE 让位给氮气（drift
   // NPC 点按氮气）。切换入口：方向键 ←/→（轮询）+ /tv next|prev 命令。
   setIntervalSafe(() => pollObserveKeys(), 100);
+}
+
+/** 初始化观察系统（事件注册，模块加载时注册一次） */
+export function initObserve(): void {
+  // 在线玩家都登记为可切换观战候选（断线时注销；观战者自己在切换时排除）
+  PlayerEvent.onConnect(({ player, next }) => {
+    if (!player.isNpc()) registerObserveCandidate(player.id, "player");
+    return next();
+  });
 
   // /tv <ID> 观战玩家 · /tv off 关闭 · /tv next|prev 切换上一个/下一个观战目标。
   // 聊天命令在观战中不受限制（对齐 /p 面板原理），是切换的可靠入口——
