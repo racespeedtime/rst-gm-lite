@@ -44,8 +44,13 @@ const MAGIC = "RSTREP01";
  *   0=未排名/非比赛）。回放 RANK TD 按播放进度实时显示（TIME/CP/RANK 全部
  *   从帧状态渲染，seek/倍速天然同步）。旧 v7 及以下文件照读（rank=0，回放
  *   回退用 DB 名次快照）
+ * - v9 多轨道（比赛回放：一场一个 .rec 文件）：header 基座不变，末尾追加
+ *   轨道表（trackCount + N × 轨道元信息），Body 改 N 段独立帧流（段起始 4
+ *   字节对齐，段内帧布局不变）。播放端为每轨道生成独立 ReplayData 视图
+ *   （各自 header 视图 + frames subarray）——sampleAt/renderGhost/challenge
+ *   全部零改动。旧 v8 及以下单轨文件照读（单轨道，tracks=1）
  */
-export const FORMAT_VERSION = 8;
+export const FORMAT_VERSION = 9;
 
 /** 录制类型（recorder 写 header 用） */
 export const REPLAY_TYPE_GHOST = 0;
@@ -154,7 +159,38 @@ export interface ReplayData {
   /** 跨圈帧索引惰性缓存（cpProgress 圈满回落处；回放 CP 渲染推算累计圈数用。
    *  文件只读缓存共享安全——幂等构建，多会话并发写同值） */
   lapFlips?: number[];
+  /** v9 多轨道：比赛回放一场一个文件，内含 N 个玩家的轨道（各自独立帧流）。
+   *  旧 v8 及以下单轨文件为 undefined——解析时视为单轨道。轨道表在 header
+   *  基座之后、Body 帧流之前。 */
+  tracks?: ReplayTrack[];
 }
+
+/** v9 多轨道：单条轨道的元信息（轨道表一项，定长编码） */
+export interface ReplayTrack {
+  /** 轨道序号（0 起；对应 DB replay.trackIndex） */
+  trackId: number;
+  /** 该轨道帧流在 Body 中的字节偏移（相对文件头 headerBytes 之后，4 字节对齐） */
+  frameOffset: number;
+  /** 该轨道帧数 */
+  frameCount: number;
+  /** 该轨道车辆模型（回放建车/标签用） */
+  vehicleModelId: number;
+  /** 该轨道起点坐标（录制者开赛时车辆位置） */
+  startX: number;
+  startY: number;
+  startZ: number;
+  /** 录制者名（定长 64B UTF-8，标签显示"回放 · 玩家名"） */
+  recorderName: string;
+  /** 该玩家本场名次（1-based；未完成/掉线为 0） */
+  rank: number;
+  /** 是否完成比赛 */
+  finished: boolean;
+}
+
+/** 轨道表：Header 基座 76B 之后追加（v9 起）。一项定长编码 */
+export const TRACK_META_BYTES = 4 + 4 + 4 + 12 + 64 + 4 + 1 + 4; // offset4+count4+model4+pos12+name64+rank4+finished1+trackId4 = 97
+/** 录制者名定长字节数（UTF-8） */
+export const TRACK_NAME_BYTES = 64;
 
 const V = (n: number): number => (Number.isFinite(n) ? n : 0);
 const U8 = (n: number): number => Math.max(0, Math.min(255, Math.round(n)));
@@ -202,6 +238,99 @@ export function encodeHeader(h: ReplayHeader): Buffer {
   o += 4;
   buf.writeUInt32LE(h.frameBytes, o); // v3：自描述帧字节数
   return buf;
+}
+
+/**
+ * 编码 v9 多轨道文件（比赛回放：一场一个 .rec）：header 基座 + 轨道表 + N 段帧流。
+ * 基座 header 用首轨（tracks[0]）的元信息（车型/起点/帧数/总时长——播放端
+ * 默认视图/观战 TD 用）；每轨 frameOffset 相对 Body 起点（headerBytes 之后）。
+ * 每轨帧体是已编码的连续 Buffer（encodeFrame 逐帧拼好；段间 4 字节对齐——
+ * 帧字节数 74 已 4 对齐，无额外填充）。
+ * 返回 { buf, tracks }：tracks 为写盘后的轨道元信息（含实际 frameOffset）。
+ */
+export function encodeMultiTrackFile(
+  base: ReplayHeader,
+  tracks: {
+    frameBytes: number;
+    frameCount: number;
+    vehicleModelId: number;
+    startX: number;
+    startY: number;
+    startZ: number;
+    recorderName: string;
+    rank: number;
+    finished: boolean;
+    framesBuf: Buffer;
+    durationMs: number;
+  }[],
+): { buf: Buffer; tracks: ReplayTrack[] } {
+  // 轨道表区大小 = trackCount4 + N×TRACK_META_BYTES；Body 起点 = headerBytes + 轨道表区
+  const tableBytes = 4 + tracks.length * TRACK_META_BYTES;
+  const bodyStart = HEADER_BYTES + tableBytes;
+  const outTracks: ReplayTrack[] = [];
+  let off = 0;
+  for (let i = 0; i < tracks.length; i++) {
+    const t = tracks[i];
+    outTracks.push({
+      trackId: i,
+      frameOffset: off,
+      frameCount: t.frameCount,
+      vehicleModelId: t.vehicleModelId,
+      startX: t.startX,
+      startY: t.startY,
+      startZ: t.startZ,
+      recorderName: t.recorderName,
+      rank: t.rank,
+      finished: t.finished,
+    });
+    off += t.frameCount * t.frameBytes;
+  }
+  const buf = Buffer.allocUnsafe(bodyStart + off);
+  // 基座 header：用首轨元信息（frameCount 用首轨帧数；总时长取各轨最大）
+  const baseHeader: ReplayHeader = { ...base };
+  baseHeader.frameCount = tracks[0]?.frameCount ?? 0;
+  if (tracks[0]) {
+    baseHeader.vehicleModelId = tracks[0].vehicleModelId;
+    baseHeader.startX = tracks[0].startX;
+    baseHeader.startY = tracks[0].startY;
+    baseHeader.startZ = tracks[0].startZ;
+  }
+  baseHeader.durationMs = Math.max(base.durationMs, ...tracks.map((t) => t.durationMs));
+  encodeHeader(baseHeader).copy(buf, 0);
+  // 轨道表
+  let o = HEADER_BYTES;
+  buf.writeUInt32LE(tracks.length, o);
+  o += 4;
+  for (const t of outTracks) {
+    buf.writeUInt32LE(t.frameOffset, o);
+    o += 4;
+    buf.writeUInt32LE(t.frameCount, o);
+    o += 4;
+    buf.writeInt32LE(t.vehicleModelId, o);
+    o += 4;
+    buf.writeFloatLE(t.startX, o);
+    o += 4;
+    buf.writeFloatLE(t.startY, o);
+    o += 4;
+    buf.writeFloatLE(t.startZ, o);
+    o += 4;
+    // 定长 UTF-8 名字（不足补 0，超长截断）
+    const nb = Buffer.alloc(TRACK_NAME_BYTES);
+    nb.write(t.recorderName.slice(0, TRACK_NAME_BYTES), 0, "utf8");
+    nb.copy(buf, o);
+    o += TRACK_NAME_BYTES;
+    buf.writeInt32LE(t.rank, o);
+    o += 4;
+    buf.writeUInt8(t.finished ? 1 : 0, o);
+    o += 1;
+    buf.writeUInt32LE(t.trackId, o);
+    o += 4;
+  }
+  // 各轨道帧流（frameOffset 相对 Body 起点，段起始 = bodyStart + offset）
+  for (let i = 0; i < tracks.length; i++) {
+    tracks[i].framesBuf.copy(buf, bodyStart + outTracks[i].frameOffset);
+  }
+  return { buf, tracks: outTracks };
 }
 
 /** 编码单帧 → Buffer（当前帧布局 74B：v7 的 73B + rank u8） */
@@ -302,18 +431,102 @@ export function parseHeader(buf: Buffer): ReplayHeader {
   };
 }
 
-/** 读取并解析回放文件（整文件入内存；帧体切片供 O(1) 随机访问）。损坏抛 Error。 */
+/** 读取并解析回放文件（整文件入内存；帧体切片供 O(1) 随机访问）。损坏抛 Error。
+ *  v9 多轨道：返回容器（header 基座视图 + tracks 数组），tracks 含每轨道元信息；
+ *  v8 及以下单轨：tracks 为 undefined（播放端按单轨处理）。 */
 export function parseReplayFile(filePath: string): ReplayData {
   const buf = readFileSync(filePath);
   const header = parseHeader(buf);
+  const version = buf.readUInt8(8);
   // 头字节数按版本分支：v3 多 4B frameBytes（自描述；魔数 0-7，版本在偏移 8）
-  const headerBytes = headerBytesFor(buf.readUInt8(8));
+  const headerBytes = headerBytesFor(version);
+  // v9 多轨道：header 基座后是轨道表（trackCount u32 + N × 轨道元信息），Body 是多段帧流
+  if (version >= 9) {
+    let o = headerBytes;
+    const trackCount = buf.readUInt32LE(o);
+    o += 4;
+    if (trackCount < 1 || trackCount > 256) throw new Error("回放文件轨道表损坏");
+    const tracks: ReplayTrack[] = [];
+    for (let i = 0; i < trackCount; i++) {
+      const frameOffset = buf.readUInt32LE(o);
+      o += 4;
+      const frameCount = buf.readUInt32LE(o);
+      o += 4;
+      const vehicleModelId = buf.readInt32LE(o);
+      o += 4;
+      const startX = buf.readFloatLE(o);
+      o += 4;
+      const startY = buf.readFloatLE(o);
+      o += 4;
+      const startZ = buf.readFloatLE(o);
+      o += 4;
+      // 定长 UTF-8 名字，去尾 0
+      const nameBuf = buf.subarray(o, o + TRACK_NAME_BYTES);
+      o += TRACK_NAME_BYTES;
+      const recorderName = nameBuf.toString("utf8").replace(/\0+$/, "");
+      const rank = buf.readInt32LE(o);
+      o += 4;
+      const finished = buf.readUInt8(o) !== 0;
+      o += 1;
+      const trackId = buf.readUInt32LE(o);
+      o += 4;
+      tracks.push({
+        trackId,
+        frameOffset,
+        frameCount,
+        vehicleModelId,
+        startX,
+        startY,
+        startZ,
+        recorderName,
+        rank,
+        finished,
+      });
+    }
+    // 校验每轨道帧段在 Body 范围内（段内帧布局沿用 header.frameBytes）
+    for (const t of tracks) {
+      if (headerBytes + t.frameOffset + t.frameCount * header.frameBytes > buf.length) {
+        throw new Error("回放文件数据不完整");
+      }
+    }
+    const frames = buf.subarray(headerBytes);
+    return { header, headerBytes, frames, tracks };
+  }
+  // v8 及以下单轨：Body 就是单段帧流
   const frames = buf.subarray(headerBytes);
   // 帧数与文件长度一致性校验（用文件内自描述的 frameBytes，兼容未来帧加字段）
   if (frames.length < header.frameCount * header.frameBytes) {
     throw new Error("回放文件数据不完整");
   }
   return { header, headerBytes, frames };
+}
+
+/**
+ * 从多轨道容器取某轨道的独立 ReplayData 视图（播放/挑战/seek 共用）：
+ * 视图的 header 是基座 header 的副本（帧数/车型/起点换成该轨道的），frames
+ * 是该轨道帧段的 subarray（frameOffset 相对 Body 起点）——sampleAt/
+ * frameTimeAt/sampleIndexAt 全部只认单 header + 单 frames，零改动复用。
+ * trackId 不在容器中时回退首轨（tracks[0]）。单轨文件原样返回。
+ */
+export function trackView(data: ReplayData, trackId?: number): ReplayData {
+  if (!data.tracks || data.tracks.length === 0) return data; // 单轨文件：原样
+  const t = data.tracks.find((x) => x.trackId === trackId) ?? data.tracks[0];
+  const header: ReplayHeader = { ...data.header };
+  header.frameCount = t.frameCount;
+  header.vehicleModelId = t.vehicleModelId;
+  header.startX = t.startX;
+  header.startY = t.startY;
+  header.startZ = t.startZ;
+  const frames = data.frames.subarray(
+    t.frameOffset,
+    t.frameOffset + t.frameCount * header.frameBytes,
+  );
+  return { header, headerBytes: data.headerBytes, frames };
+}
+
+/** 多轨道容器的轨道数（单轨文件 = 1） */
+export function trackCount(data: ReplayData): number {
+  return data.tracks?.length ?? 1;
 }
 
 /** 解码帧体切片（越界返回 null）。frameBytes 用文件内自描述值（兼容未来版本）。 */

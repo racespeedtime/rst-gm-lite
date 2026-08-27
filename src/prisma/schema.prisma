@@ -511,6 +511,10 @@ model Replay {
   fileSize       Int      @map("file_size")
   rank           Int? // 比赛回放：名次快照（未完成/中途退出为 null）
   finished       Boolean? // 比赛回放：是否完成
+  // v9 多轨道：同一场比赛一个 .rec 文件内含 N 个玩家的轨道，DB 每玩家一行
+  // 共享同一 fileName；trackIndex 标记该行对应文件里的第几个轨道（0 起）。
+  // 旧单轨文件（v8 及以下）为 null。
+  trackIndex      Int?    @map("track_index")
   // 比赛房间 id（比赛服务端递增不复用，本场唯一）：无人完成作废精确匹配本场，
   // 防误删"有人完成的比赛里掉线玩家的保留段"（那部分 rank 同样为 null）。
   // 非比赛录制（ghost）为 null。
