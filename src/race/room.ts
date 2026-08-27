@@ -16,6 +16,7 @@ import {
   execCpScript,
   cleanupScriptVehicle,
   getSuperStartKmh,
+  getFirstCpEnv,
   setVehicleSpeed,
   KMH_UNIT,
   type CpScriptContext,
@@ -46,6 +47,7 @@ import {
 } from "@/replay/recorder";
 import { startObservePlayer, stopObserve, isObserving, getObserverIdsOf } from "@/core/observe";
 import { getWorldWeather, snapshotPersonalTime } from "@/core/worldenv";
+import { getCachedSettingByUserId } from "@/personalize/settings";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { formatTime, formatRaceTimeCs } from "@/utils/format";
 import { sysMsg } from "@/utils/msg";
@@ -639,40 +641,45 @@ function beginRace(room: RaceRoom): void {
   // 超级起步速度：第一 CP 的 superstart 配置（无/非法 → 默认；写其他 CP 无效）。
   // 不写默认生效——所有比赛开局倒计时结束即有超级起步（GO 瞬间沿车头给初速）。
   const superStartKmh = getSuperStartKmh(room.cps);
-  // 房间统一天气时间：按房主设置（syncGameTime 则跟随服务器真实时间，否则用房主 timeHour/timeMinute）
-  void (async () => {
-    const nowTime = new Date();
-    let hour = nowTime.getHours();
-    let minute = nowTime.getMinutes();
-    let weather = getWorldWeather();
-    const ownerAuth = getAuthState(room.ownerId);
-    if (ownerAuth) {
-      const setting = await prisma.sysUserSetting.findUnique({
-        where: { userId: ownerAuth.userId },
-      });
-      if (setting) {
-        if (!setting.syncGameTime) {
-          hour = setting.timeHour;
-          minute = setting.timeMinute;
-        }
-        if (!setting.syncWorldWeather) {
-          weather = setting.weather;
-        }
-      }
+  // 房间统一天气时间：按房主个人设置（syncGameTime 则跟随服务器真实时间，否则用
+  // 房主 timeHour/timeMinute；天气同理取大世界当前或房主个人天气）。同步读设置
+  // 缓存（房主必为房间在线成员，登录时已预热）——消除原异步查库的延迟：开赛瞬间
+  // 即时生效，不再"开局后 1-2 秒才跳变"。缓存 miss（极端）退回服务器现实时间。
+  const nowTime = new Date();
+  let hour = nowTime.getHours();
+  let minute = nowTime.getMinutes();
+  let weather = getWorldWeather();
+  const ownerAuth = getAuthState(room.ownerId);
+  const ownerSetting = ownerAuth ? getCachedSettingByUserId(ownerAuth.userId) : undefined;
+  if (ownerSetting) {
+    if (!ownerSetting.syncGameTime) {
+      hour = ownerSetting.timeHour;
+      minute = ownerSetting.timeMinute;
     }
-    // await 让出期间房间可能已销毁（/r l 全员离开→checkRoomState）/重开：
-    // 此时再对成员 setTime/写缓存会把"已结束房间"的成员时间或已重开的房间
-    // 统一时间改乱，直接放弃本次精修
-    if (rooms.get(room.id) !== room || room.state !== "RACING") return;
-    for (const m of room.members.values()) {
-      if (!m.isConnected()) continue;
-      m.setTime(hour, minute);
-      m.setWeather(weather);
+    if (!ownerSetting.syncWorldWeather) {
+      weather = ownerSetting.weather;
     }
-    // 缓存房间统一时间天气：重连玩家是新连接，按此恢复（与房间其他成员一致）
-    room.roomTime = { hour, minute };
-    room.roomWeather = weather;
-  })();
+  }
+  // 第一 CP 的 time/weather = 赛道固定环境：开赛即应用，覆盖房主设置——赛道
+  // 作者在第一 CP 写 time/weather 即声明"本赛道环境"，无需等玩家触碰 CP1 才
+  // 生效（触碰时 scripts.ts 仍会执行一次，值相同无影响）
+  const cpEnv = getFirstCpEnv(room.cps);
+  if (cpEnv.time) {
+    hour = cpEnv.time.hour;
+    minute = cpEnv.time.minute;
+  }
+  if (cpEnv.weather !== undefined) {
+    weather = cpEnv.weather;
+  }
+  // 同步设置（beginRace 在 onGo 同步触发，room 必在 RACING，无需异步存活检查）
+  for (const m of room.members.values()) {
+    if (!m.isConnected()) continue;
+    m.setTime(hour, minute);
+    m.setWeather(weather);
+  }
+  // 缓存房间统一时间天气：重连玩家是新连接，按此恢复（与房间其他成员一致）
+  room.roomTime = { hour, minute };
+  room.roomWeather = weather;
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
     if (mp) {
