@@ -101,32 +101,27 @@ export async function openReplayMenu(
     caption: `${caption}（${list.length}）`,
     data: list,
     cacheKey: `replay:mine:${type ?? "all"}`, // 记忆上次翻到的页（翻列表找片，退出再进回到原页）
-    // 列按录制类型区分：自定义(ghost)无赛道/名次，显示录制时间（创建时间）；
-    // 比赛(race)保留赛道/名次列。混合列表（all）按比赛列展示，ghost 行赛道列
-    // 显示"自由录制"
+    // 列按列表语境区分：单一类型列表(race/ghost)本身类型已知,不需要"类型"列;
+    // 混合列表(我的全部回放)需"类型"列区分 race/ghost。录者列只用于含他人
+    // 回放的入口(全部比赛回放/赛道详情),"我的录制"都是自己的不需要
     headers:
       type === "ghost"
-        ? ["类型", "车型", "录制时间", "时长"]
-        : ["类型", "车型", "赛道/名次", "录制时间", "时长"],
-    format: (v) =>
-      type === "ghost"
-        ? [
-            typeLabel(v.type),
-            replayVehicleName(v.vehicleModelId),
-            formatFullDateTime(v.createdAt),
-            formatDuration(v.durationMs),
-          ]
-        : [
-            typeLabel(v.type),
-            // 车型快照两类型都有（录制时车辆模型），未知模型退化为 ID 字符串
-            replayVehicleName(v.vehicleModelId),
-            // 赛道/名次列：比赛显示赛道 + 名次（完成/未完成），自定义显示"自由录制"
-            v.type === "race"
-              ? `${v.raceName || "未知赛道"}${v.rank != null ? ` · No.${v.rank}` : "{FF0000} · 未完成"}`
-              : "{FFFFFF}自由录制",
-            formatFullDateTime(v.createdAt),
-            formatDuration(v.durationMs),
-          ],
+        ? ["车型", "录制时间", "时长"]
+        : type === "race"
+          ? ["车型", "赛道/名次", "录制时间", "时长"]
+          : ["类型", "车型", "赛道/名次", "录制时间", "时长"],
+    format: (v) => {
+      const vehicle = replayVehicleName(v.vehicleModelId);
+      const track =
+        v.type === "race"
+          ? `${v.raceName || "未知赛道"}${v.rank != null ? ` · No.${v.rank}` : "{FF0000} · 未完成"}`
+          : "{FFFFFF}自由录制";
+      const time = formatFullDateTime(v.createdAt);
+      const dur = formatDuration(v.durationMs);
+      if (type === "ghost") return [vehicle, time, dur];
+      if (type === "race") return [vehicle, track, time, dur];
+      return [typeLabel(v.type), vehicle, track, time, dur];
+    },
     button1: "操作",
     button2: "取消",
   });
