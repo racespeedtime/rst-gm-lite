@@ -40,6 +40,8 @@ export interface PendingReplayEntry {
   rank: number | null;
   finished: boolean | null;
   raceRoomId: number | null;
+  /** v9 多轨道：该行在共享文件里的轨道号（单轨文件为 null/缺省） */
+  trackIndex?: number | null;
 }
 
 /** 读取待落库索引（文件不存在/损坏返回空数组） */
@@ -69,22 +71,22 @@ export function writePendingIndex(entries: PendingReplayEntry[]): void {
   }
 }
 
-/** 新增一条待落库条目（落盘后、create 前调用；同步写防退出丢索引） */
+/** 新增一条待落库条目（落盘后、create 前调用；同步写防退出丢索引）。
+ *  多轨道共享同一 fileName——去重键 = fileName + trackIndex（每轨道一条）。 */
 export function addPendingEntry(entry: PendingReplayEntry): void {
   const entries = readPendingIndex();
-  if (!entries.some((x) => x.fileName === entry.fileName)) {
+  if (!entries.some((x) => x.fileName === entry.fileName && x.trackIndex === entry.trackIndex)) {
     entries.push(entry);
   }
   writePendingIndex(entries);
 }
 
-/** 移除一条待落库条目（create 成功后调用，零残留） */
-export function removePendingEntry(fileName: string): void {
-  const entries = readPendingIndex();
-  const next = entries.filter((x) => x.fileName !== fileName);
-  if (next.length !== entries.length) {
-    writePendingIndex(next);
-  }
+/** 按 fileName + trackIndex 移除待落库条目（DB 记录已建后调用）。 */
+export function removePendingEntry(fileName: string, trackIndex?: number | null): void {
+  const entries = readPendingIndex().filter(
+    (x) => !(x.fileName === fileName && x.trackIndex === trackIndex),
+  );
+  writePendingIndex(entries);
 }
 
 /** 建目录（递归）。GameMode.onInit 时调用；失败仅告警不崩溃 */

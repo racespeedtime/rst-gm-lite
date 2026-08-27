@@ -44,6 +44,9 @@ import {
   getRecording,
   suspendRecording,
   dropRecording,
+  markRaceFinished,
+  saveRaceReplay,
+  type RecordingSession,
 } from "@/replay/recorder";
 import { startObservePlayer, stopObserve, isObserving, getObserverIdsOf } from "@/core/observe";
 import { getWorldWeather, snapshotPersonalTime } from "@/core/worldenv";
@@ -401,26 +404,28 @@ export async function restartRace(player: Player): Promise<void> {
     mp.startTime = 0;
     mp.finished = false;
     mp.cpSnapshots = []; // 重开比赛：清空上一场的回退快照（防按旧场车型/time/weather 回撤）
-    if (someoneFinished) {
-      // 本场已有人完成：成员段落盘保留（含掉线静止段），下一场重新开录
-      void stopRecording(m.id, { quiet: true });
-    } else {
-      // 无人完成：作废本段（discard 原子落盘即删文件不建 DB 记录），下一场
-      // 开赛（beginRace）重新开始录制，两场成绩互不混入
-      void stopRecording(m.id, { quiet: true, discard: true });
-    }
     await positionPlayerAtStart(m, room);
   }
+  if (someoneFinished) {
+    // 本场已有人完成：整场合并落盘（多轨道一个文件）保留，下一场重新开录。
+    // mergeRoomReplays 会收集在线成员 + 挂起掉线成员的会话（含下方未处理的
+    // 挂起 pid），成功后清会话；失败则保留由新一场的 raceRecordingStart 兜底
+    void mergeRoomReplays(room, []);
+  } else {
+    // 无人完成：作废本段（discard 原子落盘即删文件不建 DB 记录），下一场
+    // 开赛（beginRace）重新开始录制，两场成绩互不混入
+    for (const m of room.members.values()) {
+      void stopRecording(m.id, { quiet: true, discard: true });
+    }
+  }
   // 挂起中的掉线会话（掉线未重连）跨场处理：无人完成则丢弃（静止段无续录意义）；
-  // 已有人完成则落盘保留。归属校验：断线玩家 playerId 可能被复用开了别的房间
-  // 录制，不能误停/误丢
+  // 已有人完成则**不在此处理**（mergeRoomReplays 已收集合并，此处跳过防重复落盘）。
+  // 归属校验：断线玩家 playerId 可能被复用开了别的房间录制，不能误停/误丢
   for (const pid of room.raceMembersLast.keys()) {
     if (!playerRaces.has(pid) && isRecording(pid)) {
       const rec = getRecording(pid);
       if (!rec || !rec.raceRoomId || rec.raceRoomId === room.id) {
-        if (someoneFinished) {
-          void stopRecording(pid, { quiet: true });
-        } else {
+        if (!someoneFinished) {
           dropRecording(pid);
         }
       }
@@ -948,10 +953,11 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   broadcastToRoom(room, `${player.getName().name} 完成比赛！用时 ${formatTime(time)}`);
   // 完成反馈音效（对齐 countdownFx 的数字 1056 / GO 1057 音效族，冲线用 1058）
   player.playSound(1058);
-  // 完成瞬间即落盘本段录像（带名次）：完成者掉线不进重连窗口，若等 endRoom
-  // 才落盘，宽限期内掉线会经 forceStopRecording 以无 rank 落盘 → 录像永远
-  // 误标"未完成"。提前落盘后 endRoom 的 raceRecordingStop 对已移除会话是 no-op。
-  raceRecordingStop(player.id, { rank, finished: true });
+  // 完成标记（多轨道合并落盘用）：只写会话标记不落盘——endRoom 统一把全房间
+  // 会话合并成一个多轨道 .rec 文件。若这里提前落盘（旧逻辑），完成者会被单独
+  // 写成一个单轨文件，整场回放就散成多个文件了。完成者掉线后标记仍保留在
+  // 会话里，endRoom 合并时按标记写 rank/finished（不会丢名次）。
+  markRaceFinished(player.id, rank);
   // 第一名完成：立即挂 20s 宽限定时器（同步段、在任何 await 之前）——若延后到
   // 结算对话框/DB 写纪录之后再挂，完成者掉线（cleanupRacePlayer 删 playerRaces，
   // 后续续体直接 return）或对话框一直挂着（await 永不 resolve）时 endTimer 永不
@@ -1080,6 +1086,56 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   }
 }
 
+/**
+ * 房间合并落盘（endRoom/resetRoom 共用）：收集在线成员 + 挂起掉线成员的录制
+ * 会话，合并编码成一个多轨道 .rec 文件（v9），DB 每玩家一行共享 fileName +
+ * trackIndex。完成者已由 finishPlayer 打标记（markRaceFinished），rank/finished
+ * 不丢；未完成者按排名快照补。saveRaceReplay 内部异步落盘，成功后清会话
+ * （失败则保留——由断线/房间销毁兜底落单轨，避免"落盘失败但会话已删"丢录像）。
+ */
+function mergeRoomReplays(room: RaceRoom, ranked: { playerId: number; finished: boolean }[]): void {
+  const recs: { pid: number; rec: RecordingSession | undefined }[] = [];
+  // 按 pid 去重：在线成员在 room.members 里登记过，raceMembersLast 也含他们
+  //（joinRoom 时 set）——避免同一会话被收集两次产生重复轨道
+  const seen = new Set<number>();
+  for (const m of room.members.values()) {
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    recs.push({ pid: m.id, rec: isRecording(m.id) ? getRecording(m.id) : undefined });
+  }
+  for (const pid of room.raceMembersLast.keys()) {
+    if (seen.has(pid)) continue;
+    seen.add(pid);
+    const rec = isRecording(pid) ? getRecording(pid) : undefined;
+    // 归属校验：只处理属于本房间的录制会话
+    if (rec && (!rec.raceRoomId || rec.raceRoomId === room.id)) {
+      // 未标记完成但排上名的挂起成员：补标记（掉线后拿到名次）
+      if (rec.finishFlag !== true) {
+        const r = ranked.find((x) => x.playerId === pid);
+        if (r?.finished) {
+          rec.finishRank = ranked.indexOf(r) + 1;
+          rec.finishFlag = true;
+        }
+      }
+      recs.push({ pid, rec });
+    }
+  }
+  const validRecs = recs
+    .filter((x) => x.rec)
+    .map((x) => x.rec!)
+    .filter((r) => r.frames.length >= 2);
+  if (validRecs.length > 0) {
+    // 先同步清 Map（saveRaceReplay 已持有会话对象引用，删 Map 不影响它读帧）：
+    // 否则 resetRoom 重开下一场时 raceRecordingStart 的 forceStopRecording 会
+    // 命中旧会话落单轨文件，破坏"一场一个文件"。saveRaceReplay 内部只读传入
+    // 的 sessions 数组，不依赖 Map。
+    for (const x of recs) {
+      if (x.rec) dropRecording(x.pid);
+    }
+    void saveRaceReplay(room.raceId, room.raceName, room.id, validRecs);
+  }
+}
+
 /** 比赛结束：最终排名结算 + 成员收尾 + 房间销毁（结束宽限到点/全员完成/重连窗口清空） */
 function endRoom(room: RaceRoom): void {
   // FINISHED 幂等；WAITING 也要跳过——restartRace 已把 state 置回 WAITING（20s 宽限
@@ -1159,12 +1215,6 @@ function endRoom(room: RaceRoom): void {
   for (const m of room.members.values()) {
     RaceCheckpoint.disable(m);
     clearRaceMapIcons(m); // 比赛结束：清每个成员的小地图图标
-    // 回放：比赛结束停止录制并落盘（名次/完成态快照）
-    const r = ranked.find((x) => x.playerId === m.id);
-    raceRecordingStop(m.id, {
-      rank: r ? ranked.indexOf(r) + 1 : null,
-      finished: r?.finished ?? false,
-    });
     // 脚本车辆（cveh）在比赛结束时统一清理，防残留比赛世界成为幽灵车
     cleanupScriptVehicle(m.id);
     const mp = playerRaces.get(m.id);
@@ -1190,23 +1240,13 @@ function endRoom(room: RaceRoom): void {
       .show(m)
       .catch(() => {});
   }
-  // 落盘挂起中的掉线会话（掉线未重连、录像含静止段）：比赛结束（有人完成）
-  // 统一保留，并按排名补 rank/finished（在线成员已在上面的 raceRecordingStop
-  // 带 rank 落盘；挂起成员不在 members 循环里，这里补上——完成后掉线者也能
-  // 在录像里拿到名次，不再误标"未完成"。stopRecording 对已落盘的会话无副作用）
-  for (const pid of room.raceMembersLast.keys()) {
-    // 归属校验：只处理属于本房间的录制会话（玩家退赛后又加入别的房间时，
-    // 其新会话 raceRoomId 是别的房间——防误停/误丢另一房间的活跃录制）
-    const rec = isRecording(pid) ? getRecording(pid) : undefined;
-    if (rec && (!rec.raceRoomId || rec.raceRoomId === room.id)) {
-      const r = ranked.find((x) => x.playerId === pid);
-      void stopRecording(pid, {
-        quiet: true,
-        rank: r ? ranked.indexOf(r) + 1 : null,
-        finished: r?.finished ?? false,
-      });
-    }
+
+  // 回放：整场合并落盘（v9 多轨道——一场一个 .rec 文件，内含所有参赛玩家轨道）。
+  // 有完成者才落盘（整场有意义）；无人完成走 checkRoomState 的 discard 路径。
+  if (room.results.length > 0) {
+    mergeRoomReplays(room, ranked);
   }
+
   destroyRaceTds(room);
   cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
   room.members.clear();

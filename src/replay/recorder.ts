@@ -8,6 +8,7 @@ import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
 import {
   encodeHeader,
   encodeFrame,
+  encodeMultiTrackFile,
   HEADER_BYTES,
   FRAME_BYTES,
   REPLAY_TYPE_GHOST,
@@ -99,6 +100,11 @@ export interface RecordingSession {
   /** 所属比赛房间 id（race 录制）：房间销毁/结束收尾时校验归属，防跨房间误停/
    *  误丢"另一房间"的活跃会话（玩家退赛后又加入新房间时旧房间收尾会命中新会话） */
   raceRoomId?: number | null;
+  /** 完成标记（finishPlayer 冲线时写入，不落盘）：多轨道合并落盘时填轨道 rank/
+   *  finished——完成者掉线后 rank 仍保留（旧逻辑靠提前落盘防丢，现改为标记
+   *  + endRoom 合并时统一写） */
+  finishRank?: number | null;
+  finishFlag?: boolean | null;
 }
 
 const sessions = new Map<number, RecordingSession>();
@@ -158,6 +164,139 @@ export function noteRank(playerId: number, rank: number): void {
   const s = sessions.get(playerId);
   if (!s) return;
   s.rank = rank;
+}
+
+/** 标记比赛完成（finishPlayer 冲线时调用）：只写会话标记，不落盘——多轨道
+ *  合并落盘（endRoom 统一写）时填轨道 rank/finished。完成者掉线后标记仍保留
+ *  在会话里，不会丢 rank（旧逻辑靠提前落盘防丢，现改为标记 + endRoom 合并）。 */
+export function markRaceFinished(playerId: number, rank: number): void {
+  const s = sessions.get(playerId);
+  if (!s) return;
+  s.finishRank = rank;
+  s.finishFlag = true;
+}
+
+/** 组装单个会话的 ReplayHeader（stopRecording 与多轨道合并共用） */
+function buildSessionHeader(session: RecordingSession): ReplayHeader {
+  const durationMs = Math.max(1, Date.now() - session.startAt);
+  const frameIntervalMs = Math.min(
+    0xffff,
+    Math.round(durationMs / Math.max(1, session.frames.length - 1)),
+  );
+  return {
+    type: session.type === "race" ? REPLAY_TYPE_RACE : REPLAY_TYPE_GHOST,
+    frameIntervalMs,
+    vehicleModelId: session.vehicleModelId,
+    startX: session.startX,
+    startY: session.startY,
+    startZ: session.startZ,
+    qx: session.qx,
+    qy: session.qy,
+    qz: session.qz,
+    qw: session.qw,
+    vx: session.vx,
+    vy: session.vy,
+    vz: session.vz,
+    frameCount: session.frames.length,
+    durationMs,
+    totalCp: session.totalCp ?? 0,
+    bestMs: session.bestMs ?? -1,
+    frameBytes: FRAME_BYTES,
+  };
+}
+
+/**
+ * 一场比赛合并落盘（v9 多轨道：一个 .rec 文件内含 N 个玩家的轨道）：
+ * 收集房间内所有成员的录制会话，各自帧编码成一段帧流，按统一 t0（各会话
+ * startAt 已接近 beginRace 时刻，帧内 relTimeMs 相对各自 startAt——多轨道
+ * 播放时各轨道独立 sampleAt，时间轴一致）写入一个多轨道文件。
+ * DB 写 N 行共享 fileName，每行 trackIndex 标记轨道号。
+ * 返回创建的 DB 记录数组；失败返回空数组。
+ */
+export async function saveRaceReplay(
+  raceId: string,
+  raceName: string,
+  raceRoomId: number,
+  sessions: RecordingSession[],
+): Promise<{ id: string; fileName: string }[]> {
+  // 过滤有效会话：有 userId + 至少 2 帧（空帧段没意义）。调用方（mergeRoomReplays）
+  // 已同步从 sessions Map 删除这些会话（防重开误落单轨），本函数只读传入数组。
+  const valid = sessions.filter((s) => s.userId && s.frames.length >= 2);
+  if (valid.length === 0) return [];
+  // 按玩家名排序保证轨道顺序稳定（首轨 = 播放默认视图）
+  valid.sort((a, b) => (a.recorderName ?? "").localeCompare(b.recorderName ?? ""));
+  const tracks = valid.map((s) => ({
+    frameBytes: FRAME_BYTES,
+    frameCount: s.frames.length,
+    vehicleModelId: s.vehicleModelId,
+    startX: s.startX,
+    startY: s.startY,
+    startZ: s.startZ,
+    recorderName: s.recorderName || "未知",
+    rank: s.finishRank ?? s.rank ?? 0, // 完成标记优先；未完成用实时名次快照
+    finished: s.finishFlag ?? false,
+    framesBuf: Buffer.concat(s.frames.map((f) => encodeFrame(f))),
+    durationMs: Math.max(1, Date.now() - s.startAt), // 该玩家真实录制时长
+  }));
+  const base: ReplayHeader = buildSessionHeader(valid[0]);
+  base.durationMs = Math.max(...tracks.map((t) => t.durationMs));
+  const { buf, tracks: outTracks } = encodeMultiTrackFile(base, tracks);
+  const fileName = `race_${raceRoomId}_${valid[0].startAt}.rec`;
+  if (!saveRecordingFile(fileName, buf)) {
+    logger.error(`[replay] 多轨道比赛回放写盘失败 ${fileName}`);
+    // 写盘失败：会话保留（endRoom 已离开，由断线/房间销毁兜底 stopRecording 落单轨）
+    return [];
+  }
+  const createdList: { id: string; fileName: string }[] = [];
+  for (let i = 0; i < valid.length; i++) {
+    const s = valid[i];
+    const meta = outTracks[i];
+    const durationMs = Math.max(1, Date.now() - s.startAt); // 该玩家真实录制时长
+    addPendingEntry({
+      type: "race",
+      userId: s.userId,
+      recorderName: s.recorderName || "未知",
+      raceId,
+      raceName,
+      vehicleModelId: meta.vehicleModelId,
+      fileName,
+      durationMs,
+      frameCount: meta.frameCount,
+      fileSize: buf.length,
+      rank: s.finishRank ?? null,
+      finished: s.finishFlag ?? null,
+      raceRoomId,
+      trackIndex: meta.trackId,
+    });
+    try {
+      const created = await prisma.replay.create({
+        data: {
+          type: "race",
+          userId: s.userId,
+          recorderName: s.recorderName || "未知",
+          raceId,
+          raceName,
+          vehicleModelId: meta.vehicleModelId,
+          fileName,
+          durationMs,
+          frameCount: meta.frameCount,
+          fileSize: buf.length,
+          rank: s.finishRank ?? null,
+          finished: s.finishFlag ?? null,
+          raceRoomId,
+          trackIndex: meta.trackId,
+        },
+      });
+      removePendingEntry(fileName);
+      createdList.push({ id: created.id, fileName });
+    } catch (e) {
+      logger.error(`[replay] 多轨道回放 DB 记录失败（轨道 ${meta.trackId}）`, e);
+    }
+  }
+  logger.info(
+    `[replay] 比赛回放合并落盘 ${fileName}（${valid.length} 轨 / ${buf.length} 字节，room=${raceRoomId}）`,
+  );
+  return createdList;
 }
 
 /** 自定义（ghost）录制时长硬上限（1 小时）：防玩家挂机无限录制拖垮内存/磁盘

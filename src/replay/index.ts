@@ -55,9 +55,11 @@ export function initReplay(): void {
         logger.info(`[replay] 待落库索引 ${pending.length} 条，开始补建 DB 记录`);
         const existing = await prisma.replay.findMany({
           where: { fileName: { in: pending.map((p) => p.fileName) } },
-          select: { fileName: true },
+          select: { fileName: true, trackIndex: true },
         });
-        const existingNames = new Set(existing.map((r) => r.fileName));
+        // 多轨道共享 fileName：已存在判定按 fileName+trackIndex 联合（同一文件的
+        // 不同轨道互不覆盖，各自补建）
+        const existingKeys = new Set(existing.map((r) => `${r.fileName}#${r.trackIndex ?? ""}`));
         const remaining: typeof pending = [];
         for (const entry of pending) {
           try {
@@ -65,12 +67,14 @@ export function initReplay(): void {
               logger.warn(`[replay] 补建跳过：文件不存在 ${entry.fileName}`);
               continue; // 文件没了，条目随之丢弃
             }
-            if (existingNames.has(entry.fileName)) {
-              logger.warn(`[replay] 补建跳过：DB 已有记录 ${entry.fileName}`);
+            if (existingKeys.has(`${entry.fileName}#${entry.trackIndex ?? ""}`)) {
+              logger.warn(
+                `[replay] 补建跳过：DB 已有记录 ${entry.fileName} 轨道 ${entry.trackIndex ?? "-"}`,
+              );
               continue; // 记录已存在（含软删），条目丢弃
             }
             await prisma.replay.create({ data: entry });
-            logger.info(`[replay] 补建落库 ${entry.fileName}`);
+            logger.info(`[replay] 补建落库 ${entry.fileName} 轨道 ${entry.trackIndex ?? "-"}`);
           } catch (e) {
             // 单条失败保留条目（下次启动再试），其余继续
             remaining.push(entry);
@@ -217,7 +221,12 @@ export function discardRaceReplay(
       // 只作废"未完成"段（rank==null）；有 rank 说明该段有人冲线，保留
       if (!row || row.rank != null) return;
       deleteRecordingFile(row.fileName);
-      await prisma.replay.update({ where: { id: row.id }, data: { deletedAt: new Date() } });
+      // v9 多轨道：同一文件 N 行共享 fileName——软删所有共享该文件的行
+      //（整场作废），防残留孤儿行
+      await prisma.replay.updateMany({
+        where: { fileName: row.fileName, deletedAt: null },
+        data: { deletedAt: new Date() },
+      });
       logger.info(
         `[replay] 作废无人完成的比赛回放 ${row.fileName}（playerId=${playerId} room=${raceRoomId ?? "?"}）`,
       );
