@@ -653,8 +653,20 @@ function beginRace(room: RaceRoom): void {
   const ownerSetting = ownerAuth ? getCachedSettingByUserId(ownerAuth.userId) : undefined;
   if (ownerSetting) {
     if (!ownerSetting.syncGameTime) {
-      hour = ownerSetting.timeHour;
-      minute = ownerSetting.timeMinute;
+      // 房主个人时间：timeFlow=true 时大世界时间从设置值流逝（现实 1 秒 = 游戏
+      // 1 分钟），设置值只是"起点"不是当前值——若用设置值，比赛时间会从起点
+      // 重新开始，比房主赛前看到的时间倒退（如已流逝到 5:30 却重设 5:10）。
+      // 读房主当前 getTime()（进入房间后 isInRace 冻结，即赛前看到的时刻）；
+      // 取不到（极端）回退设置值。
+      const owner = Player.getInstance(room.ownerId);
+      const tm = owner?.getTime();
+      if (tm?.ret) {
+        hour = tm.hour;
+        minute = tm.minute;
+      } else {
+        hour = ownerSetting.timeHour;
+        minute = ownerSetting.timeMinute;
+      }
     }
     if (!ownerSetting.syncWorldWeather) {
       weather = ownerSetting.weather;
