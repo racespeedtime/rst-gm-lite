@@ -16,15 +16,21 @@ import {
 import { startRecording, stopRecording, isRecording } from "./recorder";
 import { isInChallenge, startChallengeWithReplay, toggleChallengeShadowLabel } from "./challenge";
 import { isInRace } from "@/race/room";
-import { formatDuration, formatShortDate } from "@/utils/format";
+import { vehicleName } from "@/vehicles/catalog";
+import { formatDuration, formatFullDateTime } from "@/utils/format";
 import type { MenuBack } from "@/core/panel";
 import { COLOR_ERROR } from "@/utils/colors";
 
-/** 时长/时间格式化收敛至 utils/format（formatDuration/formatShortDate） */
+/** 时长/时间格式化收敛至 utils/format（formatDuration/formatFullDateTime） */
 
 /** 类型标签 */
 function typeLabel(t: string): string {
   return t === "race" ? "比赛" : "自定义";
+}
+
+/** 车型名（ghost 回放车辆快照；无效/未知 ID 退化为 ID 字符串） */
+function replayVehicleName(modelId: number): string {
+  return vehicleName(modelId);
 }
 
 /** 二次确认删除（本人）：MSGBOX 确认 + INPUT 输入文件名二次验证（复用删除赛道模式） */
@@ -95,13 +101,17 @@ export async function openReplayMenu(
     caption: `${caption}（${list.length}）`,
     data: list,
     cacheKey: `replay:mine:${type ?? "all"}`, // 记忆上次翻到的页（翻列表找片，退出再进回到原页）
-    headers: ["类型", "赛道", "名次", "时长", "时间"],
+    headers: ["类型", "车型", "赛道/名次", "时长", "创建时间"],
     format: (v) => [
       typeLabel(v.type),
-      v.raceName || "—",
-      v.type === "race" ? (v.rank != null ? `No.${v.rank}` : "{FF0000}未完成") : "—",
+      // 车型快照两类型都有（录制时车辆模型），未知模型退化为 ID 字符串
+      replayVehicleName(v.vehicleModelId),
+      // 赛道/名次列：比赛显示赛道 + 名次（完成/未完成），自定义显示"自由录制"
+      v.type === "race"
+        ? `${v.raceName || "未知赛道"}${v.rank != null ? ` · No.${v.rank}` : "{FF0000} · 未完成"}`
+        : "{FFFFFF}自由录制",
       formatDuration(v.durationMs),
-      formatShortDate(v.createdAt),
+      formatFullDateTime(v.createdAt),
     ],
     button1: "操作",
     button2: "取消",
@@ -204,13 +214,13 @@ export async function openPublicReplayMenu(player: Player, back?: MenuBack): Pro
     caption: `全部比赛回放（${list.length}）`,
     data: list,
     cacheKey: "replay:public",
-    headers: ["录者", "赛道", "名次", "时长", "时间"],
+    headers: ["录者", "赛道", "名次", "时长", "创建时间"],
     format: (v) => [
       v.recorderName,
-      v.raceName || "—",
+      v.raceName || "未知赛道",
       v.rank != null ? `No.${v.rank}` : "{FF0000}未完成",
       formatDuration(v.durationMs),
-      formatShortDate(v.createdAt),
+      formatFullDateTime(v.createdAt),
     ],
     button1: "操作",
     button2: "取消",
@@ -236,13 +246,16 @@ export async function openOpReplayPanel(player: Player, back?: MenuBack): Promis
   const r = await showPagedDialog(player, {
     caption: `全部回放（${list.length}）`,
     data: list,
-    headers: ["录者", "类型", "赛道", "时长", "时间"],
+    headers: ["录者", "类型", "车型", "赛道/名次", "时长", "创建时间"],
     format: (v) => [
       v.recorderName,
       typeLabel(v.type),
-      v.raceName || "—",
+      replayVehicleName(v.vehicleModelId),
+      v.type === "race"
+        ? `${v.raceName || "未知赛道"}${v.rank != null ? ` · No.${v.rank}` : "{FF0000} · 未完成"}`
+        : "{FFFFFF}自由录制",
       formatDuration(v.durationMs),
-      formatShortDate(v.createdAt),
+      formatFullDateTime(v.createdAt),
     ],
     button1: "删除",
     button2: "取消",

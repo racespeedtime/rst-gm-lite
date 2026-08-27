@@ -18,12 +18,15 @@ export function formatRaceTimeCs(ms: number): string {
   return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(cs).padStart(2, "0")}`;
 }
 
-/** 时长格式化（mm:ss 或 ss，回放列表等短格式用；原各列表页内联实现收敛至此） */
+/** 时长格式化（<1h → mm:ss；≥1h → h:mm:ss，回放/成就/赛道管理列表共用；
+ *  原各列表页内联实现收敛至此） */
 export function formatDuration(ms: number): string {
   // 负值兜底（对齐 formatTime 的 Math.max(0, ...)）：计时器漂移等防御
   const s = Math.floor(Math.max(0, ms) / 1000);
+  const pad2 = (n: number): string => String(n).padStart(2, "0");
   if (s < 60) return `${s}s`;
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  if (s < 3600) return `${Math.floor(s / 60)}:${pad2(s % 60)}`;
+  return `${Math.floor(s / 3600)}:${pad2(Math.floor((s % 3600) / 60))}:${pad2(s % 60)}`;
 }
 
 /** 短日期（MM-DD HH:MM，列表多列展示；固定格式，避免 toLocaleString 输出依赖
@@ -37,4 +40,10 @@ export function formatShortDate(d: Date): string {
 export function formatFullDate(d: Date): string {
   const pad2 = (n: number): string => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** 完整日期含秒（YYYY-MM-DD HH:MM:SS，回放列表等需要精确到秒的创建时间） */
+export function formatFullDateTime(d: Date): string {
+  const pad2 = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
