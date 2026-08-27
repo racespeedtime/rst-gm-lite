@@ -151,6 +151,9 @@ export interface ReplayData {
   frames: Buffer; // Body 切片（从 header 末尾开始）
   /** v7 帧时间戳惰性缓存（sampleAt 二分用；文件只读缓存共享安全，首次构建后复用） */
   frameTs?: number[];
+  /** 跨圈帧索引惰性缓存（cpProgress 圈满回落处；回放 CP 渲染推算累计圈数用。
+   *  文件只读缓存共享安全——幂等构建，多会话并发写同值） */
+  lapFlips?: number[];
 }
 
 const V = (n: number): number => (Number.isFinite(n) ? n : 0);

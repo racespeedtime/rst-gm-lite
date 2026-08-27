@@ -276,7 +276,11 @@ export interface ReplaySession {
   /** 比赛赛道 CP 坐标（race 回放从 raceCp 表加载；观战者 3D 箭头/图标渲染用；
    *  ghost 回放无赛道为 undefined） */
   cps?: { x: number; y: number; z: number; size: number }[];
-  /** 上次渲染的 ghost CP 进度（过 CP 检测：cpProgress 前进 → 观战者音效 + 箭头推进） */
+  /** 赛道圈数（race 回放从 race 表加载，默认 1；回放 CP 累计冲线判定用——文件
+   *  header 只存一圈 totalCp 未存 laps，须查库，与挑战同源） */
+  laps: number;
+  /** 上次渲染的 ghost CP 累计进度（过 CP 检测：累计数前进 → 观战者音效 + 箭头推进；
+   *  冲线后固定 totalCum 防重复清理，seek 回看累计变小自动恢复） */
   cpProgressLast?: number;
 }
 
@@ -507,6 +511,27 @@ export function frameTimeAt(data: ReplayData, index: number): number {
   }
   // 旧文件（v6 及以下）：无帧时间戳 → 均匀间隔回退（历史行为）
   return index * Math.max(1, header.frameIntervalMs);
+}
+
+/**
+ * 跨圈帧索引缓存（懒构建）：录制侧 cpProgress 是"圈内已完成 CP 数"，跨圈瞬间
+ * 帧序列从 len 回落 1（新圈第一 CP 触达写 1）→ 判定 cur < prev 即跨圈。
+ * 直接读帧体 cpProgress（偏移 44，与 frameTimeAt 同款廉价 Buffer 直读，所有版本
+ * v2+ 都有该字段）；结果缓存到 data.lapFlips（fileCache 多会话共享，幂等写安全）。
+ * 回放 CP 渲染据此推算出累计圈数，用于最后一圈终点/冲线判定。 */
+function getLapFlips(data: ReplayData): number[] {
+  if (data.lapFlips) return data.lapFlips;
+  const { header, frames } = data;
+  const fb = header.frameBytes;
+  const flips: number[] = [];
+  let prev = 0;
+  for (let i = 0; i < header.frameCount; i++) {
+    const cur = frames.readInt32LE(i * fb + 44);
+    if (cur < prev) flips.push(i);
+    prev = cur;
+  }
+  data.lapFlips = flips;
+  return flips;
 }
 
 /** 帧定位（sampleAt / syncObserverTds 共用）：返回播放时间对应的帧索引与钳制后的时间。
@@ -943,32 +968,79 @@ function syncObserverTds(session: ReplaySession): void {
   // 进度变化才调 native（60fps 下大多 tick 不变）。
   const cps = session.cps;
   if (cps && cps.length >= 2) {
+    // 累计已过 CP 数：当前帧索引对应跨圈次数 × 一圈CP数 + 圈内已完成数（1-based）。
+    // 跨圈瞬间帧序列 len → 1（getLapFlips），累计数单调递增——与局内 pr.lap×len+
+    // cpIndex 同式，seek/回退自动一致。冲线判定：累计 ≥ laps×len 后隐藏箭头/图标
+    // （对齐局内 finishPlayer 清图标，不再 %len 回绕显示下一圈）
     const prog = Math.max(0, s.cpProgress); // 已完成 CP 数（1-based 触达计数）
-    // 当前要过的 CP 索引：已完成 count 个 → 下一个是 count（0-based），圈满回绕
     const total = cps.length;
-    const nextIdx = prog % total; // 跨圈回绕（cpProgress 续增，%total 落到圈内）
-    if (nextIdx !== session.cpProgressLast) {
+    const { index: idx } = sampleIndexAt(session.data, leadGhost(session).playTime);
+    const flips = getLapFlips(session.data);
+    // 二分：最后一个 ≤ idx 的跨圈帧 → 已完成圈数
+    let lap = 0;
+    for (let a = 0, b = flips.length - 1; a <= b;) {
+      const mid = (a + b) >> 1;
+      if (flips[mid] <= idx) {
+        lap = mid + 1;
+        a = mid + 1;
+      } else {
+        b = mid - 1;
+      }
+    }
+    const cum = lap * total + prog; // 累计已过 CP 数（跨圈续增）
+    const totalCum = session.laps * total; // 全部圈累计 CP 总数（终点）
+    const key = Math.min(cum, totalCum); // 冲线后固定 totalCum（防每帧重复清理）
+    if (key !== session.cpProgressLast) {
       const changed = session.cpProgressLast != null;
-      session.cpProgressLast = nextIdx;
-      const nxt = cps[nextIdx];
-      const nxt2 = cps[(nextIdx + 1) % total];
-      // 过 CP 音效（1056 普通）：进度推进（回放中 ghost 过了个 CP）
+      session.cpProgressLast = key;
+      // 过 CP 音效（1056 普通）：进度推进（回放中 ghost 过了个 CP；冲线瞬间同样播）
       if (changed) {
         for (const pid of session.tds.keys()) {
           const p = Player.getInstance(pid);
           if (p && p.isConnected()) p.playSound(1056);
         }
       }
-      // 更新观战者的箭头 + 图标（含起点首次显示）
+      const finished = cum >= totalCum; // 已过最后一圈最后 CP（冲线/播完停终点）
       for (const pid of session.tds.keys()) {
         const p = Player.getInstance(pid);
         if (!p || !p.isConnected()) continue;
+        if (finished) {
+          // 冲线：清箭头 + 图标（对齐局内 finishPlayer；seek 回看累计变小自动恢复）
+          try {
+            RaceCheckpoint.disable(p);
+          } catch {
+            /* 已失效 */
+          }
+          try {
+            p.removeMapIcon(70);
+          } catch {
+            /* 已失效 */
+          }
+          continue;
+        }
+        const nextIdx = cum % total; // 圈内下一个要过的 CP（0-based）
+        const nxt = cps[nextIdx];
+        // 下下个 CP：仅圈内还有（nextIdx < total-1）才有——最后一个 CP 后是终点，
+        // 无下下个 → type 1 终点样式 + 清图标（超出不显示，对齐局内 cpArrow 不取模）
+        const nxt2 = nextIdx < total - 1 ? cps[nextIdx + 1] : undefined;
         try {
-          RaceCheckpoint.set(p, 0, nxt.x, nxt.y, nxt.z, nxt2.x, nxt2.y, nxt2.z, nxt.size);
+          if (nxt2) {
+            RaceCheckpoint.set(p, 0, nxt.x, nxt.y, nxt.z, nxt2.x, nxt2.y, nxt2.z, nxt.size);
+          } else {
+            RaceCheckpoint.set(p, 1, nxt.x, nxt.y, nxt.z, nxt.x, nxt.y, nxt.z, nxt.size);
+          }
         } catch {
           /* 已失效 */
         }
-        p.setMapIcon(70, nxt2.x, nxt2.y, nxt2.z, 56, 0, 1);
+        if (nxt2) {
+          p.setMapIcon(70, nxt2.x, nxt2.y, nxt2.z, 56, 0, 1);
+        } else {
+          try {
+            p.removeMapIcon(70);
+          } catch {
+            /* 已失效 */
+          }
+        }
       }
     }
   }
@@ -1072,6 +1144,9 @@ export async function spawnReplay(
   // 比赛回放：加载赛道 CP 坐标（观战者 3D 箭头/图标渲染用；ghost 回放无赛道跳过）。
   // 回放文件 header 只存了 totalCp 数量、未存坐标，须查 raceCp 表（与挑战同源）
   let raceCps: { x: number; y: number; z: number; size: number }[] | undefined;
+  // 赛道圈数（回放 CP 冲线判定用——header 只有一圈 totalCp，laps 一并查库；
+  // 对齐挑战 startChallengeCore 的 Math.max(1, laps ?? 1) 降级）
+  let raceLaps = 1;
   if (replay.type === "race" && replay.raceId) {
     try {
       const rows = await prisma.raceCp.findMany({
@@ -1086,6 +1161,11 @@ export async function spawnReplay(
           size: Number(c.size),
         }));
       }
+      const raceRow = await prisma.race.findFirst({
+        where: { id: replay.raceId },
+        select: { laps: true },
+      });
+      raceLaps = Math.max(1, raceRow?.laps ?? 1);
     } catch (e) {
       // 加载失败：退化为只有 C P 文本 TD，不影响回放本身
       logger.warn(`[replay] 赛道 CP 加载失败（回放无 3D 箭头）${replay.raceId}`, e);
@@ -1321,6 +1401,7 @@ export async function spawnReplay(
     lastRankText: "", // 首帧 syncObserverTds 即写入实时名次（v8 文件）
     lastHour: -1,
     cps: raceCps, // 赛道 CP 坐标（ghost 回放 undefined）
+    laps: raceLaps, // 赛道圈数（ghost 回放 1，无圈数概念）
     lastMinute: -1,
     lastWeather: -128,
   };
