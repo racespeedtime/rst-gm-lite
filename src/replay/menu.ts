@@ -66,7 +66,11 @@ async function confirmDeleteReplay(
     sysMsg(player, "replay", "删除已取消（文件名不匹配）", "error");
     return back?.();
   }
-  await prisma.replay.update({ where: { id: replayId }, data: { deletedAt: new Date() } });
+  // v9 多轨道：同一文件 N 行共享 fileName——按 fileName 整场软删（防孤儿行残留）
+  await prisma.replay.updateMany({
+    where: { fileName, deletedAt: null },
+    data: { deletedAt: new Date() },
+  });
   deleteRecordingFile(fileName);
   sysMsg(player, "replay", "回放已删除", "success");
   return back?.();
@@ -97,9 +101,29 @@ export async function openReplayMenu(
     );
     return back?.();
   }
+  // v9 多轨道：一场一个文件（该玩家参与的那场有 N 行共享 fileName，每行一个
+  // 轨道=一个玩家）——race/all 列表按 fileName 聚合成"我参与的一场"展示
+  //（ghost 单文件不聚合；all 混合列表只聚 race 行）
+  let displayList = list;
+  if (type !== "ghost") {
+    const groups = new Map<string, typeof list>();
+    for (const row of list) {
+      if (row.type !== "race") {
+        // ghost 行：直接展示（不聚合）
+        const g = groups.get(`ghost:${row.id}`);
+        if (g) g.push(row);
+        else groups.set(`ghost:${row.id}`, [row]);
+        continue;
+      }
+      const g = groups.get(row.fileName);
+      if (g) g.push(row);
+      else groups.set(row.fileName, [row]);
+    }
+    displayList = [...groups.values()].map((g) => g[0]);
+  }
   const r = await showPagedDialog(player, {
-    caption: `${caption}（${list.length}）`,
-    data: list,
+    caption: `${caption}（${displayList.length}）`,
+    data: displayList,
     cacheKey: `replay:mine:${type ?? "all"}`, // 记忆上次翻到的页（翻列表找片，退出再进回到原页）
     // 列按列表语境区分：单一类型列表(race/ghost)本身类型已知,不需要"类型"列;
     // 混合列表(我的全部回放)需"类型"列区分 race/ghost。录者列只用于含他人
@@ -173,11 +197,18 @@ export async function openReplayActions(
   opts: { back?: MenuBack; deleteBack?: MenuBack; allowDelete: boolean },
 ): Promise<void> {
   const actions: { label: string; run: () => Promise<void> | void }[] = [
-    { label: "观看（1 台车）", run: () => void spawnReplay(player, replay.id, { npcCount: 1 }) },
-    {
-      label: "分身挑战（2-5 台错峰同跑）",
-      run: () => runGhostReplay(player, replay.id, opts.back),
-    },
+    // v9 多轨道：观看 = 整场同屏重现（spawnReplay 检测文件多轨道自动整场）；
+    // 单轨（ghost/旧 race）保持 1 台车
+    { label: "观看", run: () => void spawnReplay(player, replay.id, { npcCount: 1 }) },
+    // 分身挑战只对 ghost（单轨自由录制）有意义——比赛回放整场已多车，不提供
+    ...(replay.type === "ghost"
+      ? [
+          {
+            label: "分身挑战（2-5 台错峰同跑）",
+            run: () => runGhostReplay(player, replay.id, opts.back),
+          },
+        ]
+      : []),
   ];
   // 影子挑战仅对已完成的比赛回放开放（未完成回放影子只跑已录部分，不完整）
   if (replay.type === "race" && replay.finished === true) {
@@ -219,23 +250,30 @@ export async function openPublicReplayMenu(player: Player, back?: MenuBack): Pro
     sysMsg(player, "replay", "暂无比赛回放（跑一场比赛后自动生成）", "error");
     return back?.();
   }
+  // v9 多轨道：一场一个文件（N 行共享 fileName）——按 fileName 聚合成一场展示，
+  // 显示参与人数（该场轨道数）；选择任一行 → 观看整场同屏重现
+  const groups = new Map<string, typeof list>();
+  for (const row of list) {
+    const g = groups.get(row.fileName);
+    if (g) g.push(row);
+    else groups.set(row.fileName, [row]);
+  }
+  const grouped = [...groups.values()];
   const r = await showPagedDialog(player, {
-    caption: `全部比赛回放（${list.length}）`,
-    data: list,
+    caption: `全部比赛回放（${grouped.length} 场）`,
+    data: grouped,
     cacheKey: "replay:public",
-    headers: ["录者", "赛道", "名次", "录制时间", "时长"],
+    headers: ["赛道", "人数", "录制时间"],
     format: (v) => [
-      v.recorderName,
-      v.raceName || "未知赛道",
-      v.rank != null ? `No.${v.rank}` : "{FF0000}未完成",
-      formatFullDateTime(v.createdAt),
-      formatDuration(v.durationMs),
+      v[0].raceName || "未知赛道",
+      v.length > 1 ? `${v.length} 人` : "1 人",
+      formatFullDateTime(v[0].createdAt),
     ],
     button1: "操作",
     button2: "取消",
   });
   if (!r) return back?.();
-  await openReplayActions(player, r.item, { back, allowDelete: false });
+  await openReplayActions(player, r.item[0], { back, allowDelete: false });
 }
 
 /** OP：全部回放管理（列出含录者，可删除任意回放） */

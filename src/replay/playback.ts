@@ -36,6 +36,7 @@ import {
   decodeFrame,
   lerpFrame,
   quatToZAngle,
+  trackView,
   FRAME_BYTES_V7,
   FRAME_BYTES_V8,
   type ReplayData,
@@ -215,6 +216,10 @@ interface Ghost {
   labelNo: number;
   /** 当前标签显示的在线状态（掉线时标签追加红字"掉线"；变化时 updateText） */
   online: boolean;
+  /** 该 ghost 的数据源（v9 多轨道：每个轨道一个视图；单轨 = session.data） */
+  data: ReplayData;
+  /** 录制者名（标签显示"回放 · 玩家名"；多轨道各轨道不同） */
+  recorderName: string;
 }
 
 /** ghost 车顶标签文本：身份 + 扮演谁 + 分身编号；掉线时追加红字标记 */
@@ -749,7 +754,7 @@ export function emulateDriverSync(
 function renderGhost(session: ReplaySession, ghost: Ghost): void {
   // 已停发（播完）：不再 emulate，车辆静止停在终点
   if (ghost.stopped) return;
-  const s = sampleAt(session.data, ghost.playTime);
+  const s = sampleAt(ghost.data, ghost.playTime);
   if (!s) return;
   // velocity 随倍速缩放：位置按倍速跳变（playTime 走得快），速度字段同步乘
   // 倍速——客户端物理插值/位置推进与速度一致（不缩放会出现"位置快、速度字段
@@ -760,7 +765,7 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     s.vy *= session.speed;
     s.vz *= session.speed;
   }
-  const maxTime = frameTimeAt(session.data, session.data.header.frameCount - 1);
+  const maxTime = frameTimeAt(ghost.data, ghost.data.header.frameCount - 1);
   // 播完判定：playTime 已 clamp 到终点 → 发完这一帧即停止驱动。否则会持续
   // 重发"位置恒定、速度非零"的尾帧——客户端物理每帧按速度跑动又被服务器拉回，
   // 车辆原地抖动/朝向乱转（终点地面起伏或碰撞干扰时更明显）。
@@ -776,7 +781,7 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
         "#ffffff",
         ghostLabelText(
           ghost.npc.getName(),
-          session.recorderName,
+          ghost.recorderName,
           ghost.labelNo,
           session.ghosts.length,
           s.online,
@@ -786,7 +791,7 @@ function renderGhost(session: ReplaySession, ghost: Ghost): void {
     } catch {
       /* 标签已失效等，忽略 */
     }
-    const msg = s.online ? `${session.recorderName} 已重新上线` : `${session.recorderName} 掉线了`;
+    const msg = s.online ? `${ghost.recorderName} 已重新上线` : `${ghost.recorderName} 掉线了`;
     const targets = new Set([session.ownerId, ...session.watchers]);
     for (const pid of targets) {
       const w = Player.getInstance(pid);
@@ -864,7 +869,7 @@ function tickSession(session: ReplaySession): void {
       const now = Date.now();
       if (now - g.lastEmulateAt < EMULATE_INTERVAL_MS) continue;
       g.lastEmulateAt = now;
-      const s = sampleAt(session.data, g.playTime);
+      const s = sampleAt(g.data, g.playTime);
       if (!s) continue;
       try {
         emulateDriverSync(g.npcPlayerId, g.vehicle, s, true);
@@ -884,7 +889,7 @@ function tickSession(session: ReplaySession): void {
       const now = Date.now();
       if (now - g.lastEmulateAt < EMULATE_INTERVAL_MS) continue;
       g.lastEmulateAt = now;
-      const s = sampleAt(session.data, g.playTime);
+      const s = sampleAt(g.data, g.playTime);
       if (!s) continue;
       try {
         emulateDriverSync(g.npcPlayerId, g.vehicle, s, true); // atEnd=true → 速度/按键清零
@@ -895,16 +900,18 @@ function tickSession(session: ReplaySession): void {
     return;
   }
   const dt = elapsed * session.speed;
-  const lastIdx = session.data.header.frameCount - 1;
-  // 播放边界：v7 按真实时间戳（末帧时间）；旧文件回退均匀间隔
-  const maxTime = frameTimeAt(session.data, lastIdx);
+  // 播放边界：各轨道终点不同（多轨道时长可能不一）——每 ghost clamp 到自己的终点
   for (const g of session.ghosts) {
-    // 播放时间推进并 clamp 到 [0, maxTime]（播到结尾停在边界，不循环；seek 可回看）
-    g.playTime = Math.min(maxTime, Math.max(0, g.playTime + dt));
+    const gMax = frameTimeAt(g.data, g.data.header.frameCount - 1);
+    // 播放时间推进并 clamp 到该轨道终点（播到结尾停在边界，不循环；seek 可回看）
+    g.playTime = Math.min(gMax, Math.max(0, g.playTime + dt));
   }
   // 播完提示（一次）：播放到达结尾 → 比赛回放提示"比赛结束"（对齐冲线仪式感），
   // 否则提示可 seek 回看
-  if (!session.endedNotified && session.ghosts.every((g) => g.playTime >= maxTime)) {
+  if (
+    !session.endedNotified &&
+    session.ghosts.every((g) => g.playTime >= frameTimeAt(g.data, g.data.header.frameCount - 1))
+  ) {
     session.endedNotified = true;
     const targets = new Set([session.ownerId, ...session.watchers]);
     for (const pid of targets) {
@@ -932,15 +939,15 @@ function tickSession(session: ReplaySession): void {
  * 内容无变化时跳过（省 60Hz 无用调用）。 */
 function syncObserverTds(session: ReplaySession): void {
   if (session.tds.size === 0 || session.ghosts.length === 0) return;
-  const s = sampleAt(session.data, leadGhost(session).playTime);
+  const lead = leadGhost(session);
+  // 头车 data：多轨道是领先轨道的视图（帧状态 CP/名次/时间都对应当前领先者）；
+  // 单轨是 session.data
+  const s = sampleAt(lead.data, lead.playTime);
   if (!s) return;
   // TD 时间 = 当前播放时间（v7 帧时间戳模式按真实时间轴，与 sampleAt 一致；
   // 旧文件回退均匀间隔 idx×interval）
-  const timeMs = Math.min(
-    frameTimeAt(session.data, session.data.header.frameCount - 1),
-    leadGhost(session).playTime,
-  );
-  const cpText = `C  P / ~p~${s.cpProgress}~w~/~y~${session.data.header.totalCp || 1}`;
+  const timeMs = Math.min(frameTimeAt(lead.data, lead.data.header.frameCount - 1), lead.playTime);
+  const cpText = `C  P / ~p~${s.cpProgress}~w~/~y~${lead.data.header.totalCp || 1}`;
   const timeText = `TIME / ${formatRaceTimeCs(timeMs)}`;
   if (cpText !== session.lastCpText || timeText !== session.lastTimeText) {
     session.lastCpText = cpText;
@@ -953,7 +960,7 @@ function syncObserverTds(session: ReplaySession): void {
   // 动态 RANK：v8 文件帧内带实时名次（tickRooms 200ms 排名），按播放进度
   // 刷新——掉线重连录像的名次变化（被超越/恢复）随播放还原；旧 v7 及以下
   // 文件无帧内名次 → 保持 ensureObserverTds 写死的 DB 快照，不刷
-  if (session.data.header.frameBytes >= FRAME_BYTES_V8) {
+  if (lead.data.header.frameBytes >= FRAME_BYTES_V8) {
     const rankText = s.rank > 0 ? `RANK / No.${s.rank}` : "RANK / --";
     if (rankText !== session.lastRankText) {
       session.lastRankText = rankText;
@@ -974,8 +981,8 @@ function syncObserverTds(session: ReplaySession): void {
     // （对齐局内 finishPlayer 清图标，不再 %len 回绕显示下一圈）
     const prog = Math.max(0, s.cpProgress); // 已完成 CP 数（1-based 触达计数）
     const total = cps.length;
-    const { index: idx } = sampleIndexAt(session.data, leadGhost(session).playTime);
-    const flips = getLapFlips(session.data);
+    const { index: idx } = sampleIndexAt(lead.data, lead.playTime);
+    const flips = getLapFlips(lead.data);
     // 二分：最后一个 ≤ idx 的跨圈帧 → 已完成圈数
     let lap = 0;
     for (let a = 0, b = flips.length - 1; a <= b;) {
@@ -1066,11 +1073,22 @@ function syncObserverTds(session: ReplaySession): void {
 
 /** 视觉头车：playTime 最大的 ghost（同文件同速播放，playTime 越大位置越靠前）。
  * 初始观战/副驾目标用头车——视觉跑最前 = 比赛回放的"主角"；且候选注册按视觉
- * 顺序（头车在前），从头车出发 →/← 切换方向与 ghost 编号（1/N→N/N）一致。 */
+ * 顺序（头车在前），从头车出发 →/← 切换方向与 ghost 编号（1/N→N/N）一致。
+ * v9 多轨道（整场同屏）：各轨道同轴从 0 起、playTime 相同——头车改为"当前帧
+ * 名次最高"（帧内 rank 字段；rank 相同回退 playTime 最大），观战默认跟领先者。 */
 function leadGhost(session: ReplaySession): Ghost {
   let lead = session.ghosts[0];
   for (const g of session.ghosts) {
-    if (g.playTime > lead.playTime) lead = g;
+    if (g.data.tracks) {
+      // 多轨道：比较当前帧 rank（越高越领先；0=未排名，playTime 兜底）
+      const s1 = sampleAt(lead.data, lead.playTime);
+      const s2 = sampleAt(g.data, g.playTime);
+      const r1 = s1?.rank ?? 0;
+      const r2 = s2?.rank ?? 0;
+      if (r2 !== r1 ? r2 > r1 : g.playTime > lead.playTime) lead = g;
+    } else if (g.playTime > lead.playTime) {
+      lead = g;
+    }
   }
   return lead;
 }
@@ -1173,10 +1191,19 @@ export async function spawnReplay(
   }
 
   const count = Math.min(5, Math.max(1, opts?.npcCount ?? 1));
+  // v9 多轨道（整场重现）：所需 NPC = 轨道数（每轨道一辆车）；单轨 = count 分身
+  const trackCount = data.tracks?.length ?? 1;
+  const multiTrack = trackCount > 1;
+  const neededNpc = multiTrack ? trackCount : count;
   // NPC 池子边界：创建前检查剩余槽位（回放/挑战共用 100 槽，各世界多人同时
   // 开回放/挑战可能占满）。不足则明确提示剩余数，避免创建到一半才失败
-  if (npcSlotsLeft() < count) {
-    sysMsg(player, "replay", `NPC 槽位不足（剩余 ${npcSlotsLeft()}），请稍后再试`, "error");
+  if (npcSlotsLeft() < neededNpc) {
+    sysMsg(
+      player,
+      "replay",
+      `NPC 槽位不足（剩余 ${npcSlotsLeft()}，需要 ${neededNpc}），请稍后再试`,
+      "error",
+    );
     return false;
   }
   // 按类型分流：ghost（自由录制）→ 当前世界播放（其他玩家看得见、可一起玩，
@@ -1192,9 +1219,17 @@ export async function spawnReplay(
   // 分身错峰间隔：自定义（opts.staggerMs，毫秒）或自动等分总时长（count 辆均匀铺开）。
   // 用 || 而非 ??：显式传 0 视为"未指定"（0 间隔 = 无错峰，非用户本意）
   const baseGap = opts?.staggerMs || (count > 1 ? duration / count : 0);
+  // 多轨道（比赛整场重现）：每轨道一个 ghost（各自数据视图 + 录制者名），
+  // 同轴播放（playTime 从 0 起，无错峰——整场重现要同屏同速）。单轨文件走
+  // 原逻辑（count 分身错峰）。trackCount/multiTrack 已在槽位检查处算出
+  const tracks = data.tracks ?? undefined;
 
   try {
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < (multiTrack ? trackCount : count); i++) {
+      // 多轨道：每轨一个 ghost；单轨：count 个错峰分身
+      const track = multiTrack ? tracks![i] : undefined;
+      const ghostData = track ? trackView(data, track.trackId) : data;
+      const ghostName = track?.recorderName ?? replay.recorderName;
       // 创建中失败自动降级：某分身 NPC 分配失败（槽位被并发抢占）→
       // 若已成功 ≥1 个则用已成功的继续，否则整体失败（防一半资源半拉子）
       // 名字带随机后缀：同毫秒多人创建防重名冲突
@@ -1207,7 +1242,7 @@ export async function spawnReplay(
           return false;
         }
         logger.warn(
-          `[replay] ${player.getName().name} 分身 ${i + 1}/${count} NPC 分配失败，降级为 ${ghosts.length} 台`,
+          `[replay] ${player.getName().name} 分身 ${i + 1}/${multiTrack ? trackCount : count} NPC 分配失败，降级为 ${ghosts.length} 台`,
         );
         break;
       }
@@ -1222,10 +1257,10 @@ export async function spawnReplay(
       try {
         const npcPlayer = npc.getPlayer();
         vehicle = new Vehicle({
-          modelId: data.header.vehicleModelId,
-          x: data.header.startX,
-          y: data.header.startY,
-          z: data.header.startZ,
+          modelId: ghostData.header.vehicleModelId,
+          x: ghostData.header.startX,
+          y: ghostData.header.startY,
+          z: ghostData.header.startZ,
           zAngle: 0,
           color: [-1, -1],
           respawnDelay: 0,
@@ -1243,9 +1278,15 @@ export async function spawnReplay(
         // 编号反序：所有 ghost 同速播同一文件，playTime 越大 = 位置越靠后 = 视觉跑最前
         //（头车）；创建顺序 i=0 是 playTime 最小（视觉尾车）。故编号取 total-已建数：
         // 头车（playTime 最大）= ghost 1/N，尾车 = ghost N/N，与视觉顺序一致
-        const labelNo = count - ghosts.length;
+        const labelNo = multiTrack ? i + 1 : count - ghosts.length;
         label = new Dynamic3DTextLabel({
-          text: ghostLabelText(npc.getName(), replay.recorderName, labelNo, count, true),
+          text: ghostLabelText(
+            npc.getName(),
+            ghostName,
+            labelNo,
+            multiTrack ? trackCount : count,
+            true,
+          ),
           color: "#ffffff",
           x: 0,
           y: 0,
@@ -1267,14 +1308,18 @@ export async function spawnReplay(
         // 注意：改装件含 1087 时会被黑名单过滤（观战中二次 addComponent 会导致
         // spectate 镜头抽，见 vehicles/index.ts VEHICLE_COMPONENT_BLACKLIST）
         await applyReplayPlayerAttire(npcPlayer, player.id);
-        attireObjs = await applyReplayVehicleAttire(vehicle, data.header.vehicleModelId, player.id);
+        attireObjs = await applyReplayVehicleAttire(
+          vehicle,
+          ghostData.header.vehicleModelId,
+          player.id,
+        );
         ghosts.push({
           npc,
           vehicle,
           label,
-          playTime: i * baseGap, // 错峰起始（相对文件起点）
-          staggerMs: i * baseGap, // 该分身的错峰偏移（seek 保持错峰用）
-          model: data.header.vehicleModelId,
+          playTime: multiTrack ? 0 : i * baseGap, // 多轨道同轴从 0 起；单轨错峰起始
+          staggerMs: multiTrack ? 0 : i * baseGap, // 该分身的错峰偏移（seek 保持错峰用）
+          model: ghostData.header.vehicleModelId,
           npcPlayerId: npcPlayer.id,
           lastEmulateAt: 0,
           warnedEmulateFail: false,
@@ -1283,6 +1328,8 @@ export async function spawnReplay(
           attireObjs,
           labelNo,
           online: true,
+          data: ghostData,
+          recorderName: ghostName,
         });
       } catch (e) {
         // 本次迭代部分实体已建：销毁 npc/车辆/标签/挂件（新增的套装扮 await 可能
@@ -1479,7 +1526,7 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
       // 立即发一帧静止帧（即时反馈，不等下一个 tick）；暂停期间 tickSession
       // 会持续发静止帧锚定位置（防斜坡/物理干扰滑走），恢复播放后正常推进
       for (const g of session.ghosts) {
-        const s = sampleAt(session.data, g.playTime);
+        const s = sampleAt(g.data, g.playTime);
         if (!s) continue;
         try {
           ensureGhostVehicle(session, g, s.vehicleModel); // 暂停点模型对齐（cveh 换车帧）
@@ -1533,15 +1580,18 @@ export function controlReplay(player: Player, action: string, arg?: string): voi
         sysMsg(player, "replay", "时间格式无效（秒或 mm:ss）", "error");
         return;
       }
-      // seek 上限 = 播放终点（v7 末帧时间戳 / 旧文件均匀间隔——与
-      // renderGhost/tickSession 的 maxTime 一致；旧 frameCount×interval 多一格，
-      // seek 到尾端会直接触发 atEnd 停发 + "已播完"提示重置失效）
-      const max = frameTimeAt(session.data, session.data.header.frameCount - 1);
+      // seek 上限 = 最长轨道终点（v7 末帧时间戳 / 旧文件均匀间隔——与
+      // renderGhost/tickSession 一致；多轨道各轨终点不同，取最长保证看完整场）
+      const max = Math.max(
+        ...session.ghosts.map((g) => frameTimeAt(g.data, g.data.header.frameCount - 1)),
+        frameTimeAt(session.data, session.data.header.frameCount - 1),
+      );
       const target = Math.min(max, Math.max(0, ms));
       for (const g of session.ghosts) {
-        // 保持分身的错峰偏移：各分身落在 target + 自身偏移（clamp 到文件末尾），
+        // 保持分身的错峰偏移：各分身落在 target + 自身偏移（clamp 到该轨道末尾），
         // 否则 seek 后全部分身重合在同一时刻，错峰演示被破坏
-        g.playTime = Math.min(max, target + g.staggerMs);
+        const gMax = frameTimeAt(g.data, g.data.header.frameCount - 1);
+        g.playTime = Math.min(gMax, target + g.staggerMs);
         // seek 后强制立即发包：重置节流时间戳，否则距上次发包 <33ms 时
         // renderGhost 会被节流跳过，ghost 位置延迟最多 1 tick
         g.lastEmulateAt = 0;

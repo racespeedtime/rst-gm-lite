@@ -25,7 +25,7 @@ import {
 } from "@/core/timers";
 import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
-import { quatToZAngle, type ReplayData } from "./format";
+import { quatToZAngle, trackView, type ReplayData } from "./format";
 import {
   sampleAt,
   emulateDriverSync,
@@ -835,6 +835,8 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
   let data: ReplayData;
   try {
     data = loadReplayData(replay.fileName); // 只读缓存（与回放共享文件数据）
+    // v9 多轨道：取该玩家的轨道视图当影子（单轨文件原样）
+    data = trackView(data, (replay as { trackIndex?: number | null }).trackIndex ?? undefined);
   } catch (e) {
     logger.error(`[replay] 挑战回放读取失败 ${replay.fileName}`, e);
     sysMsg(player, "challenge", "回放文件损坏或不存在", "error");
@@ -897,6 +899,8 @@ export async function startChallengeWithReplay(player: Player, replayId: string)
   let data: ReplayData;
   try {
     data = loadReplayData(replay.fileName); // 只读缓存（与回放共享文件数据）
+    // v9 多轨道：取该玩家的轨道视图当影子（单轨文件原样）
+    data = trackView(data, (replay as { trackIndex?: number | null }).trackIndex ?? undefined);
   } catch (e) {
     logger.error(`[replay] 挑战回放读取失败 ${replay.fileName}`, e);
     sysMsg(player, "challenge", "回放文件损坏或不存在", "error");
