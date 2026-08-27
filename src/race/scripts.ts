@@ -170,6 +170,44 @@ export function getSuperStartKmh(cps: { scripts: string[] }[]): number {
   return SUPERSTART_DEFAULT_KMH;
 }
 
+/**
+ * 从第一 CP 脚本提取赛道固定时间/天气（开赛统一应用，无需等触碰 CP1）：
+ * 赛道作者在第一 CP 写 time/weather 即声明"本赛道环境"——一开赛就该是这个
+ * 时间/天气，而不是等玩家跑过去触碰。与 getSuperStartKmh 同模式：只认第一 CP
+ * 的配置；time/weather 的合法性校验与 execCpScript 完全一致（非法值不应用，
+ * 触碰 CP1 时仍由 execCpScript 报错提示）。未定义字段返回 undefined 由房主
+ * 设置/现实时间兜底。
+ */
+export function getFirstCpEnv(cps: { scripts: string[] }[]): {
+  time?: { hour: number; minute: number };
+  weather?: number;
+} {
+  const env: { time?: { hour: number; minute: number }; weather?: number } = {};
+  for (const script of cps[0]?.scripts ?? []) {
+    const [fn, ...raw] = script.trim().split(/\s+/);
+    if (fn === "time" && env.time === undefined) {
+      const hour = Number(raw[0]);
+      const minute = Number(raw[1]);
+      // 对齐 execCpScript time 校验：时 0-23、分 0-59 的整数
+      if (
+        Number.isInteger(hour) &&
+        hour >= 0 &&
+        hour <= 23 &&
+        Number.isInteger(minute) &&
+        minute >= 0 &&
+        minute <= 59
+      ) {
+        env.time = { hour, minute };
+      }
+    } else if (fn === "weather" && env.weather === undefined) {
+      const w = Number(raw[0]);
+      // 对齐 execCpScript weather 校验：0-255
+      if (Number.isInteger(w) && w >= 0 && w <= 255) env.weather = w;
+    }
+  }
+  return env;
+}
+
 /** 执行一条 CP 脚本。返回 false 表示终止整条脚本链（对齐原版 Race_Cp_Script_Start：
  * 碰到 spawnpos 直接 return 1，其后的脚本全部不再执行）。其余情况返回 true 继续。
  * opts.skipCveh：跳过 cveh 换车（第一 CP 的 cveh = 进赛道默认车型，到达时不再换车）。 */
