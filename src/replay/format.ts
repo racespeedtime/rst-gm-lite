@@ -483,13 +483,15 @@ export function parseReplayFile(filePath: string): ReplayData {
         finished,
       });
     }
-    // 校验每轨道帧段在 Body 范围内（段内帧布局沿用 header.frameBytes）
+    // 校验每轨道帧段在 Body 范围内（段内帧布局沿用 header.frameBytes）。
+    // frames 从轨道表之后（Body 起点）切——frameOffset 相对 Body 起点
+    const tableBytes = 4 + trackCount * TRACK_META_BYTES;
+    const frames = buf.subarray(headerBytes + tableBytes);
     for (const t of tracks) {
-      if (headerBytes + t.frameOffset + t.frameCount * header.frameBytes > buf.length) {
+      if (t.frameOffset + t.frameCount * header.frameBytes > frames.length) {
         throw new Error("回放文件数据不完整");
       }
     }
-    const frames = buf.subarray(headerBytes);
     return { header, headerBytes, frames, tracks };
   }
   // v8 及以下单轨：Body 就是单段帧流

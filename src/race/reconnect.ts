@@ -23,6 +23,7 @@ import {
   stopRecording,
   dropRecording,
   rebindRecording,
+  saveRaceReplay,
 } from "@/replay/recorder";
 import { cleanupScriptVehicle } from "./scripts";
 import { cleanupObserve } from "@/core/observe";
@@ -123,6 +124,12 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
         );
         cleanupObserve(playerId);
         return;
+      }
+      // 已完成玩家掉线（不开重连窗口）：挂起录制会话保留——endRoom 合并落盘
+      //（多轨道）时仍含其轨道，不落单轨。否则 cleanupReplay → forceStopRecording
+      // 会把它落成单轨文件、且合并文件缺该完成者轨道
+      if (pr.finished) {
+        suspendRecording(playerId);
       }
       // 不支持重连或非比赛状态 → 原断线逻辑
       room.members.delete(playerId);
@@ -244,26 +251,50 @@ export function checkRoomState(room: RaceRoom): void {
     }
     destroyRaceTds(room);
     cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
-    // 有人完成（room.results 非空）→ 比赛有成绩，录像保留：挂起会话落盘、
-    // 已落盘段不作废。仅"无人完成"才作废删除（挂起丢弃 + 已落盘段删除）。
+    // 有人完成（room.results 非空）→ 比赛有成绩，录像保留：收集所有成员会话
+    // 整场合并落盘（多轨道一个文件），已落盘段不作废。仅"无人完成"才作废
+    // 删除（挂起丢弃 + 已落盘段删除）。
     const someoneFinished = room.results.length > 0;
-    for (const pid of room.raceMembersLast.keys()) {
-      // 当前 pid 上的会话归属：只处理本房间的挂起/活跃会话（玩家退赛后又加入
-      // 别的房间时，其新会话 raceRoomId 是别的房间——防误停/误丢另一房间的录制）
-      const rec = getRecording(pid);
-      const mine = !rec || !rec.raceRoomId || rec.raceRoomId === room.id;
-      if (isRecording(pid) && mine) {
-        if (someoneFinished) {
-          void stopRecording(pid, { quiet: true }); // 挂起会话落盘保留（含静止段）
-        } else {
-          dropRecording(pid); // 挂起会话：丢弃（静止段无成绩价值）
+    if (someoneFinished) {
+      // 合并落盘：收集在线 + 挂起掉线成员的会话，saveRaceReplay 生成多轨道文件
+      const recs: { pid: number; rec: ReturnType<typeof getRecording> }[] = [];
+      const seen = new Set<number>();
+      for (const m of room.members.values()) {
+        if (seen.has(m.id)) continue;
+        seen.add(m.id);
+        recs.push({ pid: m.id, rec: isRecording(m.id) ? getRecording(m.id) : undefined });
+      }
+      for (const pid of room.raceMembersLast.keys()) {
+        if (seen.has(pid)) continue;
+        seen.add(pid);
+        const rec = isRecording(pid) ? getRecording(pid) : undefined;
+        if (rec && (!rec.raceRoomId || rec.raceRoomId === room.id)) {
+          recs.push({ pid, rec });
         }
       }
-      // 已落盘未完成段作废：不依赖 isRecording 状态——pid 可能已被新连接复用
-      // 开了别的房间录制（isRecording=true 且归属不符），旧用户本场的落盘段
-      // 仍须作废。discardRaceReplay 按 userId+raceId+raceRoomId 精确匹配本场
-      //（rank=null），只会命中旧段，碰不到新用户（不同 userId）的活跃会话
-      if (!someoneFinished) {
+      const valid = recs
+        .filter((x) => x.rec)
+        .map((x) => x.rec!)
+        .filter((r) => r.frames.length >= 2);
+      if (valid.length > 0) {
+        // 先同步清 Map（saveRaceReplay 已持对象引用），防 room 销毁后残留
+        for (const x of recs) {
+          if (x.rec) dropRecording(x.pid);
+        }
+        void saveRaceReplay(room.raceId, room.raceName, room.id, valid);
+      }
+    } else {
+      for (const pid of room.raceMembersLast.keys()) {
+        // 当前 pid 上的会话归属：只处理本房间的挂起/活跃会话
+        const rec = getRecording(pid);
+        const mine = !rec || !rec.raceRoomId || rec.raceRoomId === room.id;
+        if (isRecording(pid) && mine) {
+          dropRecording(pid); // 挂起会话：丢弃（静止段无成绩价值）
+        }
+        // 已落盘未完成段作废：不依赖 isRecording 状态——pid 可能已被新连接复用
+        // 开了别的房间录制（isRecording=true 且归属不符），旧用户本场的落盘段
+        // 仍须作废。discardRaceReplay 按 userId+raceId+raceRoomId 精确匹配本场
+        //（rank=null），只会命中旧段，碰不到新用户（不同 userId）的活跃会话
         discardRaceReplay(pid, room.raceId, room.raceMembersLast.get(pid), room.id);
       }
     }

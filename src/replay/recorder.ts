@@ -287,7 +287,7 @@ export async function saveRaceReplay(
           trackIndex: meta.trackId,
         },
       });
-      removePendingEntry(fileName);
+      removePendingEntry(fileName, meta.trackId); // 多轨道：按轨道号移除该行条目
       createdList.push({ id: created.id, fileName });
     } catch (e) {
       logger.error(`[replay] 多轨道回放 DB 记录失败（轨道 ${meta.trackId}）`, e);
@@ -567,6 +567,10 @@ export async function stopRecording(
   const session = sessions.get(playerId);
   if (!session) return null;
   sessions.delete(playerId);
+  // 单轨落盘（完成者掉线/断线超时/服务器退出等旁路）也读会话的完成标记——
+  // finishPlayer 已 markRaceFinished 的玩家即使走这些路径，名次也不丢
+  const rank = opts?.rank !== undefined ? opts.rank : (session.finishRank ?? null);
+  const finished = opts?.finished !== undefined ? opts.finished : (session.finishFlag ?? null);
 
   const player = Player.getInstance(playerId);
   // 停止瞬间无条件补一帧当前车辆状态：保证尾帧 = 录制结束位置。
@@ -670,8 +674,8 @@ export async function stopRecording(
     durationMs,
     frameCount: session.frames.length,
     fileSize: buf.length,
-    rank: opts?.rank ?? null,
-    finished: opts?.finished ?? null,
+    rank: rank,
+    finished: finished,
     raceRoomId: session.raceRoomId ?? null,
   });
   try {
@@ -687,8 +691,8 @@ export async function stopRecording(
         durationMs,
         frameCount: session.frames.length,
         fileSize: buf.length,
-        rank: opts?.rank ?? null,
-        finished: opts?.finished ?? null,
+        rank: rank,
+        finished: finished,
         raceRoomId: session.raceRoomId ?? null, // 比赛房间 id（作废精确匹配本场；ghost 为 null）
       },
     });

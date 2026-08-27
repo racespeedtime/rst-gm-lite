@@ -218,11 +218,22 @@ export function discardRaceReplay(
         },
         orderBy: { createdAt: "desc" },
       });
-      // 只作废"未完成"段（rank==null）；有 rank 说明该段有人冲线，保留
+      // 只作废"未完成"段（rank==null）；有 rank 说明该段有人冲线，保留。
+      // v9 多轨道文件是混合 rank（完成者行有 rank、未完成者 rank=null）——仅当
+      // 该文件**所有**行都 rank=null（整场无人完成）才整场作废；否则只作废当前
+      // 玩家自己的未完成行，不碰文件里完成者的轨道
       if (!row || row.rank != null) return;
+      const sameFile = await prisma.replay.findMany({
+        where: { fileName: row.fileName, deletedAt: null },
+        select: { id: true, rank: true },
+      });
+      if (sameFile.some((r) => r.rank != null)) {
+        // 文件里有人完成：只软删当前玩家这一行，保留文件与完成者轨道
+        await prisma.replay.update({ where: { id: row.id }, data: { deletedAt: new Date() } });
+        return;
+      }
       deleteRecordingFile(row.fileName);
-      // v9 多轨道：同一文件 N 行共享 fileName——软删所有共享该文件的行
-      //（整场作废），防残留孤儿行
+      // 整场无人完成：软删所有共享该文件的行（整场作废），防残留孤儿行
       await prisma.replay.updateMany({
         where: { fileName: row.fileName, deletedAt: null },
         data: { deletedAt: new Date() },

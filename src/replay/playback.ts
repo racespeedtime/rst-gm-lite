@@ -495,6 +495,16 @@ export interface SampledState {
 export function replayDurationMs(data: ReplayData): number {
   const { header } = data;
   if (header.frameCount === 0) return 0;
+  // 多轨道容器：取各轨道终点最大值（容器 header.frameCount 只是首轨帧数）
+  if (data.tracks && data.tracks.length > 0) {
+    return Math.max(
+      0,
+      ...data.tracks.map((t) => {
+        const v = trackView(data, t.trackId);
+        return frameTimeAt(v, v.header.frameCount - 1);
+      }),
+    );
+  }
   const last = frameTimeAt(data, header.frameCount - 1);
   return Math.max(0, last);
 }
@@ -1075,17 +1085,21 @@ function syncObserverTds(session: ReplaySession): void {
  * 初始观战/副驾目标用头车——视觉跑最前 = 比赛回放的"主角"；且候选注册按视觉
  * 顺序（头车在前），从头车出发 →/← 切换方向与 ghost 编号（1/N→N/N）一致。
  * v9 多轨道（整场同屏）：各轨道同轴从 0 起、playTime 相同——头车改为"当前帧
- * 名次最高"（帧内 rank 字段；rank 相同回退 playTime 最大），观战默认跟领先者。 */
+ * 名次最前"（帧内 rank 是 1-based 名次，1=冠军，数值越小越领先；0=未排名视为
+ * 最差），观战默认跟领先者。 */
 function leadGhost(session: ReplaySession): Ghost {
   let lead = session.ghosts[0];
+  // 多轨道判定用会话级 data.tracks（trackView 视图不含 tracks 字段）
+  const multi = (session.data.tracks?.length ?? 0) > 1;
   for (const g of session.ghosts) {
-    if (g.data.tracks) {
-      // 多轨道：比较当前帧 rank（越高越领先；0=未排名，playTime 兜底）
+    if (multi) {
+      // 比较当前帧 rank：1=冠军 数值最小领先；0=未排名按最差(999)处理
       const s1 = sampleAt(lead.data, lead.playTime);
       const s2 = sampleAt(g.data, g.playTime);
-      const r1 = s1?.rank ?? 0;
-      const r2 = s2?.rank ?? 0;
-      if (r2 !== r1 ? r2 > r1 : g.playTime > lead.playTime) lead = g;
+      const r1 = s1?.rank && s1.rank > 0 ? s1.rank : 999;
+      const r2 = s2?.rank && s2.rank > 0 ? s2.rank : 999;
+      const better = r2 === r1 ? g.playTime > lead.playTime : r2 < r1;
+      if (better) lead = g;
     } else if (g.playTime > lead.playTime) {
       lead = g;
     }
@@ -1191,9 +1205,11 @@ export async function spawnReplay(
   }
 
   const count = Math.min(5, Math.max(1, opts?.npcCount ?? 1));
-  // v9 多轨道（整场重现）：所需 NPC = 轨道数（每轨道一辆车）；单轨 = count 分身
+  // v9 多轨道（整场重现）：所需 NPC = 轨道数（每轨道一辆车）；单轨 = count 分身。
+  // 判据用 data.tracks != null：v9 文件哪怕只有 1 轨（单玩家完赛）容器 frames 也
+  // 含轨道表，必须走 trackView 取视图（trackCount > 1 会把 1 轨 v9 误当单轨错位采样）
   const trackCount = data.tracks?.length ?? 1;
-  const multiTrack = trackCount > 1;
+  const multiTrack = data.tracks != null;
   const neededNpc = multiTrack ? trackCount : count;
   // NPC 池子边界：创建前检查剩余槽位（回放/挑战共用 100 槽，各世界多人同时
   // 开回放/挑战可能占满）。不足则明确提示剩余数，避免创建到一半才失败
@@ -1349,18 +1365,21 @@ export async function spawnReplay(
       }
     }
     // 降级修正：实际创建数 < 请求数（某分身分配失败 break）时，已创建标签的
-    // 分母仍写着请求 count，会显示"ghost 3/2"——统一重编号（labelNo 反序 1..N
-    // 按实际数量）并 updateText
-    if (ghosts.length !== count) {
+    // 分母仍写着请求数，会显示"ghost 3/2"——统一重编号（labelNo 反序 1..N
+    // 按实际数量）并 updateText。多轨道（整场重现）请求数 = trackCount，
+    // 且每轨保留自己的 recorderName（不能用 replay.recorderName 覆盖）
+    const wanted = multiTrack ? trackCount : count;
+    if (ghosts.length !== wanted) {
       for (let k = 0; k < ghosts.length; k++) {
         const g = ghosts[k];
-        g.labelNo = ghosts.length - k; // 反序重编号：k=0（尾车）→ N，头车 → 1
+        // 多轨道按创建序编号（轨道 0 = 1/N）；单轨反序（尾车 N/N，头车 1/N）
+        g.labelNo = multiTrack ? k + 1 : ghosts.length - k;
         try {
           g.label.updateText(
             "#ffffff",
             ghostLabelText(
               g.npc.getName(),
-              replay.recorderName,
+              multiTrack ? g.recorderName : replay.recorderName,
               g.labelNo,
               ghosts.length,
               g.online,
