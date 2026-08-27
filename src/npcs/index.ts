@@ -149,6 +149,8 @@ interface DrifterEntity {
   label: Dynamic3DTextLabel | null;
   /** 乘客位（null=空；0 号司机位被 NPC 占用，乘客从 1 号座位起） */
   passengerSlots: (Player | null)[];
+  /** 上次自动补氮时间戳（每 15 秒一管，对齐原版 PlayerInfo[i][nitro]） */
+  lastNitroAt: number;
 }
 
 const entities = new Map<string, DrifterEntity>();
@@ -182,6 +184,7 @@ function createDrifter(def: DrifterDef): void {
     label: null,
     // 全部为 2 座车（NPC 司机 + 1 个乘客位）
     passengerSlots: [null],
+    lastNitroAt: 0, // 创建即补（首轮 tick 立即补一管，对齐原版开局带氮气）
   };
   let npc: Npc | null = null;
   let vehicle: Vehicle | null = null;
@@ -439,14 +442,25 @@ async function openDrifterMenu(player: Player): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * 启动漂移 NPC 持久 tick（乘客续氮气，1 秒轮询；onInit 注册、onExit 统一清理）。
+ * 启动漂移 NPC 持久 tick（1 秒轮询；onInit 注册、onExit 统一清理）：
+ * 1. NPC 车每 15 秒自动补一管氮气（对齐原版 racespeedtime.pwn:2696-2700
+ *    IsPlayerNPC 分支——NPC 无人驾驶、.rec 播放，创建时的一管喷完即无，
+ *    必须周期自动补才有持续氮气效果）
+ * 2. 乘客按住 FIRE/ACTION → 续氮气（对齐 vehicleAuto hold 点按逻辑）
  * 从 initDrifterNpcs 拆出：initDrifterNpcs 只注册事件（模块加载一次），interval
  * 必须 onInit 重注册——gmx 的 onExit 会 clearAllTimers，顶层注册的 tick 会死掉。
  */
 export function startDrifterNpcTicks(): void {
   setIntervalSafe(() => {
+    const now = Date.now();
     for (const ent of entities.values()) {
       if (!ent.vehicle?.isValid() || !ent.npc?.isValid()) continue;
+      // NPC 自动补氮（每 15 秒一管）：对齐原版 PlayerInfo[i][nitro] 计时
+      if (now - ent.lastNitroAt >= 15_000) {
+        addNitro(ent.vehicle);
+        ent.lastNitroAt = now;
+      }
+      // 乘客按住补氮：drift 车上有乘客按住 FIRE/ACTION → 续一管
       if (!ent.passengerSlots.some((p) => p && p.isConnected())) continue;
       let holding = false;
       for (const p of ent.passengerSlots) {
