@@ -1,4 +1,4 @@
-import { DynamicCheckpoint, DynamicMapIcon, Player, TextLabel } from "@infernus/core";
+import { Dynamic3DTextLabel, DynamicCheckpoint, DynamicMapIcon, Player } from "@infernus/core";
 import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
@@ -17,7 +17,7 @@ import { DEFAULT_CHARSET } from "@/utils/constants";
 /** 世界环境持有的实体（onExit 时统一销毁） */
 interface WorldEnv {
   icons: DynamicMapIcon[];
-  labels: TextLabel[];
+  labels: Dynamic3DTextLabel[];
   checkpoints: DynamicCheckpoint[];
 }
 
@@ -206,7 +206,7 @@ export async function initWorldEnvironment(attempt = 1): Promise<void> {
   logger.info(`[worldenv] 全局时间 ${new Date().getHours()}:00 天气 ${currentWeather}`);
 
   const icons: DynamicMapIcon[] = [];
-  const labels: TextLabel[] = [];
+  const labels: Dynamic3DTextLabel[] = [];
   const checkpoints: DynamicCheckpoint[] = [];
   let failed = false;
 
@@ -252,14 +252,14 @@ export async function initWorldEnvironment(attempt = 1): Promise<void> {
     });
     for (const tp of tps) {
       try {
-        const label = new TextLabel({
+        const label = new Dynamic3DTextLabel({
           text: `{2ba2d5}您现在位于 /${tp.name}\n${tp.description ?? ""}`,
           color: COLOR_LABEL,
           x: Number(tp.x),
           y: Number(tp.y),
           z: Number(tp.z) + 1,
           drawDistance: 30,
-          virtualWorld: PUBLIC_WORLD_ID,
+          worldId: PUBLIC_WORLD_ID,
           testLOS: false,
           charset: DEFAULT_CHARSET, // 3D 标签中文必须与玩家默认字符集一致否则乱码
         });
@@ -302,14 +302,14 @@ export async function initWorldEnvironment(attempt = 1): Promise<void> {
         });
         cp.create();
         checkpoints.push(cp);
-        const label = new TextLabel({
+        const label = new Dynamic3DTextLabel({
           text: `{98cdfe}[赛车] ${race.name}\n输入 /r s ${race.name} 开始比赛`,
           color: COLOR_RACE,
           x: Number(first.x),
           y: Number(first.y),
           z: Number(first.z) + 1,
           drawDistance: 20,
-          virtualWorld: PUBLIC_WORLD_ID,
+          worldId: PUBLIC_WORLD_ID,
           testLOS: false,
           charset: DEFAULT_CHARSET, // 3D 标签中文必须与玩家默认字符集一致否则乱码
         });
