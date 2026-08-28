@@ -186,6 +186,7 @@ export async function openRaceDetailPanel(
   if (!race) return;
   const mine = await canEditRace(player, raceId);
   const recs = await prisma.raceRecord.count({ where: { raceId, deletedAt: null } });
+  const cpCount = await prisma.raceCp.count({ where: { raceId } });
   const actions = [
     "开始比赛",
     "查看回放",
@@ -193,20 +194,29 @@ export async function openRaceDetailPanel(
     "查看排行榜",
     ...(mine ? ["编辑赛道", "删除赛道（二次验证）"] : []),
   ];
-  // 详情信息头（名称/长度/作者），其后紧跟操作项。
+  // 详情信息头（名称/长度/作者/纪录/创建/更新/检查点/描述），其后紧跟操作项。
   // INFO_LINES = 信息头行数。两个坑（都踩过）：
   // 1) 信息头文本必须单行——SA LIST 对话框按渲染宽度自动折行，赛道名/作者
   //    过长折行后渲染行数 > 逻辑行数，listItem 偏移错位。名称截断 28 字符、
   //    作者截断 12 字符（中文双宽，安全宽度内不折行）。
   // 2) 不要用空行做信息头与操作项的分隔——SA 客户端折叠空行不占行号，多算的
-  //    INFO_LINES 会让点击整体偏移（"选查看回放触发开始比赛"）。
+  //    INFO_LINES 会让点击整体偏移（"选查看回放触发开始比赛"）。分割线用有
+  //    内容的灰色横线（占一行行号，选中它 idx<0 被忽略，安全）。
   const name = race.name.length > 28 ? `${race.name.slice(0, 28)}…` : race.name;
   const author = race.sysUser?.username ?? "?";
   const authorSafe = author.length > 12 ? `${author.slice(0, 12)}…` : author;
+  const desc = race.description?.trim();
+  const descSafe = desc ? (desc.length > 28 ? `${desc.slice(0, 28)}…` : desc) : undefined;
   const headerLines = [
     `{FFD700}${name}`,
     `长度 ${Math.round(Number(race.totalLength))}m · ${race.laps ?? 1} 圈`,
-    `作者 ${authorSafe} · 纪录 ${recs} 条`,
+    `作者 ${authorSafe}`,
+    `纪录 ${recs} 条`,
+    `创建 ${formatFullDate(race.createdAt)}`,
+    `更新 ${formatFullDate(race.updatedAt)}`,
+    `检查点 ${cpCount} 个`,
+    ...(descSafe ? [`描述 ${descSafe}`] : []),
+    `{808080}──────────────`,
   ];
   const INFO_LINES = headerLines.length;
   const info = [...headerLines, ...actions.map((o, i) => `${i + 1}. ${o}`)].join("\n");
