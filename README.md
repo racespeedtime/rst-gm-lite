@@ -60,7 +60,7 @@ RST-GM-Lite 是 `open.mp + samp-node + @infernus/core` 纯 TypeScript 实现的�
 
 | 模块 | 玩家视角 | 开发者视角 |
 |------|---------|-----------|
-| `replay/` | 自定义录制、比赛回放（倍速 / 暂停 / seek / 观战）、影子挑战 | 自有二进制格式（v8：帧内含在线标记 + 相对时间戳 + 实时名次），RakNet DriverSync 拦截 + 定时兜底双轨采样录制（recorder.ts），NPC 分身回放 + 模拟驱动，挑战 = 影子 NPC 与你同场 PK。详见 [回放系统实现说明](./docs/replay-system.md) |
+| `replay/` | 自定义录制、比赛回放（倍速 / 暂停 / seek / 观战）、影子挑战 | 自有二进制格式（v9 多轨道：一场比赛一个 .rec 内含 N 玩家轨道，帧内含在线标记 + 相对时间戳 + 实时名次），RakNet DriverSync 拦截 + 定时兜底双轨采样录制（recorder.ts），NPC 分身回放 + 模拟驱动，挑战 = 影子 NPC 与你同场 PK。详见 [回放系统实现说明](./docs/replay-system.md) |
 
 ### 系统支撑
 

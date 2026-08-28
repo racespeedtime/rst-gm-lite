@@ -7,7 +7,7 @@
 回放系统覆盖三件事：
 
 - **自定义录制回放（ghost）**：玩家随手 `/rec` 录一段驾驶，`/rp play` 在**当前世界**重播（NPC 车，其他人看得见、可一起玩），发起人可控制倍速/暂停/seek；
-- **比赛回放（race）**：每场比赛自动录制（`beginRace` 全员开录、`endRoom` 落盘带名次），`/rp play` 在**独立世界**重放，发起人自动观战，比赛信息 HUD（C P / TIME / BEST / RANK）随播放还原；
+- **比赛回放（race）**：每场比赛自动录制（`beginRace` 全员开录、`endRoom`/`resetRoom` **整场合并落盘**成**一个多轨道 .rec** 文件，内含所有参赛玩家的轨道），`/rp play` 在**独立世界**重放**整场同屏**（所有车同时重播、可切观战目标），发起人自动观战，比赛信息 HUD（C P / TIME / BEST / RANK）随播放还原；
 - **影子挑战（challenge）**：选一条"自己该赛道的比赛回放"当影子（NPC 车），玩家开**自己的爱车**与影子同场 PK。
 
 核心技术手段：
@@ -15,7 +15,7 @@
 | 环节 | 手段 |
 |------|------|
 | 录制 | RakNet 拦截玩家 `DriverSync`（InCarSync）包 30Hz 采点 + 100ms 定时兜底补帧 |
-| 存储 | 自有二进制格式（**v8，定长 Header + 定长帧 74B**），整文件读入内存，O(1) seek |
+| 存储 | 自有二进制格式（**v9 多轨道，定长 Header + 轨道表 + N 段定长帧流**；旧 v8 单轨文件继续可播），整文件读入内存，O(1) seek |
 | 回放 | open.mp 内置 NPC 按需创建 + `emulateIncomingPacket` 模拟 NPC 发 `DriverSync`，服务器按真实司机处理并广播，客户端本地物理驱动 |
 | 观战 | 复用 `core/observe` 的 `startObserveVehicle`；比赛 TD / CP 箭头从**帧状态**渲染（事件无关） |
 
@@ -23,7 +23,7 @@
 
 | 文件 | 职责 |
 |------|------|
-| `format.ts` | 二进制格式：Header/帧的编码、解码、插值、版本兼容 |
+| `format.ts` | 二进制格式：Header/帧的编码、解码、插值、版本兼容；v9 多轨道容器（轨道表 + 多段帧流 + trackView 视图） |
 | `recorder.ts` | 录制：采样、兜底、挂起/续录、落盘 + DB 元数据 |
 | `playback.ts` | 回放：NPC 池、emulate 驱动、60fps tick、控制命令、观战 HUD |
 | `challenge.ts` | 影子挑战：赛道 CP 检测、影子渲染、结算（复用 playback 的采样/驱动/NPC 池） |
@@ -39,11 +39,13 @@
 - **每帧带"完整状态"**：不只是位置/速度，还带车型 / CP 进度 / 时间 / 天气 / 血量 / 在线标记 / 实时名次 / 帧时间戳——seek/回退 = **恢复状态而非重放事件**（见 §5）；
 - **向后兼容**：新字段一律**尾部追加**，旧字段偏移永不改动；v3 起 Header 末尾自描述 `frameBytes`（帧字节数），新版本读旧文件、旧版本不读新文件，零破坏。
 
-### 2.2 Header（当前 76B）
+### 2.2 Header（基座 76B，v9 起末尾追加轨道表）
 
 魔数 `RSTREP01` + 版本(1) + 类型(1，ghost=0 / race=1) + 帧间隔(2) + 车型(4) + 起始位置/四元数/速度(36) + 帧数(4) + 时长(4) + CP 总数(4) + 个人最佳(4) + **frameBytes(4)**。
 
 `frameIntervalMs` 是**实际平均帧间隔**（兜底采样时 ≈100ms、RakNet 拦截时 ≈33ms），作为旧文件的播放推进基准；v7 起播放按每帧时间戳精确定位，不再依赖它。
+
+**v9 多轨道**（比赛回放：一场一个文件）：基座 header 之后是轨道表（`trackCount u32` + N × 97B 轨道元信息），Body 是 N 段独立帧流（段起始 4 字节对齐，段内帧布局不变）。轨道元信息：`frameOffset(4) + frameCount(4) + vehicleModelId(4) + 起点 pos(12) + recorderName(64B UTF-8) + rank(4, -1=null) + finished(1) + trackId(4)`。播放端 `trackView(data, trackId)` 为某轨道生成独立 `ReplayData` 视图（header 副本 + frames subarray）——采样/插值/seek 全部零改动复用。旧 v8 及以下单轨文件无轨道表，`tracks` 为 undefined，按单轨处理。
 
 ### 2.3 帧（当前 74B）
 
@@ -62,7 +64,7 @@
 | 69 | relTimeMs | u32（v7+：相对录制开始的时间戳，播放二分定位） |
 | 73 | rank | u8（v8+：实时名次 1-based，回放 RANK TD 动态还原） |
 
-版本演进：v2(55B) → v4(57B, keys) → v5(68B, 完整 sync 字段) → v6(69B, online) → v7(73B, 时间戳) → v8(74B, rank)。
+版本演进：v2(55B) → v4(57B, keys) → v5(68B, 完整 sync 字段) → v6(69B, online) → v7(73B, 时间戳) → v8(74B, rank) → **v9(多轨道容器, 帧布局不变)**。
 
 ### 2.4 插值（lerpFrame）
 
@@ -102,16 +104,20 @@ CP 进度与实时名次不走缓存：由 `noteCpProgress`（room 过 CP）/ `n
 
 ### 3.6 落盘
 
+**单轨（ghost / 旧 race 旁路）**：
+
 1. 停止瞬间**无条件补一帧**当前车辆状态（尾帧 = 结束位置），带身份校验（playerId 可能被复用，auth/userId 对不上则跳过补帧）；
 2. 帧数 <2 直接取消（"录制内容过短"）；
 3. 组装 `Header + 定长帧` 的单个 Buffer（一次性分配），写文件 `${playerId}_${startAt}.rec`；
 4. **待落库索引**（同步写文件）：DB 建记录前先写索引条目，DB 建成功移除——服务器退出瞬间 create 未 settle 时，重启靠索引补建 DB 记录，防"文件写了但无索引 → 孤儿清理误删"；
 5. 建 DB `replay` 记录（含录制者快照、名次、raceRoomId 等）。
 
+**多轨道（比赛回放主路径）**：`finishPlayer` 冲线只 `markRaceFinished` 打标记（不落盘）；`endRoom`/`resetRoom`/`checkRoomState`（有人完成）调用 `mergeRoomReplays` 收集所有成员会话（在线 + 挂起掉线），`saveRaceReplay` 合并编码成**一个多轨道 .rec**（`race_${raceRoomId}_${startAt}.rec`），DB **每玩家一行**共享 fileName，各自 `trackIndex` 标记轨道号。无人完成走 discard 不生成文件。
+
 ### 3.7 作废
 
 - `discard=true`（整场无人完成/房主重开）：落盘即删文件、不建 DB 记录（原子）；
-- `discardRaceReplay`（房间销毁且无人完成 / 掉线重连删线段）：延迟 800ms（等刚触发的 stopRecording 落盘完成）按 **userId + raceId + raceRoomId + rank=null** 精确匹配软删，防误删"有人完成的比赛里掉线玩家的保留段"。
+- `discardRaceReplay`（房间销毁且无人完成 / 掉线重连删线段）：延迟 800ms（等刚触发的 stopRecording 落盘完成）按 **userId + raceId + raceRoomId + rank=null** 精确匹配软删。多轨道文件是**混合 rank**——仅当文件**所有**行都 rank=null（整场无人完成）才整场软删 + 删文件；文件里有完成者行时只软删当前玩家自己的行（不碰完成者轨道）。
 
 ---
 
@@ -164,13 +170,16 @@ CP 进度与实时名次不走缓存：由 `noteCpProgress`（room 过 CP）/ `n
 - `sampleAt`：定位帧 + `lerpFrame` 插值（四元数归一化）。
 - `replayDurationMs` / `frameTimeAt`：末帧时间戳 = 播放总时长 / 帧绝对时间（`frameTs` 惰性构建缓存，只读共享安全）。
 
-### 4.6 多分身（ghost 错峰）
+### 4.6 多分身（ghost 错峰）与整场同屏（v9 多轨道）
 
+**单轨（ghost / 旧 race）多分身**：
 - 同一文件最多 5 辆（`npcCount` 默认 1，`staggerMs` 自定义或自动等分总时长）；
 - 每 ghost 独立 `playTime`（错峰起始 = `i × baseGap`），编号**反序**（头车 playTime 最大 = ghost 1/N，与视觉顺序一致）；
 - seek 时叠加各自 `staggerMs` 保持错峰（否则 seek 后全部分身重合）；
 - 创建数少于请求数时统一重编号（防显示 "ghost 3/2"）；
 - **观战切换方向与编号一致**：观战切换候选按视觉顺序注册（头车 ghost 1/N 在前、尾车 N/N 在后，创建顺序是 playTime 升序需显式排序），初始观战/副驾目标 = 视觉头车（`leadGhost`）——方向键 → 切编号 +1、← 切编号 -1。
+
+**多轨道（比赛整场重现）**：每个轨道一个 ghost（`trackView` 视图数据源 + 各自 `recorderName` 标签），`playTime` 从 0 同轴播放（无错峰——整场要同屏同速）；观战默认跟**实时领先者**（`leadGhost` 比较各车当前帧 rank，1=冠军 数值最小领先，0=未排名最差）；方向键 ←/→ 切换观战目标；所需 NPC = 轨道数（创建前按轨道数检查槽位）。
 
 ### 4.7 倍速
 
@@ -195,7 +204,7 @@ CP 进度与实时名次不走缓存：由 `noteCpProgress`（room 过 CP）/ `n
 - **镜头观战（watch）**：发起人 `startObserveVehicle`（比赛回放自动切独立世界 + 自动观战）；观察者切车键：**方向键 ←/→**（观战/副驾下方向键不触发 onKeyStateChange，统一由 getKeys 轮询边沿检测驱动，见 `pollObserveKeys`。Q/E 不做切换——观战模式客户端把 Q/E 当本地镜头键不上传，实机验证收不到）。
 - **副驾模式（ride）**：真实坐进 ghost 乘客座跟随 NPC 开车（`startRideVehicle`，非镜头观战）。切换键同样只用**方向键 ←/→**（FIRE 让位给氮气）；只切车辆目标（不会切到真人玩家）。换车型/重挂失败兜底回镜头观战。
 - **退出观战保留回放（`/rp watch off`）**：`stopObserve(stayInWorld)` 不恢复观战前世界——玩家留在回放世界自由活动（回放继续播放），`tickSession` 的"owner 离开回放世界自动停止"判定不触发；再 `/rp watch` 重新观战。
-- 比赛信息 TD（C P / TIME / BEST / RANK）从**视觉头车（leadGhost）的当前帧状态**渲染：CP 进度、实时名次、时间/天气全在帧里 → seek/变速天然同步，内容去重（变化才 setString）；
+- 比赛信息 TD（C P / TIME / BEST / RANK）从**视觉头车（leadGhost）的当前帧状态**渲染：单轨 = playTime 最大；**多轨道 = 当前帧 rank 最前（1=冠军）**。CP 进度、实时名次、时间/天气全在帧里 → seek/变速天然同步，内容去重（变化才 setString）；
 - 3D CP 箭头 + 小地图图标：按帧 `cpProgress` 计算当前要过的 CP，进度推进播 1056 音效；
 - 时间/天气随帧应用到观察者视角（CP 脚本 time/weather 的效果"状态化"重放）。
 
@@ -241,6 +250,7 @@ CP 脚本是离散事件（cveh 换车、time/weather、fix/damage），NPC 回�
 ## 7. 影子挑战（challenge.ts）
 
 - 玩家开自己的爱车（坐主驾），选一条"自己的该赛道比赛回放"作影子：`sampleAt` 采样 + `emulateDriverSync` 驱动影子 NPC（与回放同一套）；
+- **多轨道文件按玩家选**：加载文件后 `trackView(data, replay.trackIndex)` 取该玩家轨道当影子（单轨文件原样返回）——同场多人各自的完成回放都能当影子，跟谁比由玩家选；
 - 复用 playback 的 NPC 池 / 世界段（`REPLAY_WORLD_BASE=2001` 起）/ sync 屏蔽集；
 - 赛道 CP 检测（与比赛共用 RaceCpEvent 入口）、AFK/掉线/结算各自独立；
 - 影子播完边界 = 播放终点，`CHALLENGE_END_GRACE_MS=20s` 宽限；
