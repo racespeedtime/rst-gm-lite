@@ -344,9 +344,10 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
   room.bestTimes.clear(); // 新赛道 BEST 缓存失效（重查）
   room.afk.clear(); // 新赛道：清挂机记录
   room.lastPositions.clear(); // 掉线快照缓存随新赛道失效
-  // 换赛道：挑战等级随旧赛道失效（新赛道需重新选择）
+  // 换赛道：挑战等级/失败扣分随旧赛道失效（新赛道需重新选择）
   room.challengeLevelData = race.levelData;
   room.challengeTierSeconds = 0;
+  room.failedScoreFix = race.failedScoreFix ?? 0;
   // 重定位所有成员：进度重置 + 起点 + TD 刷新 + CP 箭头重建
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
@@ -703,6 +704,8 @@ async function pickChallengeLevel(
   if (!res || res.response !== 1) return false;
   const idx = res.listItem;
   if (idx < 0 || idx >= options.length) return false;
+  // await 弹窗期间房间可能已被销毁/房主掉线——写前校验房间仍存在
+  if (rooms.get(room.id) !== room) return false;
   room.challengeTierSeconds = options[idx].seconds;
   if (room.challengeTierSeconds > 0) {
     broadcastToRoom(

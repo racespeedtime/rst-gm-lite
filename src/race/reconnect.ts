@@ -367,12 +367,19 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
     //（避免比赛结束恢复到已解散战局的幽灵世界，与战局登记不一致）
     const prevWorld = slot?.prevWorld ?? player.getVirtualWorld();
     const joinedSession = sessionManager.rejoinPlayerSession(player, slot?.sessionId ?? 0);
+    // 掉线期间可能已超过挑战限时（timeUp 只标记在线成员，掉线玩家的 playerRaces
+    // 已被清理）——重连时按恢复的 startTime 补判，超时则重建状态即带 timeUp
+    const reconnectedStartTime = slot?.startTime ?? Date.now();
+    const reconnectedTimeUp =
+      room.challengeTierSeconds > 0 &&
+      Date.now() - reconnectedStartTime > room.challengeTierSeconds * 1000;
     playerRaces.set(player.id, {
       roomId: room.id,
       cpIndex: slot?.cpIndex ?? -1,
       lap: slot?.lap ?? 0,
-      startTime: slot?.startTime ?? Date.now(),
+      startTime: reconnectedStartTime,
       finished: false,
+      timeUp: reconnectedTimeUp,
       // 恢复断线前所在世界（重连时玩家必然在世界 0，不能用作 prevWorld）
       prevWorld: joinedSession ? prevWorld : 0,
       cpSnapshots: [], // 重连是新连接：回退重生快照从空重建（后续过 CP 重新记录）
@@ -421,6 +428,15 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
           Date.now() - rstart,
         );
         setRaceTdText(room, player.id, text, `RANK / 1 st`);
+        // 掉线期间已超时：重连即提示（对齐在线成员超时提醒）
+        if (reconnectedTimeUp) {
+          sysMsg(
+            player,
+            "race",
+            `挑战已超时（限时 ${room.challengeTierSeconds} 秒），完成时按失败处理${room.failedScoreFix !== 0 ? `（扣 ${room.failedScoreFix} 分）` : ""}`,
+            "warn",
+          );
+        }
       } else {
         setRaceTdText(
           room,
