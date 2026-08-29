@@ -1130,6 +1130,22 @@ export function initChallenge(): void {
     onChallengePlayerEnter(player);
     return next();
   });
+  // 挑战中死亡：回赛道起点重跑（重置 CP 进度）。spawn.ts 的 onDeath/onRequestClass
+  // 已跳过挑战世界（防 /kill warp 作弊），挑战必须自己接管重生——否则玩家死亡后
+  // 卡死/被送到主世界坐标（spawnInfo 还是登录时的），挑战无法继续。
+  PlayerEvent.onDeath(({ player, next }) => {
+    if (player.isNpc()) return next();
+    const ch = challenges.get(player.id);
+    if (!ch) return next();
+    // 回起点 + 进度清零（对齐 restartChallenge 的"重来"语义，但保持进行中状态）
+    ch.cpIndex = 0;
+    RaceCheckpoint.disable(player);
+    void seatPlayerAtStart(player, ch);
+    // 进度箭头重置到起点 CP（红圈在起点、箭头指向第二个）
+    resetChallengeCheckpoint(player, ch);
+    sysMsg(player, "challenge", "挑战中死亡，已回到起点重跑（进度重置）", "warn");
+    return next();
+  });
   // 挑战中命令隔离：非白名单命令一律拒绝（对齐比赛 onCommandReceived 处理；
   // 主命令取 strictMainCmd 或 command 首 token，防 /c 123 被当未授权拦截错）
   PlayerEvent.onCommandReceived(({ player, command, strictMainCmd, next }) => {

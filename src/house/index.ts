@@ -542,9 +542,12 @@ interface RaceOnlyLoaded {
 
 /** worldId -> 该世界已加载的动态赛道对象（含碰撞注册引用，销毁时一并注销） */
 const loadedRaceOnly = new Map<number, RaceOnlyLoaded>();
+/** 加载中的 worldId（防 async 加载期间重复进入；unload 时会清除） */
+const loadingRaceOnly = new Set<number>();
 
 /** 卸载指定世界的动态赛道对象（房间销毁/挑战退出/回放停止/换赛道时调用） */
 export function unloadRaceOnlyObjects(worldId: number): void {
+  loadingRaceOnly.delete(worldId); // 取消可能进行中的加载（load 续体会自查并销毁）
   const entry = loadedRaceOnly.get(worldId);
   if (!entry) return;
   for (const it of entry.items) {
@@ -569,60 +572,75 @@ export function unloadAllRaceOnlyObjects(): void {
  */
 export async function loadRaceOnlyObjects(raceId: string, worldId: number): Promise<boolean> {
   if (loadedRaceOnly.has(worldId)) return true; // 该世界已加载
-  // 查该赛道关联的 raceOnly house（race.houseId 唯一关联）
-  const race = await prisma.race.findUnique({
-    where: { id: raceId },
-    select: { houseId: true },
-  });
-  if (!race?.houseId) return false;
-  const house = await prisma.house.findUnique({
-    where: { id: race.houseId },
-    select: { id: true, raceOnly: true, isEnabled: true, deletedAt: true },
-  });
-  if (!house || !house.raceOnly || !house.isEnabled || house.deletedAt) return false;
-  const models = await prisma.houseModel.findMany({
-    where: { houseId: house.id },
-    orderBy: { index: "asc" },
-  });
-  const items: { obj: DynamicObject; collision: unknown }[] = [];
-  for (const m of models) {
-    if (m.type !== "obj") continue; // 5F 导入只有 obj；material 等动态场景暂不支持
-    const args = parseObjArgs(m.args);
-    if (!args) continue;
-    try {
-      const obj = new DynamicObject({
-        modelId: args.modelId,
-        x: args.x,
-        y: args.y,
-        z: args.z,
-        rx: args.rx,
-        ry: args.ry,
-        rz: args.rz,
-        drawDistance: args.drawDistance ?? 400,
-        worldId, // 单世界：只在该赛道这次分配的世界可见
-        extended: true,
-      });
-      obj.create();
-      obj.setNoCameraCollision();
-      const collision = registerObjectCollision(
-        args.modelId,
-        args.x,
-        args.y,
-        args.z,
-        args.rx,
-        args.ry,
-        args.rz,
-      );
-      items.push({ obj, collision });
-    } catch (e) {
-      logger.warn(`[house] 动态赛道对象创建失败 race=${raceId} model=${args.modelId}`, e);
+  if (loadingRaceOnly.has(worldId)) return false; // 该世界加载进行中（防并发重复）
+  loadingRaceOnly.add(worldId);
+  try {
+    // 查该赛道关联的 raceOnly house（race.houseId 唯一关联）
+    const race = await prisma.race.findUnique({
+      where: { id: raceId },
+      select: { houseId: true },
+    });
+    if (!race?.houseId) return false;
+    const house = await prisma.house.findUnique({
+      where: { id: race.houseId },
+      select: { id: true, raceOnly: true, isEnabled: true, deletedAt: true },
+    });
+    if (!house || !house.raceOnly || !house.isEnabled || house.deletedAt) return false;
+    const models = await prisma.houseModel.findMany({
+      where: { houseId: house.id },
+      orderBy: { index: "asc" },
+    });
+    const items: { obj: DynamicObject; collision: unknown }[] = [];
+    for (const m of models) {
+      if (m.type !== "obj") continue; // 5F 导入只有 obj；material 等动态场景暂不支持
+      const args = parseObjArgs(m.args);
+      if (!args) continue;
+      try {
+        const obj = new DynamicObject({
+          modelId: args.modelId,
+          x: args.x,
+          y: args.y,
+          z: args.z,
+          rx: args.rx,
+          ry: args.ry,
+          rz: args.rz,
+          drawDistance: args.drawDistance ?? 400,
+          worldId, // 单世界：只在该赛道这次分配的世界可见
+        });
+        obj.create();
+        obj.setNoCameraCollision();
+        const collision = registerObjectCollision(
+          args.modelId,
+          args.x,
+          args.y,
+          args.z,
+          args.rx,
+          args.ry,
+          args.rz,
+        );
+        items.push({ obj, collision });
+      } catch (e) {
+        logger.warn(`[house] 动态赛道对象创建失败 race=${raceId} model=${args.modelId}`, e);
+      }
     }
+    // 加载期间该世界可能已被销毁（房间解散/挑战退出/回放停止触发 unload 清了
+    // loading 标记）：若已不在 loading 集合，说明上下文已消失，销毁刚创建的对象
+    // 防孤儿实体残留（世界 id 可能已被回收复用给别的房间）
+    if (!loadingRaceOnly.has(worldId)) {
+      for (const it of items) {
+        if (it.obj.isValid()) it.obj.destroy();
+        if (it.collision) unregisterObjectCollision(it.collision as never);
+      }
+      return false;
+    }
+    if (items.length) {
+      loadedRaceOnly.set(worldId, { raceId, items });
+      return true;
+    }
+    return false;
+  } finally {
+    loadingRaceOnly.delete(worldId);
   }
-  if (items.length) {
-    loadedRaceOnly.set(worldId, { raceId, items });
-    return true;
-  }
-  return false;
 }
 
 /** 初始化房屋命令 */

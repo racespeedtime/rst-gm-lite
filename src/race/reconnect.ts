@@ -1,6 +1,7 @@
 import { Player } from "@infernus/core";
 import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
+import { unloadRaceOnlyObjects } from "@/house";
 import { restorePersonalTimeAfterRace } from "@/core/worldenv";
 import { applyRaceNoCollision, getDefaultRaceModel } from "./vehicle";
 import {
@@ -305,6 +306,9 @@ export function checkRoomState(room: RaceRoom): void {
       }
     }
     room.raceMembersLast.clear();
+    // 房间销毁：卸载该赛道的专属对象（世界 id 即将回收复用，对象必须销毁——
+    // 否则残留对象/碰撞，且世界 id 被新房复用后旧对象还挂在那个世界）
+    unloadRaceOnlyObjects(room.worldId);
     freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id
     rooms.delete(room.id);
   }

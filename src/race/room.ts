@@ -354,6 +354,9 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
   // 换赛道：卸载旧赛道专属对象（按本房间世界）+ 加载新赛道对象（世界不变）
   unloadRaceOnlyObjects(room.worldId);
   await loadRaceOnlyObjects(race.id, room.worldId);
+  // await 加载期间房间可能已被销毁（全员离开 → checkRoomState 回收世界 id）：
+  // 此时对象已由 load 续体自查销毁，续体不得再操作已销毁的 room
+  if (rooms.get(room.id) !== room) return false;
   // 重置 WAITING 超时基准（对齐 restartRace）：换赛道后若房间已临近 10 分钟
   // 等待上限，不清 createdAt 会被 tickRooms 立即解散
   room.createdAt = Date.now();

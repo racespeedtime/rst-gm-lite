@@ -605,6 +605,15 @@ async function createGroupFlow(player: Player, back?: MenuBack): Promise<void> {
   if (res.response !== 1) return back?.();
   const name = res.inputText.trim();
   if (!name) return back?.();
+  // 敏感词 + 长度上限（分组名显示在列表/广播，对齐赛道名防线）
+  if (containsSensitiveWord(name)) {
+    sysMsg(player, "race", "分组名称包含敏感内容，请更换", "error");
+    return back?.();
+  }
+  if (name.length > 32) {
+    sysMsg(player, "race", "分组名称最多 32 个字符", "error");
+    return back?.();
+  }
   const groups = await prisma.raceGroup.findMany({
     where: { deletedAt: null },
     select: { index: true },
@@ -715,6 +724,14 @@ async function renameGroup(player: Player, groupId: string, back?: MenuBack): Pr
   if (res.response !== 1) return back?.();
   const name = res.inputText.trim();
   if (!name) return back?.();
+  if (containsSensitiveWord(name)) {
+    sysMsg(player, "race", "分组名称包含敏感内容，请更换", "error");
+    return back?.();
+  }
+  if (name.length > 32) {
+    sysMsg(player, "race", "分组名称最多 32 个字符", "error");
+    return back?.();
+  }
   await prisma.raceGroup.update({ where: { id: groupId }, data: { name } });
   sysMsg(player, "race", "分组名已更新", "success");
   return back?.();
