@@ -38,10 +38,6 @@ model House {
   description   String?        @db.VarChar(255)
   userId        String?        @map("user_id") @db.Uuid
   isEnabled     Boolean        @default(false) @map("is_enabled")
-  /** 赛道专用对象标记：true 时该房屋的 obj 只在赛道世界（1001..2000）可见，
-   *  不在公共大世界/战局显示（5F 导入的赛道场景对象）。false = 普通房屋
-   *  （关联赛道时在公共+战局+赛道世界都可见，原版房屋语义） */
-  raceOnly      Boolean        @default(false) @map("race_only")
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)

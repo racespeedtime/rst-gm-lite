@@ -18,12 +18,14 @@ import { setTimeoutSafe } from "@/core/timers";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { RACE_WORLD_BASE } from "@/race/room";
+import { REPLAY_WORLD_BASE } from "@/replay/playback";
 import { isPlayerLocked } from "@/core/interaction";
 /**
  * 房屋物件可见世界区间（按数组传，streamer 支持）：
- * - 普通房屋（不关联赛车/传送点）：公共大世界 0 + 战局 1..1000——赛道（1001..2000）
- *   与回放/挑战（2001+）世界看不到，互不干扰
- * - 关联赛道的房屋（House.race）：额外在比赛世界 1001..2000 可见（赛道实体）
+ * - 普通房屋（不关联赛车）：公共大世界 0 + 战局 1..1000——赛道/回放世界看不到
+ * - 关联赛道的房屋（House.race，含 5F 导入的赛道场景对象）：赛道世界
+ *   1001..2000 + 回放/挑战世界 2001..2100 可见（赛道场景只在比赛/回放/挑战时
+ *   出现），公共大世界与战局不可见——避免赛道物件堆在地图上
  * - 关联传送点的房屋：传送点都在战局世界使用（/house goto、//名称），战局区间
  *   已覆盖，与普通房屋一致
  */
@@ -32,13 +34,13 @@ const SESSION_WORLD_IDS: number[] = [
   ...Array.from({ length: 1000 }, (_, i) => i + 1),
 ];
 /** 战局 + 比赛区间（关联赛道的房屋可见） */
-const SESSION_RACE_WORLD_IDS: number[] = [
-  ...SESSION_WORLD_IDS,
+/** 战局 + 比赛区间（关联赛道的房屋可见） */
+/** 赛道 + 回放/挑战区间（关联赛道的房屋：赛道场景对象，赛道房间与回放/挑战
+ *  播放时可见；公共大世界/战局不可见——避免赛道物件堆在地图上）。
+ *  回放世界从 REPLAY_WORLD_BASE(2001) 起，MAX_REPLAY_NPC=100 限制并发 → 取 2001..2100 */
+const RACE_REPLAY_WORLD_IDS: number[] = [
   ...Array.from({ length: 1000 }, (_, i) => i + RACE_WORLD_BASE),
-];
-/** 赛道专用对象（raceOnly）：只在比赛世界 1001..2000 可见（5F 导入的赛道场景对象） */
-const RACE_ONLY_WORLD_IDS: number[] = [
-  ...Array.from({ length: 1000 }, (_, i) => i + RACE_WORLD_BASE),
+  ...Array.from({ length: 100 }, (_, i) => i + REPLAY_WORLD_BASE),
 ];
 
 /** 房屋 obj 行格式：modelId x y z rX rY rZ（可选 drawDistance） */
@@ -187,15 +189,12 @@ export async function loadAllHouseObjects(attempt = 1): Promise<void> {
 
     for (const m of models) {
       const hname = houseName(m.houseId, m.house?.name ?? "?");
-      // 世界区间：
-      // - raceOnly（5F 赛道专用对象）：只在赛道世界 1001..2000 可见，公共大世界/
-      //   战局不显示（避免赛道场景物件堆在地图上）
-      // - 普通房屋（含关联赛道/传送点）：公共+战局（+关联赛道则含比赛世界）
-      const worldIds = m.house?.raceOnly
-        ? RACE_ONLY_WORLD_IDS
-        : m.house?.race
-          ? SESSION_RACE_WORLD_IDS
-          : SESSION_WORLD_IDS;
+      // 世界区间按"是否关联赛道"判定：
+      // - 关联赛道的房屋（5F 导入的赛道场景对象 / 原版房屋+赛道）：实体是赛道
+      //   场景——在赛道世界（1001..2000）+ 回放/挑战世界（2001..2100）可见
+      //   （影子挑战/回放播放时赛道场景必须存在），公共大世界/战局不可见
+      // - 普通房屋（不关联赛道）：公共大世界 + 战局（0 + 1..1000）
+      const worldIds = m.house?.race ? RACE_REPLAY_WORLD_IDS : SESSION_WORLD_IDS;
       try {
         if (SKIPPED_TYPES.has(m.type)) {
           skippedTypes.add(m.type);
