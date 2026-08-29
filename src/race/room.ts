@@ -351,8 +351,8 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
   room.challengeLevelData = race.levelData;
   room.challengeTierSeconds = 0;
   room.failedScoreFix = race.failedScoreFix ?? 0;
-  // 换赛道：卸载旧赛道专属对象 + 加载新赛道对象（世界不变，仍是本房间 worldId）
-  unloadRaceOnlyObjects(room.raceId);
+  // 换赛道：卸载旧赛道专属对象（按本房间世界）+ 加载新赛道对象（世界不变）
+  unloadRaceOnlyObjects(room.worldId);
   await loadRaceOnlyObjects(race.id, room.worldId);
   // 重置 WAITING 超时基准（对齐 restartRace）：换赛道后若房间已临近 10 分钟
   // 等待上限，不清 createdAt 会被 tickRooms 立即解散
@@ -1391,7 +1391,7 @@ function endRoom(room: RaceRoom): void {
   cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
   room.members.clear();
   // 房间销毁：卸载该赛道的专属对象（世界 id 即将回收复用，对象必须销毁）
-  unloadRaceOnlyObjects(room.raceId);
+  unloadRaceOnlyObjects(room.worldId);
   freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id（供后续房间复用）
   rooms.delete(room.id);
 }
@@ -1500,7 +1500,7 @@ function tickRooms(): void {
       destroyRaceTds(room);
       cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
       room.members.clear();
-      unloadRaceOnlyObjects(room.raceId); // 解散：卸载该赛道专属对象
+      unloadRaceOnlyObjects(room.worldId); // 解散：卸载该赛道专属对象
       freeRaceWorld(room.worldId); // 房间销毁：回收独立世界 id
       rooms.delete(room.id);
       continue;

@@ -1752,7 +1752,7 @@ export function stopReplaySession(playerId: number): void {
   // 独立世界（比赛回放）的会话：会话销毁后世界无人使用 → 回收世界 id 供复用。
   // 先卸载该赛道的专属对象（世界 id 回收复用前必须销毁）
   if (session.replayType === "race") {
-    if (session.raceId) unloadRaceOnlyObjects(session.raceId);
+    unloadRaceOnlyObjects(session.worldId);
     freeReplayWorld(session.worldId);
   }
   // 取消进行中的开场倒计时动画（owner + watchers 的 TD/句柄一并清；watchers 用

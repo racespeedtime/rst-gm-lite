@@ -186,7 +186,7 @@ export function cleanupChallenge(playerId: number): void {
   }
   // 挑战独立世界已无人使用 → 回收世界 id 供复用
   // 卸载该赛道的专属对象（世界 id 回收复用前必须销毁，防对象残留/碰撞泄漏）
-  if (ch.raceId) unloadRaceOnlyObjects(ch.raceId);
+  unloadRaceOnlyObjects(ch.worldId);
   freeReplayWorld(ch.worldId);
 }
 

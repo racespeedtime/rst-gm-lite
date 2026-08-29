@@ -528,37 +528,47 @@ export function unloadAllHouseObjects(): void {
 // ---------------------------------------------------------------------------
 // 赛道专属对象动态加载（raceOnly=true 的 house：只在游玩对应赛道/挑战/回放时
 // 加载到该次分配的世界，其他时间不显示——避免不同赛道的对象在别的赛道重叠出现）
+//
+// 按 worldId 键控而非 raceId：同一赛道可被多个房间/战局同时游玩（每个房间分配
+// 独立 worldId 1001..2000），各房间的对象实体互相独立——A 房间销毁不影响 B
+// 房间；同赛道在两个房间各自加载一份到各自世界。worldId 由 allocRaceWorld/
+// allocReplayWorld 分配且唯一（房间/回放销毁后回收），一个 worldId 至多一份。
 // ---------------------------------------------------------------------------
 
-/** raceId -> 已加载的动态赛道对象（含碰撞注册引用，销毁时一并注销） */
-const loadedRaceOnly = new Map<string, { obj: DynamicObject; collision: unknown }[]>();
+interface RaceOnlyLoaded {
+  raceId: string;
+  items: { obj: DynamicObject; collision: unknown }[];
+}
 
-/** 卸载指定赛道的动态对象（房间销毁/挑战退出/回放停止时调用） */
-export function unloadRaceOnlyObjects(raceId: string): void {
-  const items = loadedRaceOnly.get(raceId);
-  if (!items) return;
-  for (const it of items) {
+/** worldId -> 该世界已加载的动态赛道对象（含碰撞注册引用，销毁时一并注销） */
+const loadedRaceOnly = new Map<number, RaceOnlyLoaded>();
+
+/** 卸载指定世界的动态赛道对象（房间销毁/挑战退出/回放停止/换赛道时调用） */
+export function unloadRaceOnlyObjects(worldId: number): void {
+  const entry = loadedRaceOnly.get(worldId);
+  if (!entry) return;
+  for (const it of entry.items) {
     if (it.obj.isValid()) it.obj.destroy();
     if (it.collision) unregisterObjectCollision(it.collision as never);
   }
-  loadedRaceOnly.delete(raceId);
+  loadedRaceOnly.delete(worldId);
 }
 
 /** 卸载全部动态赛道对象（GameMode 退出） */
 export function unloadAllRaceOnlyObjects(): void {
-  for (const raceId of [...loadedRaceOnly.keys()]) {
-    unloadRaceOnlyObjects(raceId);
+  for (const worldId of [...loadedRaceOnly.keys()]) {
+    unloadRaceOnlyObjects(worldId);
   }
 }
 
 /**
  * 加载指定赛道的专属对象到指定世界（比赛房间 worldId / 挑战回放世界）。
- * 幂等：同 raceId 已加载则不重复创建（换世界需先 unload）。
+ * 按 worldId 幂等：该世界已加载则不重复创建（换赛道先 unload 再 load）。
  * 只处理该赛道关联的 house（race.houseId）且 raceOnly=true 的 obj 行；
  * 返回是否加载了任何对象（调用方据此决定是否需要在销毁时卸载）。
  */
 export async function loadRaceOnlyObjects(raceId: string, worldId: number): Promise<boolean> {
-  if (loadedRaceOnly.has(raceId)) return true; // 已加载
+  if (loadedRaceOnly.has(worldId)) return true; // 该世界已加载
   // 查该赛道关联的 raceOnly house（race.houseId 唯一关联）
   const race = await prisma.race.findUnique({
     where: { id: raceId },
@@ -609,7 +619,7 @@ export async function loadRaceOnlyObjects(raceId: string, worldId: number): Prom
     }
   }
   if (items.length) {
-    loadedRaceOnly.set(raceId, items);
+    loadedRaceOnly.set(worldId, { raceId, items });
     return true;
   }
   return false;
