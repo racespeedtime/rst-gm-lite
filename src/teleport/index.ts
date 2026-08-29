@@ -465,6 +465,11 @@ export function initTeleport(): void {
 
   // /telemenu 系统传送点列表（分页选择传送）——对齐原版 /telemenu
   PlayerEvent.onCommandText("telemenu", ({ player, next }) => {
+    // 弹窗锁定期禁止打开传送列表（防替换面板对话框导致锁泄漏，对齐 /p 守卫）
+    if (isPlayerLocked(player.id)) {
+      sysMsg(player, "tp", "当前正在其他流程中，请稍后再试", "info");
+      return next();
+    }
     void listSystemTeleports(player);
     return next();
   });

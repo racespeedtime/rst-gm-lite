@@ -274,9 +274,19 @@ export function initSpawnSystem(): void {
   // 提前更新可避免，且重生位置/皮肤直接正确（onSpawn 的 respawnBySetting
   // 仍兜底 setPos，防预计算失败/中途改设置）。
   // 比赛中/编辑模式的重生由各自系统处理（比赛 onDeath 已 setSpawnInfo + spawn）。
+  // 挑战/回放世界（>= REPLAY_WORLD_BASE）同样跳过：这些世界的死亡/自杀由挑战
+  // 系统处理，若在这里按主世界设置预计算重生位置，挑战中 /kill 会被 warp 回
+  // 主世界保存点（作弊：可预停在终点附近再自杀跳关）。respawnBySetting 已按
+  // 世界守卫（220 行），这里必须一致。
   PlayerEvent.onDeath(({ player, next }) => {
     if (player.isNpc()) return next();
-    if (isInRace(player.id) || isEditing(player.id)) return next();
+    if (
+      isInRace(player.id) ||
+      isEditing(player.id) ||
+      player.getVirtualWorld() >= REPLAY_WORLD_BASE
+    ) {
+      return next();
+    }
     void (async () => {
       const auth = getAuthState(player.id);
       if (!auth) return;
@@ -313,8 +323,16 @@ export function initSpawnSystem(): void {
     // 观战中：保持观战态，不强制重生（否则观察者被拽出观战出生；onRequestSpawn
     // 闸门只拦 RequestSpawn，拦不住服务器侧 player.spawn()）
     if (player.isSpectating()) return false;
-    // 比赛/编辑中的重生由各自系统处理（比赛回上一 CP / 编辑器状态），不干预
-    if (isInRace(player.id) || isEditing(player.id)) return next();
+    // 比赛/编辑中的重生由各自系统处理（比赛回上一 CP / 编辑器状态），不干预；
+    // 挑战/回放世界（>= REPLAY_WORLD_BASE）同样跳过（挑战系统自行处理重生，
+    // 防 /kill 被强制 spawn 到主世界定位点）
+    if (
+      isInRace(player.id) ||
+      isEditing(player.id) ||
+      player.getVirtualWorld() >= REPLAY_WORLD_BASE
+    ) {
+      return next();
+    }
     player.spawn();
     return false;
   });
@@ -342,9 +360,14 @@ export function initSpawnSystem(): void {
       // 预计算续体可能慢于这次 onSpawn（DB 缓存 miss/随机点首查库）：陈旧条目
       // 会被**之后的**任意 onSpawn 误消费——含比赛中 /kill 重生（比赛 onDeath 已
       // setSpawnInfo + spawn）和编辑模式重生，会把玩家拽回上一次死亡点。比赛/
-      // 编辑的重生由各自系统处理，这里不消费（与 respawnBySetting 门禁同口径）
-      if (isInRace(player.id) || isEditing(player.id)) {
-        // 比赛/编辑重生由各自系统定位，消费并清除防赛后残留误消费
+      // 编辑/挑战世界的重生由各自系统处理，这里不消费（与 respawnBySetting 门禁
+      // 同口径；挑战世界守卫防 /kill warp 作弊）
+      if (
+        isInRace(player.id) ||
+        isEditing(player.id) ||
+        player.getVirtualWorld() >= REPLAY_WORLD_BASE
+      ) {
+        // 消费并清除防赛后残留误消费
         pendingSpawnPos.delete(player.id);
         return next();
       }

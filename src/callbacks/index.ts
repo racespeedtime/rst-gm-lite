@@ -150,7 +150,13 @@ async function handlePlayerConnect(player: Player) {
       }
       return;
     }
-    // 进入游戏世界（默认公共大世界）+ 初始化聊天范围（默认跟随战局）
+    // 进入游戏世界（默认公共大世界）+ 初始化聊天范围（默认跟随战局）。
+    // 上面 getSetting/applyPlayerStyle 等 await 期间玩家可能已断线——断线清理
+    // 已跑（移除会话/认证），若续体仍注册会把死连接塞进 publicWorld.members 成
+    // 幽灵成员（每次广播遍历到死句柄）。此处必须再校验连接
+    if (!player.isConnected()) {
+      return;
+    }
     sessionManager.onPlayerAuthenticated(player);
     initChatState(player.id);
     // 按玩家设置应用世界环境（时间/天气跟随或固定）

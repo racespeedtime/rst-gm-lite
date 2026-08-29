@@ -10,6 +10,7 @@ import { cleanupScriptVehicle } from "./scripts";
 import { isInRace } from "./state";
 import { UUID_RE } from "./state";
 import { sysMsg } from "@/utils/msg";
+import { containsSensitiveWord } from "@/utils/sensitive";
 import {
   parseLevelData,
   formatLevelData,
@@ -818,6 +819,14 @@ async function editRaceInfo(player: Player): Promise<void> {
   const name = res.inputText.trim();
   if (!name) {
     sysMsg(player, "race", "名称不能为空", "error");
+    return;
+  }
+  if (containsSensitiveWord(name)) {
+    sysMsg(player, "race", "赛道名称包含敏感内容，请更换", "error");
+    return;
+  }
+  if (name.length > 32) {
+    sysMsg(player, "race", "赛道名称最多 32 个字符", "error");
     return;
   }
   await prisma.race.update({ where: { id: race.id }, data: { name } });

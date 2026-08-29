@@ -29,6 +29,8 @@ import { showDialog } from "@/utils/dialog";
 import { showPagedDialog } from "@/utils/pagedDialog";
 import { pickOption } from "@/personalize/settings";
 import { isInChallenge, exitChallenge } from "@/replay/challenge";
+import { isPlayerLocked } from "@/core/interaction";
+import { containsSensitiveWord } from "@/utils/sensitive";
 import { openRaceDetailPanel } from "./manage";
 import { sysMsg } from "@/utils/msg";
 
@@ -254,7 +256,11 @@ function joinRoomFlow(player: Player): void {
     return;
   }
   void joinRoom(player, room).then(() => {
-    broadcastToRoom(room, `${player.getName().name} 加入了比赛`);
+    // joinRoom 中途可能因断线/校验中止（未真正入房）——此时不应广播加入消息
+    const pr = getRacePlayerState(player.id);
+    if (pr && getRaceRoom(pr.roomId) === room) {
+      broadcastToRoom(room, `${player.getName().name} 加入了比赛`);
+    }
   });
 }
 
@@ -281,6 +287,15 @@ async function showRaceInfo(player: Player, query: string): Promise<void> {
 async function createRaceByCommand(player: Player, name: string): Promise<void> {
   const auth = getAuthState(player.id);
   if (!auth) return;
+  // 敏感词 + 长度上限（对齐聊天/车牌防线；赛道名广播全房间/显示排行榜）
+  if (containsSensitiveWord(name)) {
+    sysMsg(player, "race", "赛道名称包含敏感内容，请更换", "error");
+    return;
+  }
+  if (name.length > 32) {
+    sysMsg(player, "race", "赛道名称最多 32 个字符", "error");
+    return;
+  }
   const dup = await prisma.race.findFirst({ where: { name } });
   if (dup) {
     sysMsg(player, "race", `赛道「${name}」已存在`, "error");
@@ -428,6 +443,12 @@ async function handleRaceEditCommand(player: Player, rest: string[]): Promise<vo
 /** 注册 /r(race) 命令（与比赛状态机分离：命令入口 + 对话框层） */
 export function initRaceUi(): void {
   PlayerEvent.onCommandText(["r", "race"], ({ player, subcommand, next }) => {
+    // 弹窗锁定期（面板/其它对话框打开中）禁止 /r——否则新对话框替换面板对话框，
+    // 面板的 await 永不 resolve，lockedPlayers 条目泄漏（对齐 /p /sz 的守卫）
+    if (isPlayerLocked(player.id)) {
+      sysMsg(player, "race", "当前正在其他流程中，请稍后再试", "info");
+      return next();
+    }
     const cmd = subcommand[0];
     const rest = subcommand.slice(1);
     const query = rest.join(" ");

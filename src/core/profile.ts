@@ -165,8 +165,15 @@ async function showProfileByName(player: Player, username: string): Promise<bool
   return true;
 }
 
-/** 玩家列表排序（会话内记忆：详情返回时保持同排序 + 同页） */
+/** 玩家列表排序（会话内记忆：详情返回时保持同排序 + 同页）。
+ *  按 playerId 键控：断线必须清理，否则 playerId 复用后新玩家继承旧排序 */
 const playerListSortMem = new Map<number, number>();
+
+// 断线清理排序记忆（对齐 pagedDialog 的 pageMem 模式，防 playerId 复用残留）
+PlayerEvent.onDisconnect(({ player, next }) => {
+  playerListSortMem.delete(player.id);
+  return next();
+});
 
 /**
  * 分页列出全部玩家（含离线），选中查看信息。
@@ -426,6 +433,11 @@ export function initPlayerInfo(): void {
   // /info 查看任意玩家信息（不要求在线，不限于点击在线玩家）：
   // /info 无参 → 列出全部玩家分页（在线优先）；/info 名字 → 按用户名直接查
   PlayerEvent.onCommandText("info", ({ player, subcommand, next }) => {
+    // 弹窗锁定期禁止打开信息列表（防替换面板对话框导致锁泄漏，对齐 /p 守卫）
+    if (isPlayerLocked(player.id)) {
+      sysMsg(player, "system", "当前正在其他流程中，请稍后再试", "info");
+      return next();
+    }
     const arg = subcommand[0];
     if (arg) {
       void showProfileByName(player, arg.trim());

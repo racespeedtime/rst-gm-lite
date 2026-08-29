@@ -18,6 +18,7 @@ import { setTimeoutSafe } from "@/core/timers";
 import { DEFAULT_CHARSET } from "@/utils/constants";
 import { PUBLIC_WORLD_ID } from "@/sessions/session";
 import { RACE_WORLD_BASE } from "@/race/room";
+import { isPlayerLocked } from "@/core/interaction";
 /**
  * 房屋物件可见世界区间（按数组传，streamer 支持）：
  * - 普通房屋（不关联赛车/传送点）：公共大世界 0 + 战局 1..1000——赛道（1001..2000）
@@ -507,6 +508,11 @@ export function unloadAllHouseObjects(): void {
 export function initHouseCommands(): void {
   PlayerEvent.onCommandText("house", async ({ player, subcommand, next }) => {
     const cmd = subcommand[0];
+    // 弹窗锁定期禁止打开房屋列表（防替换面板对话框导致锁泄漏，对齐 /p 守卫）
+    if (isPlayerLocked(player.id)) {
+      sysMsg(player, "house", "当前正在其他流程中，请稍后再试", "info");
+      return next();
+    }
     if (cmd === "list") {
       await houseList(player);
     } else if (cmd === "goto") {

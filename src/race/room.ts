@@ -699,13 +699,16 @@ async function pickChallengeLevel(
     }
   }
   options.push({ label: "无挑战（不限时）", seconds: -1 });
+  // header 行（前 3 行）必须单行不 wrap：SA 客户端对超宽行折行会破坏
+  // listItem - 3 的映射。summary 过长截断（等级摘要最坏 5 档全设）
+  const summarySafe = summary.length > 24 ? `${summary.slice(0, 24)}…` : summary;
   const res = await showDialog(
     player,
     new Dialog({
       style: DialogStylesEnum.LIST,
       caption: "选择挑战等级",
       info: [
-        `赛道等级: ${summary}`,
+        `赛道等级: ${summarySafe}`,
         `失败扣分: ${room.failedScoreFix !== 0 ? `${room.failedScoreFix} 分` : "无"}`,
         "本场全员限时挑战（超时未完赛者完成时扣分展示）：",
         ...options.map((o, i) => `${i + 1}. ${o.label}`),
@@ -1415,6 +1418,10 @@ export function leaveRace(player: Player): void {
       const next = [...room.members.keys()][0];
       if (next != null) {
         room.ownerId = next;
+        // 同步 ownerUserId（对齐 reconnect.ts 断线转移）：新房主断线重连是全新
+        // playerId，tryReconnectRace 靠 ownerUserId 匹配恢复房主——不同步则
+        // 新房主重连后无法开始/重开/换赛道，房间卡死到超时解散
+        room.ownerUserId = getAuthState(next)?.userId ?? "";
         const np = Player.getInstance(next);
         broadcastToRoom(room, `房主已离开，${np?.getName().name ?? next} 成为新房主`);
       }
@@ -1682,7 +1689,7 @@ export function initRaceSystem(): void {
   }, true); // unshift 优先执行（在限频之前，避免双提示）
 
   // /kill 重生（原版比赛中允许）
-  PlayerEvent.onCommandText("kill", ({ player, next }) => {
+  PlayerEvent.onCommandText("kill", async ({ player, next }) => {
     if (player.isWasted()) {
       sysMsg(player, "system", "生命值为空，请等待重生", "plain");
       return next();
@@ -1699,8 +1706,16 @@ export function initRaceSystem(): void {
       respawnToLastCp(player, pr!, room);
       return next();
     }
-    // 在比赛房间但未开跑（WAITING/COUNTDOWN）：没有比赛进度，正常重生而非自杀
-    sysMsg(player, "race", "比赛尚未开始，已正常重生", "info");
+    // 在比赛房间但未开跑（WAITING/COUNTDOWN）：没有比赛进度，正常重生。
+    // 不能直接 player.spawn()——加入房间后 spawnInfo 仍是主世界的（旧位置/随机
+    // 点），spawn 会重生到主世界坐标而虚拟世界还在房间世界（玩家被传去地图另一
+    // 端）。定位回起点（第一 CP）再重生
+    if (room) {
+      sysMsg(player, "race", "比赛尚未开始，已回到起点", "info");
+      await positionPlayerAtStart(player, room);
+    } else {
+      sysMsg(player, "race", "比赛尚未开始，已正常重生", "info");
+    }
     player.spawn();
     return next();
   });

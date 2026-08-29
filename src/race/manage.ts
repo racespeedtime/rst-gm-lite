@@ -9,7 +9,9 @@ import { showPagedDialog } from "@/utils/pagedDialog";
 import { formatTime, formatDuration, formatShortDate, formatFullDate } from "@/utils/format";
 import { sysMsg } from "@/utils/msg";
 import { swapSortIndex, nextSortIndex, compactSortIndex } from "@/utils/sort";
+import { containsSensitiveWord } from "@/utils/sensitive";
 import type { MenuBack } from "@/core/panel";
+import { isPlayerLocked } from "@/core/interaction";
 import { createRaceRoom } from "./room";
 import { enterRaceEdit, canEditRace } from "./editor";
 import { startChallengeFromRace } from "@/replay/challenge";
@@ -65,6 +67,16 @@ async function createRaceFlow(player: Player, back?: MenuBack): Promise<void> {
     sysMsg(player, "race", "赛道名称不能为空", "error");
     return back?.();
   }
+  // 敏感词 + 长度上限：赛道名会广播到全房间/显示在排行榜，必须过滤（对齐
+  // 聊天/车牌/传送点名防线）。上限 32 字符（详情面板单行安全宽度）
+  if (containsSensitiveWord(name)) {
+    sysMsg(player, "race", "赛道名称包含敏感内容，请更换", "error");
+    return back?.();
+  }
+  if (name.length > 32) {
+    sysMsg(player, "race", "赛道名称最多 32 个字符", "error");
+    return back?.();
+  }
   const descRes = await showDialog(
     player,
     new Dialog({
@@ -77,11 +89,16 @@ async function createRaceFlow(player: Player, back?: MenuBack): Promise<void> {
   );
   if (!descRes) return;
   if (descRes.response !== 1) return back?.();
+  const description = descRes.inputText.trim();
+  if (description && containsSensitiveWord(description)) {
+    sysMsg(player, "race", "赛道描述包含敏感内容，请更换", "error");
+    return back?.();
+  }
   try {
     const race = await prisma.race.create({
       data: {
         name,
-        description: descRes.inputText.trim() || null,
+        description: description || null,
         isEnabled: true,
         userId: auth.userId,
       },
@@ -208,8 +225,10 @@ export async function openRaceDetailPanel(
   const authorSafe = author.length > 12 ? `${author.slice(0, 12)}…` : author;
   const desc = race.description?.trim();
   const descSafe = desc ? (desc.length > 28 ? `${desc.slice(0, 28)}…` : desc) : undefined;
-  // 挑战等级摘要（level_data 已设置才显示）
+  // 挑战等级摘要（level_data 已设置才显示；单行截断防 wrap 破坏 INFO_LINES 偏移）
   const levelSummary = formatLevelSummary(parseLevelData(race.levelData));
+  const levelSafe =
+    levelSummary && levelSummary.length > 24 ? `${levelSummary.slice(0, 24)}…` : levelSummary;
   const headerLines = [
     `{FFD700}${name}`,
     `长度 ${Math.round(Number(race.totalLength))}m · ${race.laps ?? 1} 圈`,
@@ -220,7 +239,7 @@ export async function openRaceDetailPanel(
     `检查点 ${cpCount} 个`,
     ...(descSafe ? [`描述 ${descSafe}`] : []),
     // 挑战等级（level_data）+ 失败扣分（failed_score_fix）展示
-    ...(levelSummary ? [`挑战 ${levelSummary}`] : []),
+    ...(levelSafe ? [`挑战 ${levelSafe}`] : []),
     ...(race.failedScoreFix !== 0 ? [`失败扣分 ${race.failedScoreFix} 分`] : []),
     `{808080}──────────────`,
   ];
@@ -769,6 +788,11 @@ async function adminRaceFlow(player: Player, back?: MenuBack): Promise<void> {
 /** 初始化命令（命令为辅）：/r 相关已由 room 注册，这里补充 /race 别名已在 room */
 export function initRaceCommands(): void {
   PlayerEvent.onCommandText("races", ({ player, next }) => {
+    // 弹窗锁定期禁止打开赛道菜单（防替换面板对话框导致锁泄漏，对齐 /p 守卫）
+    if (isPlayerLocked(player.id)) {
+      sysMsg(player, "race", "当前正在其他流程中，请稍后再试", "info");
+      return next();
+    }
     void openRaceMenu(player);
     return next();
   });
