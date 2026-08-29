@@ -27,9 +27,10 @@ import { isPlayerLocked } from "@/core/interaction";
 /**
  * 房屋物件可见世界区间（按数组传，streamer 支持）：
  * - 普通房屋（不关联赛车）：公共大世界 0 + 战局 1..1000——赛道/回放世界看不到
- * - 关联赛道的房屋（House.race，含 5F 导入的赛道场景对象）：赛道世界
- *   1001..2000 + 回放/挑战世界 2001..2100 可见（赛道场景只在比赛/回放/挑战时
- *   出现），公共大世界与战局不可见——避免赛道物件堆在地图上
+ * - 关联赛道的普通房屋（raceOnly=false，原版"房屋+赛道"语义）：公共大世界 +
+ *   战局 + 赛道世界 + 回放/挑战世界全可见（房屋场景常驻，比赛/回放时也可见）
+ * - 赛道专属对象（raceOnly=true，如 5F 空中赛道/护栏）：不静态加载，由
+ *   比赛/挑战/回放动态加载到对应世界（玩该赛道才显示）
  * - 关联传送点的房屋：传送点都在战局世界使用（/house goto、//名称），战局区间
  *   已覆盖，与普通房屋一致
  */
@@ -200,10 +201,13 @@ export async function loadAllHouseObjects(attempt = 1): Promise<void> {
         continue;
       }
       // 世界区间按"是否关联赛道"判定：
-      // - 关联赛道的普通房屋（非 raceOnly）：赛道世界（1001..2000）+ 回放/挑战
-      //   世界（2001..2100）可见，公共大世界/战局不可见
+      // - 关联赛道的普通房屋（raceOnly=false）：公共大世界 + 战局 + 赛道世界 +
+      //   回放/挑战世界全可见（原版"房屋+赛道"语义：房屋场景常驻，关联赛道后
+      //   比赛/回放时也可见）
       // - 普通房屋（不关联赛道）：公共大世界 + 战局（0 + 1..1000）
-      const worldIds = m.house?.race ? RACE_REPLAY_WORLD_IDS : SESSION_WORLD_IDS;
+      const worldIds = m.house?.race
+        ? [...SESSION_WORLD_IDS, ...RACE_REPLAY_WORLD_IDS]
+        : SESSION_WORLD_IDS;
       try {
         if (SKIPPED_TYPES.has(m.type)) {
           skippedTypes.add(m.type);
