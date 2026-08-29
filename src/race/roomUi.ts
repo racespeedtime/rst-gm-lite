@@ -452,6 +452,22 @@ export function initRaceUi(): void {
       }
     } else if (cmd === "j") {
       joinRoomFlow(player);
+    } else if (cmd === "go") {
+      // /r go：房间内纯开始命令（对齐 /r s 无参数的"房主开始"分支）。
+      // 不在房间 → 明确报错（不弹列表不建房）；非房主 → 提示等待。
+      // 房主 → startRace（含挑战等级选择弹窗：本场未选则先选再倒计时）。
+      const pr = getRacePlayerState(player.id);
+      if (!pr) {
+        sysMsg(player, "race", "你不在比赛房间中，先 /r s 赛道名 创建或 /r j 加入", "warn");
+        return next();
+      }
+      const room = getRaceRoom(pr.roomId);
+      if (!room || room.ownerId !== player.id) {
+        sysMsg(player, "race", "只有房主能开始比赛", "error");
+        return next();
+      }
+      void startRace(player);
+      return next();
     } else if (cmd === "l" || cmd === "leave") {
       // 影子挑战中 /r l = 退出挑战（挑战用独立世界 2001+，玩家/命令层习惯用
       // /r l 离开当前竞技场景；退出后若想建比赛再 /r s）
@@ -487,7 +503,7 @@ export function initRaceUi(): void {
       sysMsg(
         player,
         "race",
-        "用法: /r s 赛道名称 创建比赛 · /r j 加入 · /r l 离开 · /r info 名称 · /r create 名称 · /r edit 名称|cp|q|d",
+        "用法: /r s 赛道名称 创建比赛 · /r go 房间内开始 · /r j 加入 · /r l 离开 · /r info 名称 · /r create 名称 · /r edit 名称|cp|q|d",
         "info",
       );
     }
