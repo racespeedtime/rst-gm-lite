@@ -286,8 +286,22 @@ async function editRaceLevels(player: Player): Promise<void> {
   const idx = res.listItem - 2;
   if (idx < 0 || idx >= lines.length) return;
 
-  // 清除等级
+  // 清除等级（破坏性操作：清空 levelData + failedScoreFix，二次确认防误触）
   if (idx === 6) {
+    const confirm = await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.MSGBOX,
+        caption: "清除挑战等级",
+        info: "确定清除该赛道的全部挑战等级与失败扣分吗？\n清除后赛道将无等级限制（需重新逐级设置）。",
+        button1: "确认清除",
+        button2: "取消",
+      }),
+    );
+    if (!confirm || confirm.response !== 1) {
+      sysMsg(player, "race", "已取消清除", "info");
+      return;
+    }
     await prisma.race.update({
       where: { id: race.id },
       data: { levelData: null, failedScoreFix: 0 },
