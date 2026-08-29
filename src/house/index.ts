@@ -36,6 +36,10 @@ const SESSION_RACE_WORLD_IDS: number[] = [
   ...SESSION_WORLD_IDS,
   ...Array.from({ length: 1000 }, (_, i) => i + RACE_WORLD_BASE),
 ];
+/** 赛道专用对象（raceOnly）：只在比赛世界 1001..2000 可见（5F 导入的赛道场景对象） */
+const RACE_ONLY_WORLD_IDS: number[] = [
+  ...Array.from({ length: 1000 }, (_, i) => i + RACE_WORLD_BASE),
+];
 
 /** 房屋 obj 行格式：modelId x y z rX rY rZ（可选 drawDistance） */
 interface ObjArgs {
@@ -183,9 +187,15 @@ export async function loadAllHouseObjects(attempt = 1): Promise<void> {
 
     for (const m of models) {
       const hname = houseName(m.houseId, m.house?.name ?? "?");
-      // 关联赛道的房屋：实体在比赛世界（1001..2000）也要可见（赛道实体）；
-      // 普通房屋（含关联传送点）：只在战局区间（0 + 1..1000）
-      const worldIds = m.house?.race ? SESSION_RACE_WORLD_IDS : SESSION_WORLD_IDS;
+      // 世界区间：
+      // - raceOnly（5F 赛道专用对象）：只在赛道世界 1001..2000 可见，公共大世界/
+      //   战局不显示（避免赛道场景物件堆在地图上）
+      // - 普通房屋（含关联赛道/传送点）：公共+战局（+关联赛道则含比赛世界）
+      const worldIds = m.house?.raceOnly
+        ? RACE_ONLY_WORLD_IDS
+        : m.house?.race
+          ? SESSION_RACE_WORLD_IDS
+          : SESSION_WORLD_IDS;
       try {
         if (SKIPPED_TYPES.has(m.type)) {
           skippedTypes.add(m.type);
