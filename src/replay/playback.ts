@@ -542,7 +542,10 @@ function getLapFlips(data: ReplayData): number[] {
   let prev = 0;
   for (let i = 0; i < header.frameCount; i++) {
     const cur = frames.readInt32LE(i * fb + 44);
-    if (cur < prev) flips.push(i);
+    // 只有 cur 回落到 1 才算跨圈：respawn 多格回退会把 cpProgress 倒退写进录制
+    // （如 7→4），若任何 cur<prev 都算过圈会误判圈数、终点/冲线提前。对齐
+    // challenge.ts advanceShadowLap 的 s.cpProgress === 1 守卫
+    if (cur === 1 && cur < prev) flips.push(i);
     prev = cur;
   }
   data.lapFlips = flips;

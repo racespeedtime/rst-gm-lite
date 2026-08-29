@@ -496,84 +496,92 @@ export function initPanel(): void {
  * 登录记录 / 修改密码 / 快捷操作。全部复用面板现有子菜单（无新增逻辑）。
  */
 export async function openMySettingsMenu(player: Player, back?: MenuBack): Promise<void> {
-  const again = () => openMySettingsMenu(player, back); // 子菜单返回本菜单
-  const res = await showDialog(
-    player,
-    new Dialog({
-      style: DialogStylesEnum.LIST,
-      caption: "我的设置",
-      info: [
-        "1. 我的装扮",
-        "2. 我的爱车",
-        "3. 我的称号（前缀/后缀）",
-        "4. 个性化设置",
-        "5. 我的信息",
-        "6. 我的登录记录",
-        "7. 修改密码",
-        "8. 快捷操作",
-      ].join("\n"),
-      button1: "确定",
-      button2: "关闭",
-    }),
-  );
-  if (!res || res.response !== 1) return back?.();
-  switch (res.listItem) {
-    case 0:
-      await openAttireMenu(player, again);
-      break;
-    case 1:
-      await openMyVehicleMenu(player, again);
-      break;
-    case 2:
-      await openCharacterMenu(player, again);
-      break;
-    case 3: {
-      // 个性化设置二级：人物/车辆/世界/界面/装扮/动作
-      const sub = await showDialog(
-        player,
-        new Dialog({
-          style: DialogStylesEnum.LIST,
-          caption: "个性化设置",
-          info: [
-            "1. 人物（皮肤 / NameTag / 前缀 / 预设 / 无敌）",
-            "2. 车辆（装扮 / 换色 / 修复 / 氮气 / 翻正）",
-            "3. 世界（时间 / 天气 / 物件 / 颜色 / 出生）",
-            "4. 界面（GUI / 速度表 / 特技）",
-            "5. 装扮（预设 / 挂件 / 编辑）",
-            "6. 动作（抽烟 / 跳舞 / 坐下 / 躺下…）",
-          ].join("\n"),
-          button1: "确定",
-          button2: "返回",
-        }),
-      );
-      if (!sub || sub.response !== 1) {
-        await openMySettingsMenu(player, back);
+  // 加锁（对齐 openPanel）：/sz 菜单若不锁，玩家在对话框上按 Y 会叠加打开
+  // 万能面板——SA 客户端丢弃 /sz 对话框且其 await 永不 resolve，整个 /sz 流程
+  // 泄漏、子菜单导航状态丢失
+  lockPlayer(player.id);
+  try {
+    const again = () => openMySettingsMenu(player, back); // 子菜单返回本菜单
+    const res = await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.LIST,
+        caption: "我的设置",
+        info: [
+          "1. 我的装扮",
+          "2. 我的爱车",
+          "3. 我的称号（前缀/后缀）",
+          "4. 个性化设置",
+          "5. 我的信息",
+          "6. 我的登录记录",
+          "7. 修改密码",
+          "8. 快捷操作",
+        ].join("\n"),
+        button1: "确定",
+        button2: "关闭",
+      }),
+    );
+    if (!res || res.response !== 1) return back?.();
+    switch (res.listItem) {
+      case 0:
+        await openAttireMenu(player, again);
+        break;
+      case 1:
+        await openMyVehicleMenu(player, again);
+        break;
+      case 2:
+        await openCharacterMenu(player, again);
+        break;
+      case 3: {
+        // 个性化设置二级：人物/车辆/世界/界面/装扮/动作
+        const sub = await showDialog(
+          player,
+          new Dialog({
+            style: DialogStylesEnum.LIST,
+            caption: "个性化设置",
+            info: [
+              "1. 人物（皮肤 / NameTag / 前缀 / 预设 / 无敌）",
+              "2. 车辆（装扮 / 换色 / 修复 / 氮气 / 翻正）",
+              "3. 世界（时间 / 天气 / 物件 / 颜色 / 出生）",
+              "4. 界面（GUI / 速度表 / 特技）",
+              "5. 装扮（预设 / 挂件 / 编辑）",
+              "6. 动作（抽烟 / 跳舞 / 坐下 / 躺下…）",
+            ].join("\n"),
+            button1: "确定",
+            button2: "返回",
+          }),
+        );
+        if (!sub || sub.response !== 1) {
+          await openMySettingsMenu(player, back);
+          break;
+        }
+        const subs = [
+          () => openCharacterMenu(player, again),
+          () => openVehicleMenu(player, again),
+          () => openWorldMenu(player, again),
+          () => openInterfaceMenu(player, again),
+          () => openAttireMenu(player, again),
+          () => openActionMenu(player, again),
+        ];
+        await subs[sub.listItem]?.();
         break;
       }
-      const subs = [
-        () => openCharacterMenu(player, again),
-        () => openVehicleMenu(player, again),
-        () => openWorldMenu(player, again),
-        () => openInterfaceMenu(player, again),
-        () => openAttireMenu(player, again),
-        () => openActionMenu(player, again),
-      ];
-      await subs[sub.listItem]?.();
-      break;
+      case 4:
+        await showMyProfile(player, again);
+        break;
+      case 5:
+        await showMySessionLogs(player, again);
+        break;
+      case 6:
+        await changeOwnPassword(player, again);
+        break;
+      case 7:
+        await openQuickActionsMenu(player, again);
+        break;
+      default:
+        await openMySettingsMenu(player, back);
     }
-    case 4:
-      await showMyProfile(player, again);
-      break;
-    case 5:
-      await showMySessionLogs(player, again);
-      break;
-    case 6:
-      await changeOwnPassword(player, again);
-      break;
-    case 7:
-      await openQuickActionsMenu(player, again);
-      break;
-    default:
-      await openMySettingsMenu(player, back);
+  } finally {
+    unlockPlayer(player.id);
   }
 }

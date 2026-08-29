@@ -359,7 +359,7 @@ async function handleRaceEditCommand(player: Player, rest: string[]): Promise<vo
     }
     const size = Number(raw);
     if (!Number.isFinite(size) || size <= 0 || size > 100) {
-      sysMsg(player, "race", "尺寸需为 0-100 的数值", "error");
+      sysMsg(player, "race", "尺寸需为 1-100 的数值", "error");
       return;
     }
     setEditCpSize(player.id, size);

@@ -115,9 +115,9 @@ export function initChat(): void {
       return false;
     }
     if (range === "public") {
-      // 全局：发给所有在线玩家（含自己），NPC 除外
+      // 全局：发给所有已认证在线玩家（含自己），NPC 与未认证（登录框）除外
       for (const p of Player.getInstances()) {
-        if (!p.isNpc()) {
+        if (!p.isNpc() && getAuthState(p.id)) {
           p.sendClientMessage(PUBLIC_CHAT_COLOR, `[全局] ${name}: ${safeText}`);
         }
       }

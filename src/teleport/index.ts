@@ -241,6 +241,9 @@ export async function fallbackTeleport(player: Player, rawCommand: string): Prom
   const isUserTele = rawCommand.startsWith("//");
   const teleName = rawCommand.replace(/^\/+/, "");
   if (!teleName) return false;
+  // 流程守卫：未认证（登录框）/ 弹窗锁定期 / NPC 一律不放行——该路径是兜底命令
+  // 入口，其他传送入口（/tpa、面板）都校验了 auth + isPlayerLocked，这里必须一致
+  if (!getAuthState(player.id) || isPlayerLocked(player.id) || player.isNpc()) return false;
   // 比赛中禁止传送
   if (isInRace(player.id)) {
     sysMsg(player, "tp", "比赛中不能传送", "warn");

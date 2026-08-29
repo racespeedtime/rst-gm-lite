@@ -69,17 +69,17 @@ export function formatLevelData(tiers: Tier[]): string {
 }
 
 /**
- * 校验等级顺序：已设置的档位秒数必须严格递增（渣 < 菜 < 人 < 鬼 < 神），
+ * 校验等级顺序：已设置的档位秒数必须严格递减（渣 > 菜 > 人 > 鬼 > 神），
  * 即时间越短等级越高。乱配（如神比渣还慢）会让 tierForTime 判定崩坏。
  * 返回 null = 合法；否则返回出错的中文描述（含冲突的两档）。
  */
 export function validateTierOrder(tiers: Tier[] | null): string | null {
   if (!tiers) return null;
-  let prev: number | null = null; // 上一个已设置档的秒数（从渣→神扫，秒数应递增）
+  let prev: number | null = null; // 上一个已设置档的秒数（从渣→神扫，秒数应递减）
   for (let i = 0; i < TIER_LABELS.length; i++) {
     const t = tiers[i];
     if (!isTierSet(t)) continue;
-    if (prev != null && t.seconds <= prev) {
+    if (prev != null && t.seconds >= prev) {
       return `${TIER_LABELS[i]}（${Math.round(t.seconds)}s）需快于 ${TIER_LABELS[i - 1]}（${Math.round(prev)}s）`;
     }
     prev = t.seconds;

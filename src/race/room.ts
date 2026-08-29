@@ -21,7 +21,7 @@ import {
   KMH_UNIT,
   type CpScriptContext,
 } from "./scripts";
-import { isEditing } from "./editor";
+import { isEditing, exitEdit } from "./editor";
 import { cleanupAttireEditing } from "@/attire";
 import {
   applyRaceNoCollision,
@@ -348,6 +348,9 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
   room.challengeLevelData = race.levelData;
   room.challengeTierSeconds = 0;
   room.failedScoreFix = race.failedScoreFix ?? 0;
+  // 重置 WAITING 超时基准（对齐 restartRace）：换赛道后若房间已临近 10 分钟
+  // 等待上限，不清 createdAt 会被 tickRooms 立即解散
+  room.createdAt = Date.now();
   // 重定位所有成员：进度重置 + 起点 + TD 刷新 + CP 箭头重建
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
@@ -480,6 +483,12 @@ export async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   if (isInRace(player.id)) {
     leaveRace(player);
   }
+  // 赛道编辑中进比赛：编辑器脚本车/CP 状态与比赛冲突，且 onPlayerReachCp 对
+  // isEditing 玩家跳过——不退出编辑会卡在第一 CP 无法推进。createRaceRoom 直接
+  // 拦截，joinRoom（/r j）在这里主动退出编辑（对齐"进比赛清理活动状态"语义）
+  if (isEditing(player.id)) {
+    exitEdit(player.id);
+  }
   // 进比赛：停止玩家正在播放的回放 + 影子挑战（比赛中 /rp 被白名单拦截无法
   // 主动停，挑战世界与比赛世界隔离——不清理会留下挂机 ghost）
   stopReplayForPlayer(player.id);
@@ -496,6 +505,10 @@ export async function joinRoom(player: Player, room: RaceRoom): Promise<void> {
   // 必须 await：玩家"进→立即退出"时，leaveRace 的恢复会抢在快照写入前执行，
   // 快照丢失则无法延续进度（恢复从当前时间续而非进赛道前的进度）
   await snapshotPersonalTime(player);
+  // await 期间可能断线（snapshotPersonalTime 内部 await getSetting）——断线玩家的
+  // cleanupRacePlayer 已跑（此时还没注册，无操作），若继续注册会成 zombie 成员
+  //（tickRooms 每 200ms 对其 getPos、finish/endRoom 计为未完成者）
+  if (!player.isConnected()) return;
   room.members.set(player.id, player);
   room.raceMembersLast.set(player.id, getAuthState(player.id)?.userId ?? ""); // 登记本场录制成员（房间销毁作废用，userId 供离线作废）
   playerRaces.set(player.id, {
@@ -702,7 +715,8 @@ async function pickChallengeLevel(
     }),
   );
   if (!res || res.response !== 1) return false;
-  const idx = res.listItem;
+  // info 前 3 行为 header（等级摘要/失败扣分/说明），listItem 是渲染行号需偏移
+  const idx = res.listItem - 3;
   if (idx < 0 || idx >= options.length) return false;
   // await 弹窗期间房间可能已被销毁/房主掉线——写前校验房间仍存在
   if (rooms.get(room.id) !== room) return false;

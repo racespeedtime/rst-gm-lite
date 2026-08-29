@@ -282,7 +282,8 @@ async function editRaceLevels(player: Player): Promise<void> {
     }),
   );
   if (!res || res.response !== 1) return;
-  const idx = res.listItem;
+  // info 前 2 行为 header（当前摘要/选择提示），listItem 是渲染行号需偏移
+  const idx = res.listItem - 2;
   if (idx < 0 || idx >= lines.length) return;
 
   // 清除等级
@@ -341,8 +342,9 @@ async function editRaceLevels(player: Player): Promise<void> {
   }
   const sec = Number(parts[0]);
   const score = Number(parts[1]);
-  if (!Number.isInteger(sec) || !Number.isInteger(score) || sec <= 0 || score < 0) {
-    sysMsg(player, "race", "秒数为正整数、分数为非负整数", "error");
+  // score 必须 >0：isTierSet 要求 score>0 才算有效档，score=0 会静默"存了但忽略"
+  if (!Number.isInteger(sec) || !Number.isInteger(score) || sec <= 0 || score <= 0) {
+    sysMsg(player, "race", "秒数与分数均为正整数", "error");
     return;
   }
   // 当前等级数据（未设置 → 全 0），更新目标档

@@ -10,6 +10,24 @@ const NAV_NEXT = -2;
 const NAV_JUMP = -3;
 
 /**
+ * 行长度保护：SA 对话框单行约 128 字节（中文双宽更短），超长行会被客户端
+ * wrap 成两行渲染，导致后续 listItem 偏移（点"下一页"命中的数据行错位）。
+ * 对数据行统一截断（表头/导航行都很短，不受影响）。按字节截断避免切碎 UTF-8。
+ */
+function clampLine(text: string, maxBytes = 110): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  let bytes = 0;
+  let out = "";
+  for (const ch of text) {
+    const len = Buffer.byteLength(ch, "utf8");
+    if (bytes + len > maxBytes) break;
+    bytes += len;
+    out += ch;
+  }
+  return `${out}…`;
+}
+
+/**
  * 分页页码内存缓存（不落库）：playerId → cacheKey → 上次停留页（0 起）。
  * 同一列表（cacheKey）再次打开时回到上次页；数据变化导致页数减少时
  * clamp 回退（可能到第一页）。断线清理该玩家条目（防 playerId 复用残留）。
@@ -120,7 +138,7 @@ export async function showPagedDialog<T>(
     }
     for (let i = 0; i < pageItems.length; i++) {
       const text = format(pageItems[i], start + i);
-      lines.push(Array.isArray(text) ? text.join("\t") : text);
+      lines.push(clampLine(Array.isArray(text) ? text.join("\t") : text));
       nav.set(row++, start + i);
     }
     // 多列：上一页/下一页统一放底部；单列：上一页已在顶部，底部只放下一页

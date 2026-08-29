@@ -173,13 +173,15 @@ export async function runAuthFlow(player: Player): Promise<AuthState | null> {
     // 认证期间可能掉线：hasSuperAdminRole 是 await，此窗口内断线时
     // closePlayerSession 已按 pending 兜底关闭会话并清 pendingSessions——若
     // 仍登记会留下幽灵条目（会话已 OFFLINE 却留在 authStates：心跳持续刷新
-    // lastHeartbeatAt、DB 会话永 ONLINE；playerId 复用后 findOnline 误踢新连接）
+    // lastHeartbeatAt、DB 会话永 ONLINE；playerId 复用后 findOnline 误踢新连接）。
+    // isConnected 检查必须在 hasSuperAdminRole 的 await 之后（断线窗口内）
+    const isSuperAdmin = await hasSuperAdminRole(user.id);
     if (!player.isConnected()) return null;
     const auth: AuthState = {
       userId: user.id,
       username: name,
       sessionId,
-      isSuperAdmin: await hasSuperAdminRole(user.id),
+      isSuperAdmin,
     };
     authStates.set(player.id, auth);
     return auth;

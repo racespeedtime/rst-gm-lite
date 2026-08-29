@@ -65,16 +65,21 @@ export class SessionManager {
     return getAuthState(player.id)?.userId ?? "";
   }
 
-  /** 懒加载出生点 */
+  /** 懒加载出生点（查库失败回退空数组——teleportTo 对空数组走默认位置，防
+   *  会话切换/登录流程因 DB 抖动整链崩溃踢人，对齐 core/spawn.ts 的缓存防御） */
   private async loadSpawnPoints(): Promise<{ x: number; y: number; z: number; angle: number }[]> {
     if (!this.spawnPoints) {
-      const rows = await prisma.spawnPoint.findMany({ orderBy: { index: "asc" } });
-      this.spawnPoints = rows.map((r) => ({
-        x: Number(r.x),
-        y: Number(r.y),
-        z: Number(r.z),
-        angle: Number(r.angle),
-      }));
+      try {
+        const rows = await prisma.spawnPoint.findMany({ orderBy: { index: "asc" } });
+        this.spawnPoints = rows.map((r) => ({
+          x: Number(r.x),
+          y: Number(r.y),
+          z: Number(r.z),
+          angle: Number(r.angle),
+        }));
+      } catch {
+        this.spawnPoints = [];
+      }
     }
     return this.spawnPoints;
   }

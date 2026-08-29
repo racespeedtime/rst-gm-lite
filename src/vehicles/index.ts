@@ -114,8 +114,10 @@ export async function getOrCreateUserVehicle(
 ): Promise<{ uv: UserVehicleModel; colors: [number, number] }> {
   const auth = getAuthState(player.id);
   const pos = player.getPos();
+  // 上车瞬间 isInAnyVehicle 与 getVehicle 之间有空窗（getVehicle 可能 undefined），
+  // 非空断言会让 undefined.getZAngle() 抛 TypeError——用可选链回退到朝向
   const angle = player.isInAnyVehicle()
-    ? player.getVehicle()!.getZAngle().angle
+    ? (player.getVehicle()?.getZAngle().angle ?? player.getFacingAngle().angle)
     : player.getFacingAngle().angle;
   const data = {
     userId: auth!.userId,
@@ -222,6 +224,9 @@ export async function spawnVehicle(
     return true;
   } catch (e) {
     logger.error(`[veh] ${player.getName().name} 刷车失败 ${modelId}`, e);
+    // 失败可能发生在车辆已创建/已注册之后（如预设查询抛错）——销毁已创建的车
+    // 与挂件标签，否则"刷车失败"却留一辆能开的车（自相矛盾，且占一人一车槽位）
+    destroyPlayerVehicle(player.id);
     sysMsg(player, "vehicle", "刷车失败，请稍后重试", "error");
     return false;
   }
@@ -239,7 +244,7 @@ export async function savePlayerVehiclePosition(player: Player): Promise<void> {
   const pos = veh.getPos();
   const angle = veh.getZAngle().angle;
   await prisma.userVehicle.updateMany({
-    where: { userId: auth.userId, modelId },
+    where: { userId: auth.userId, modelId, deletedAt: null },
     data: { x: pos.x, y: pos.y, z: pos.z, angle },
   });
 }
@@ -304,7 +309,7 @@ export async function summonMyVehicle(player: Player): Promise<void> {
   }
   const pos = player.getPos();
   const angle = player.isInAnyVehicle()
-    ? player.getVehicle()!.getZAngle().angle
+    ? (player.getVehicle()?.getZAngle().angle ?? player.getFacingAngle().angle)
     : player.getFacingAngle().angle;
   veh.setPos(pos.x, pos.y, pos.z);
   veh.setZAngle(angle);
@@ -322,13 +327,17 @@ export async function toggleMyVehicleLock(player: Player): Promise<void> {
     sysMsg(player, "vehicle", "你还没有车（或已损毁）", "error");
     return;
   }
-  const { doors } = veh.getParamsEx();
+  const { doors, ret } = veh.getParamsEx();
+  if (!ret) {
+    sysMsg(player, "vehicle", "获取车辆状态失败，请稍后再试", "error");
+    return;
+  }
   const isLocked = doors < 1;
   veh.toggleDoors(isLocked);
   const auth = getAuthState(player.id);
   if (auth) {
     await prisma.userVehicle.updateMany({
-      where: { userId: auth.userId, modelId: veh.getModel() },
+      where: { userId: auth.userId, modelId: veh.getModel(), deletedAt: null },
       data: { isLocked },
     });
   }
@@ -411,7 +420,7 @@ export async function setMyVehiclePlate(player: Player, plate: string): Promise<
   const auth = getAuthState(player.id);
   if (auth) {
     await prisma.userVehicle.updateMany({
-      where: { userId: auth.userId, modelId: veh.getModel() },
+      where: { userId: auth.userId, modelId: veh.getModel(), deletedAt: null },
       data: { plateNumber: plate },
     });
   }
