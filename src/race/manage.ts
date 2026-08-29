@@ -14,6 +14,7 @@ import { createRaceRoom } from "./room";
 import { enterRaceEdit, canEditRace } from "./editor";
 import { startChallengeFromRace } from "@/replay/challenge";
 import { openReplayActions } from "@/replay/menu";
+import { parseLevelData, formatLevelSummary, tierForTime } from "./level";
 
 /** 面板入口：赛道管理（管理赛道为 OP 专属，非 OP 不显示该行） */
 export async function openRaceMenu(player: Player, back?: MenuBack): Promise<void> {
@@ -207,6 +208,8 @@ export async function openRaceDetailPanel(
   const authorSafe = author.length > 12 ? `${author.slice(0, 12)}…` : author;
   const desc = race.description?.trim();
   const descSafe = desc ? (desc.length > 28 ? `${desc.slice(0, 28)}…` : desc) : undefined;
+  // 挑战等级摘要（level_data 已设置才显示）
+  const levelSummary = formatLevelSummary(parseLevelData(race.levelData));
   const headerLines = [
     `{FFD700}${name}`,
     `长度 ${Math.round(Number(race.totalLength))}m · ${race.laps ?? 1} 圈`,
@@ -216,6 +219,9 @@ export async function openRaceDetailPanel(
     `更新 ${formatFullDate(race.updatedAt)}`,
     `检查点 ${cpCount} 个`,
     ...(descSafe ? [`描述 ${descSafe}`] : []),
+    // 挑战等级（level_data）+ 失败扣分（failed_score_fix）展示
+    ...(levelSummary ? [`挑战 ${levelSummary}`] : []),
+    ...(race.failedScoreFix !== 0 ? [`失败扣分 ${race.failedScoreFix} 分`] : []),
     `{808080}──────────────`,
   ];
   const INFO_LINES = headerLines.length;
@@ -303,16 +309,26 @@ async function leaderboardFlow(player: Player, raceId: string, back?: MenuBack):
     sysMsg(player, "race", "该赛道还没有纪录", "plain");
     return back?.();
   }
+  // 赛道挑战等级：用于每行称号判定（无等级 → 称号列留空）
+  const race = await prisma.race.findUnique({
+    where: { id: raceId },
+    select: { levelData: true },
+  });
+  const tiers = parseLevelData(race?.levelData);
   await showPagedDialog(player, {
     caption: "排行榜（前 100）",
     data: records,
-    headers: ["#", "玩家", "用时", "日期"],
-    format: (r, index) => [
-      String(index + 1),
-      r.sysUser?.username ?? "?",
-      formatTime(r.record),
-      formatFullDate(r.createdAt),
-    ],
+    headers: ["#", "玩家", "用时", "称号", "日期"],
+    format: (r, index) => {
+      const tier = tiers ? tierForTime(r.record, tiers) : null;
+      return [
+        String(index + 1),
+        r.sysUser?.username ?? "?",
+        formatTime(r.record),
+        tier ? `${tier.label}` : "",
+        formatFullDate(r.createdAt),
+      ];
+    },
     // 纯浏览：点行无选中语义，仅翻页/确定返回（防"点了没反应"的困惑）
     selectable: false,
     button1: "确定",

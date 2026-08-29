@@ -3,7 +3,13 @@ import { getAuthState } from "@/auth/auth";
 import { getOwnedVehicle, spawnVehicle } from "@/vehicles";
 import { restorePersonalTimeAfterRace } from "@/core/worldenv";
 import { applyRaceNoCollision, getDefaultRaceModel } from "./vehicle";
-import { createRaceTd, updateBestTd, setRaceTdText, destroyRaceTds } from "./raceTd";
+import {
+  createRaceTd,
+  updateBestTd,
+  setRaceTdText,
+  destroyRaceTds,
+  formatLimitCountdown,
+} from "./raceTd";
 import {
   showNextCheckpoint,
   syncCpToObservers,
@@ -407,12 +413,22 @@ export async function tryReconnectRace(player: Player): Promise<boolean> {
       // RANK 不写死 "1 st"（重连玩家实际名次可能是第 5 名，显示错误名次闪烁）——
       // 留创建时的占位，≤200ms 后 tickRooms 写入真实名次
       const rstart = playerRaces.get(player.id)?.startTime ?? Date.now();
-      setRaceTdText(
-        room,
-        player.id,
-        `TIME / ${formatRaceTimeCs(Date.now() - rstart)}`,
-        `RANK / 1 st`,
-      );
+      // 挑战限时模式：重连立即显示倒计时（由 syncRaceTds 60fps 续刷），
+      // 避免闪现普通时间再跳变倒计时
+      if (room.challengeTierSeconds > 0) {
+        const { text } = formatLimitCountdown(
+          room.challengeTierSeconds * 1000,
+          Date.now() - rstart,
+        );
+        setRaceTdText(room, player.id, text, `RANK / 1 st`);
+      } else {
+        setRaceTdText(
+          room,
+          player.id,
+          `TIME / ${formatRaceTimeCs(Date.now() - rstart)}`,
+          `RANK / 1 st`,
+        );
+      }
       // 恢复 BEST TD（房间缓存已有，无则查询）
       void updateBestTd(player, room, tds);
       // 恢复 CP 进度 TD（按断线时进度）

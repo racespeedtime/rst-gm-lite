@@ -70,6 +70,8 @@ import {
   rankSuffix,
   destroyRaceTds,
   syncRaceTds,
+  formatLimitCountdown,
+  TIME_COLOR_NORMAL,
 } from "./raceTd";
 import { respawnToLastCp, respawnPlayerToCp } from "./respawn";
 import { cleanupExpiredReconnects, checkRoomState, restorePlayerAfterRace } from "./reconnect";
@@ -83,6 +85,8 @@ import {
   allocRaceWorld,
   freeRaceWorld,
 } from "./state";
+import { parseLevelData, tierForTime, formatLevelSummary, TIER_LABELS } from "./level";
+import { showDialog } from "@/utils/dialog";
 import type { PlayerRace, RaceRoom } from "./types";
 
 /**
@@ -144,6 +148,8 @@ async function pickRandomRace(): Promise<{
   laps: number | null;
   isEnabled: boolean;
   deletedAt: Date | null;
+  levelData: string | null;
+  failedScoreFix: number;
   sysUser: { username: string } | null;
 } | null> {
   const count = await prisma.race.count({
@@ -182,6 +188,8 @@ export async function createRaceRoom(
     laps: number | null;
     isEnabled: boolean;
     deletedAt: Date | null;
+    levelData: string | null;
+    failedScoreFix: number;
     sysUser: { username: string } | null;
   } | null = null;
   let cps: {
@@ -260,6 +268,10 @@ export async function createRaceRoom(
     // 房间统一时间天气：beginRace 时按房主设置填充
     roomTime: { hour: 12, minute: 0 },
     roomWeather: 0,
+    // 挑战等级：默认未选（WAITING 阶段房主可选；选后存 challengeTierSeconds）
+    challengeLevelData: race.levelData,
+    challengeTierSeconds: 0,
+    failedScoreFix: race.failedScoreFix ?? 0,
   };
   rooms.set(room.id, room);
   await joinRoom(player, room);
@@ -332,6 +344,9 @@ export async function changeRoomTrack(player: Player, raceId?: string): Promise<
   room.bestTimes.clear(); // 新赛道 BEST 缓存失效（重查）
   room.afk.clear(); // 新赛道：清挂机记录
   room.lastPositions.clear(); // 掉线快照缓存随新赛道失效
+  // 换赛道：挑战等级随旧赛道失效（新赛道需重新选择）
+  room.challengeLevelData = race.levelData;
+  room.challengeTierSeconds = 0;
   // 重定位所有成员：进度重置 + 起点 + TD 刷新 + CP 箭头重建
   for (const m of room.members.values()) {
     const mp = playerRaces.get(m.id);
@@ -624,6 +639,14 @@ export async function startRace(player: Player): Promise<void> {
     sysMsg(player, "race", "比赛已开始", "warn");
     return;
   }
+  // 挑战等级：赛道有 level_data 且房主本场还没选（challengeTierSeconds === 0）
+  // → 弹选择（神/鬼/人/菜/渣/无挑战）。选完再进倒计时；重开比赛沿用已选等级。
+  // 选了"无挑战"存 -1，之后不再弹（与"未选(0)"区分开）。
+  const tiers = parseLevelData(room.challengeLevelData);
+  if (tiers && room.challengeTierSeconds === 0) {
+    const chosen = await pickChallengeLevel(player, room, tiers);
+    if (!chosen) return; // 取消选择 = 不开赛
+  }
   room.state = "COUNTDOWN";
   broadcastToRoom(room, "比赛倒计时开始！");
   // 倒计时：TextDraw 动画（掉落弹跳 + 放大淡出），GO 显示瞬间开赛（对齐回放/挑战）。
@@ -637,6 +660,59 @@ export async function startRace(player: Player): Promise<void> {
       },
     },
   );
+}
+
+/**
+ * 房主选择挑战等级（LIST：神/鬼/人/菜/渣 + 无挑战 + 取消）。
+ * 取消（取消/关闭）→ 返回 false，不开赛。
+ * 选等级 → 存该档秒数（>0），本场全员限时；选"无挑战"→ 存 -1，本场不限时且不再询问。
+ */
+async function pickChallengeLevel(
+  player: Player,
+  room: RaceRoom,
+  tiers: { seconds: number; score: number }[],
+): Promise<boolean> {
+  const summary = formatLevelSummary(tiers) ?? "";
+  const options: { label: string; seconds: number }[] = [];
+  // 显示顺序：神→渣（tier 4→0）
+  for (let i = tiers.length - 1; i >= 0; i--) {
+    const t = tiers[i];
+    if (t.seconds > 0 && t.score > 0) {
+      options.push({
+        label: `${TIER_LABELS[i]}（${Math.round(t.seconds)}秒/${t.score}分）`,
+        seconds: t.seconds,
+      });
+    }
+  }
+  options.push({ label: "无挑战（不限时）", seconds: -1 });
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: "选择挑战等级",
+      info: [
+        `赛道等级: ${summary}`,
+        `失败扣分: ${room.failedScoreFix !== 0 ? `${room.failedScoreFix} 分` : "无"}`,
+        "本场全员限时挑战（超时未完赛者完成时扣分展示）：",
+        ...options.map((o, i) => `${i + 1}. ${o.label}`),
+      ].join("\n"),
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!res || res.response !== 1) return false;
+  const idx = res.listItem;
+  if (idx < 0 || idx >= options.length) return false;
+  room.challengeTierSeconds = options[idx].seconds;
+  if (room.challengeTierSeconds > 0) {
+    broadcastToRoom(
+      room,
+      `本场挑战等级：${options[idx].label.split("（")[0]}，全员限时 ${room.challengeTierSeconds} 秒`,
+    );
+  } else {
+    broadcastToRoom(room, "本场无挑战限时");
+  }
+  return true;
 }
 
 /** 正式开赛：切独立世界 + 统一设置房间天气时间 */
@@ -704,6 +780,7 @@ function beginRace(room: RaceRoom): void {
       mp.lap = 0;
       mp.startTime = now;
       mp.finished = false;
+      mp.timeUp = false; // 挑战限时标记重置
       mp.rank = undefined; // 新一场比赛：名次缓存重置（tickRooms 重新计算）
       mp.cpSnapshots = []; // 新一场比赛：清空上场的回退快照
       room.afk.delete(m.id);
@@ -784,7 +861,14 @@ function beginRace(room: RaceRoom): void {
       const tds = room.raceTextTds.get(m.id);
       if (tds && tds.time.isValid()) {
         tds.cp.setString(`C  P / ~p~1~w~/~y~${room.cps.length}`);
-        tds.time.setString("TIME / 00:00:00");
+        // 挑战限时模式：TIME 初始显示完整限时（倒计时从限时开始，由 60fps
+        // syncRaceTds 续刷）；非挑战模式从 00:00:00 开始正计时
+        if (room.challengeTierSeconds > 0) {
+          const { text } = formatLimitCountdown(room.challengeTierSeconds * 1000, 0);
+          tds.time.setString(text);
+        } else {
+          tds.time.setString("TIME / 00:00:00");
+        }
         tds.rank.setString("RANK / 1 st");
       }
     }
@@ -946,11 +1030,34 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
   // 完成者不再跑：清理指向该成员的观察者 CP 箭头（观察者跟随完赛自动观战切走）
   clearSpectatorCpForMember(player.id);
   const time = Date.now() - pr.startTime;
+  // 挑战评级：按完成时间判定称号（level_data 未设置/未达任何等级 → null）
+  const tier = room.challengeLevelData
+    ? tierForTime(time, parseLevelData(room.challengeLevelData))
+    : null;
+  const timeUp = !!pr.timeUp;
   // name 快照：完成后玩家可能掉线/离开，endRoom 补计排名时 getName 已取不到
   room.results.push({ playerId: player.id, time, name: player.getName().name });
   room.resultIndex.set(player.id, time);
+  // 挑战限时模式：完成者 TIME 定格为最终用时（白色），不再显示倒计时/红色负数。
+  // 非挑战模式 TIME 由 tickRooms 继续写最终时间（结果索引），无需特殊处理。
+  if (room.challengeTierSeconds > 0) {
+    const tds = room.raceTextTds.get(player.id);
+    const cache = room.tdTextCache.get(player.id);
+    if (tds && tds.time.isValid()) {
+      const timeText = `TIME / ${formatRaceTimeCs(time)}`;
+      tds.time.setString(timeText);
+      tds.time.setColor(TIME_COLOR_NORMAL);
+      if (cache) {
+        cache.time = timeText;
+        cache.timeColor = TIME_COLOR_NORMAL;
+      }
+    }
+  }
   const rank = room.results.length; // 完成顺序 = 名次（同一起点同时开始）
-  broadcastToRoom(room, `${player.getName().name} 完成比赛！用时 ${formatTime(time)}`);
+  broadcastToRoom(
+    room,
+    `${player.getName().name} 完成比赛！用时 ${formatTime(time)}${tier ? ` 评级「${tier.label}」` : ""}${timeUp && room.failedScoreFix !== 0 ? `（超时扣 ${room.failedScoreFix} 分）` : ""}`,
+  );
   // 完成反馈音效（对齐 countdownFx 的数字 1056 / GO 1057 音效族，冲线用 1058）
   player.playSound(1058);
   // 完成标记（多轨道合并落盘用）：只写会话标记不落盘——endRoom 统一把全房间
@@ -1038,6 +1145,10 @@ async function finishPlayer(player: Player, pr: PlayerRace): Promise<void> {
       `{98CDFE}赛道: {FFFFFF}${room.raceName}`,
       `{98CDFE}名次: {FFFFFF}${rankLabel}（No.${rank}）`,
       `{98CDFE}用时: {FFFFFF}${formatTime(time)}`,
+      tier ? `{98CDFE}评级: {FFD700}「${tier.label}」{FFFFFF}+${tier.score} 分` : "",
+      timeUp && room.failedScoreFix !== 0
+        ? `{FF5555}挑战超时: 按失败处理，-${room.failedScoreFix} 分`
+        : "",
       isPB
         ? `{00FF00}★ 新个人纪录！`
         : prevRecord != null
@@ -1206,10 +1317,13 @@ function endRoom(room: RaceRoom): void {
     if (a.cp !== b.cp) return b.cp - a.cp;
     return a.dist - b.dist || a.playerId - b.playerId; // 同进度稳定排序
   });
+  // 挑战等级：结算列表称号判定用（无等级 → 不加称号）
+  const tiers = room.challengeLevelData ? parseLevelData(room.challengeLevelData) : null;
   const resultLines = ranked.map((r, i) => {
     const medal = i === 0 ? "{FFD700}" : i === 1 ? "{C0C0C0}" : i === 2 ? "{CD7F32}" : "";
     const nameColor = r.finished ? "{FFFFFF}" : "{808080}";
-    return `${medal}No.${i + 1} ${nameColor}${r.name}  ${r.finished ? formatTime(r.time) : "未完成"}`;
+    const tier = r.finished && tiers ? tierForTime(r.time, tiers) : null;
+    return `${medal}No.${i + 1} ${nameColor}${r.name}  ${r.finished ? formatTime(r.time) : "未完成"}${tier ? ` ［${tier.label}］` : ""}`;
   });
 
   for (const m of room.members.values()) {
@@ -1363,6 +1477,25 @@ function tickRooms(): void {
       cleanupExpiredReconnects(room);
     }
     if (room.state !== "RACING") continue;
+    // 挑战限时检测：本场选了挑战等级（challengeTierSeconds>0）时，未完成成员
+    // 用时超过限时 → 标记 timeUp（不踢出、可继续跑完；完成时展示失败扣分）。
+    // 用 mp.startTime + 限时 作 deadline：重连恢复 startTime，deadline 保持一致。
+    if (room.challengeTierSeconds > 0) {
+      const deadline = room.challengeTierSeconds * 1000;
+      for (const m of room.members.values()) {
+        const mp = playerRaces.get(m.id);
+        if (!mp || mp.finished || mp.timeUp) continue;
+        if (now - mp.startTime > deadline) {
+          mp.timeUp = true;
+          sysMsg(
+            m,
+            "race",
+            `挑战超时（限时 ${room.challengeTierSeconds} 秒），完成时按失败处理${room.failedScoreFix !== 0 ? `（扣 ${room.failedScoreFix} 分）` : ""}`,
+            "warn",
+          );
+        }
+      }
+    }
     // 挂机检测（对齐原版 AFKTimes：静止累计超时移出比赛，防占坑不跑）。
     // 200ms tick 采样位置：位移 < 阈值判静止累计（每 tick 固定 +AFK_TICK_MS，与
     // tickRooms 周期一致），有位移清零；累计超 AFK_WARN_MS 提示一次、AFK_IDLE_MS
@@ -1458,6 +1591,10 @@ function tickRooms(): void {
     });
     // 更新每人比赛信息 TD：TIME（对齐原版 RaceRunTime 计时）+ RANK（对齐原版
     // RaceRunRank 排名）。CP/BEST 由事件驱动更新（过 CP / 进比赛 / 跑完 PB），不在此刷。
+    // 挑战限时模式（challengeTierSeconds>0）：TIME 由 syncRaceTds 60fps 倒计时
+    // 独占（本 200ms 只写 RANK，避免两定时器互相覆盖倒计时）；已完成者 TIME 定格
+    // 由 finishPlayer 写最终用时，不在此覆盖。非挑战模式保持原逻辑（TIME+RANK 都写）。
+    const limitMode = room.challengeTierSeconds > 0;
     rows.forEach((r, rank) => {
       const mp = playerRaces.get(r.playerId);
       if (!mp) return;
@@ -1467,14 +1604,21 @@ function tickRooms(): void {
       // 实时名次写入录制帧（回放 RANK TD 按播放进度实时显示；与 CP 进度同为
       // 事件驱动——无录制会话时零开销）
       noteRank(r.playerId, rank + 1);
-      const time = mp.finished ? r.time : now - mp.startTime;
-      const timeText = `TIME / ${formatRaceTimeCs(time)}`;
       const rankText = `RANK / ${rank + 1} ${rankSuffix(rank)}`;
-      setRaceTdText(room, r.playerId, timeText, rankText);
-      // 观战者同步：观察该玩家的玩家显示同样的 TIME/RANK（对齐原版 RaceRunTime/
-      // RaceRunRank 里对观战者的 TD 同步——观战者看到被观战者的比赛信息）
-      for (const oid of getObserverIdsOf(r.playerId)) {
-        setRaceTdText(room, oid, timeText, rankText);
+      if (limitMode) {
+        setRaceTdText(room, r.playerId, null, rankText);
+        for (const oid of getObserverIdsOf(r.playerId)) {
+          setRaceTdText(room, oid, null, rankText);
+        }
+      } else {
+        const time = mp.finished ? r.time : now - mp.startTime;
+        const timeText = `TIME / ${formatRaceTimeCs(time)}`;
+        setRaceTdText(room, r.playerId, timeText, rankText);
+        // 观战者同步：观察该玩家的玩家显示同样的 TIME/RANK（对齐原版 RaceRunTime/
+        // RaceRunRank 里对观战者的 TD 同步——观战者看到被观战者的比赛信息）
+        for (const oid of getObserverIdsOf(r.playerId)) {
+          setRaceTdText(room, oid, timeText, rankText);
+        }
       }
     });
   }

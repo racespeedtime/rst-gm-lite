@@ -10,6 +10,14 @@ import { cleanupScriptVehicle } from "./scripts";
 import { isInRace } from "./state";
 import { UUID_RE } from "./state";
 import { sysMsg } from "@/utils/msg";
+import {
+  parseLevelData,
+  formatLevelData,
+  formatLevelSummary,
+  isTierSet,
+  validateTierOrder,
+  TIER_LABELS,
+} from "./level";
 
 /** 编辑中的赛道（raceId + 玩家当前查看的 CP） */
 interface EditState {
@@ -152,9 +160,10 @@ export async function showEditMenu(player: Player): Promise<void> {
     "2. 查看/管理CP",
     "3. 修改赛道名称/描述",
     "4. 设置圈数",
-    "5. 测试赛道（从第一个CP开始）",
-    "6. 保存并退出编辑",
-    "7. 退出编辑（不保存修改）",
+    "5. 设置挑战等级",
+    "6. 测试赛道（从第一个CP开始）",
+    "7. 保存并退出编辑",
+    "8. 退出编辑（不保存修改）",
   ].join("\n");
   const res = await showDialog(
     player,
@@ -191,13 +200,17 @@ export async function showEditMenu(player: Player): Promise<void> {
       await showEditMenu(player);
       break;
     case 4:
-      await testRace(player);
+      await editRaceLevels(player);
+      await showEditMenu(player);
       break;
     case 5:
+      await testRace(player);
+      break;
+    case 6:
       sysMsg(player, "race", "赛道已保存，退出编辑模式", "success");
       exitEdit(player.id);
       break;
-    case 6:
+    case 7:
       exitEdit(player.id);
       sysMsg(player, "race", "已退出编辑模式", "info");
       break;
@@ -228,6 +241,126 @@ async function editRaceLaps(player: Player): Promise<void> {
   }
   await prisma.race.update({ where: { id: race.id }, data: { laps } });
   sysMsg(player, "race", `圈数已设为 ${laps}`, "success");
+}
+
+/**
+ * 设置挑战等级（逐级编辑）：5 个等级各显示当前秒数/分数，选中一个 → 输入
+ * "秒数 分数"（如 `350 10`）保存。另含"失败扣分"与"清除等级"两项。
+ * 未设置等级（levelData 为 null）→ 空档显示"未设置"。
+ */
+async function editRaceLevels(player: Player): Promise<void> {
+  const state = editStates.get(player.id);
+  if (!state) return;
+  const race = await prisma.race.findUnique({ where: { id: state.raceId } });
+  if (!race) return;
+  const tiers = parseLevelData(race.levelData);
+  const summary = formatLevelSummary(tiers);
+  const penalty = race.failedScoreFix;
+
+  // 行：5 个等级（神→渣）+ 失败扣分 + 清除等级
+  const lines: { label: string; desc: string }[] = [];
+  for (let i = TIER_LABELS.length - 1; i >= 0; i--) {
+    const t = tiers?.[i];
+    const desc = t && isTierSet(t) ? `${Math.round(t.seconds)}秒 / ${t.score}分` : "未设置";
+    lines.push({ label: TIER_LABELS[i], desc });
+  }
+  lines.push({ label: "失败扣分", desc: penalty !== 0 ? `${penalty} 分` : "0（不扣分）" });
+  lines.push({ label: "清除等级", desc: "" });
+
+  const res = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.LIST,
+      caption: "设置挑战等级",
+      info: [
+        summary ? `当前: ${summary}` : "当前: 未设置等级",
+        "选择要编辑的项：",
+        ...lines.map((l, i) => `${i + 1}. ${l.label}（${l.desc}）`),
+      ].join("\n"),
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!res || res.response !== 1) return;
+  const idx = res.listItem;
+  if (idx < 0 || idx >= lines.length) return;
+
+  // 清除等级
+  if (idx === 6) {
+    await prisma.race.update({
+      where: { id: race.id },
+      data: { levelData: null, failedScoreFix: 0 },
+    });
+    sysMsg(player, "race", "已清除挑战等级", "success");
+    return;
+  }
+
+  // 失败扣分（整数，0=不扣分，范围 -999..999）
+  if (idx === 5) {
+    const input = await showDialog(
+      player,
+      new Dialog({
+        style: DialogStylesEnum.INPUT,
+        caption: "失败扣分",
+        info: `输入失败扣分（整数，当前 ${penalty}，0=不扣分）：\n超时未完成者完成时展示的扣分数，纯展示不扣真实分数`,
+        button1: "确定",
+        button2: "取消",
+      }),
+    );
+    if (!input || input.response !== 1) return;
+    const v = Number(input.inputText.trim());
+    if (!Number.isInteger(v) || v < -999 || v > 999) {
+      sysMsg(player, "race", "失败扣分需为 -999~999 的整数", "error");
+      return;
+    }
+    await prisma.race.update({ where: { id: race.id }, data: { failedScoreFix: v } });
+    sysMsg(player, "race", `失败扣分已设为 ${v}`, "success");
+    return;
+  }
+
+  // 逐级编辑：idx 0..4 对应 神鬼人菜渣（列表按 神→渣，idx0=神）
+  const tierIdx = 4 - idx; // 神(idx0)=tier4 … 渣(idx4)=tier0
+  const tier = tiers?.[tierIdx];
+  const curDesc =
+    tier && isTierSet(tier) ? `${Math.round(tier.seconds)}秒 / ${tier.score}分` : "未设置";
+  const input = await showDialog(
+    player,
+    new Dialog({
+      style: DialogStylesEnum.INPUT,
+      caption: `设置「${TIER_LABELS[tierIdx]}」等级`,
+      info: `输入「秒数 分数」（如 350 10），当前：${curDesc}。\n用时不超过该秒数即达到此等级。`,
+      button1: "确定",
+      button2: "取消",
+    }),
+  );
+  if (!input || input.response !== 1) return;
+  const parts = input.inputText.trim().split(/\s+/);
+  if (parts.length < 2) {
+    sysMsg(player, "race", "格式：秒数 分数（如 350 10）", "error");
+    return;
+  }
+  const sec = Number(parts[0]);
+  const score = Number(parts[1]);
+  if (!Number.isInteger(sec) || !Number.isInteger(score) || sec <= 0 || score < 0) {
+    sysMsg(player, "race", "秒数为正整数、分数为非负整数", "error");
+    return;
+  }
+  // 当前等级数据（未设置 → 全 0），更新目标档
+  const cur = tiers
+    ? tiers.map((t) => ({ seconds: t.seconds, score: t.score }))
+    : Array.from({ length: 5 }, () => ({ seconds: 0, score: 0 }));
+  cur[tierIdx] = { seconds: sec, score };
+  // 顺序校验：已设置档秒数必须严格递增（渣<菜<人<鬼<神），乱配会让等级判定崩坏
+  const orderErr = validateTierOrder(cur);
+  if (orderErr) {
+    sysMsg(player, "race", `等级顺序冲突：${orderErr}`, "error");
+    return;
+  }
+  await prisma.race.update({
+    where: { id: race.id },
+    data: { levelData: formatLevelData(cur) },
+  });
+  sysMsg(player, "race", `「${TIER_LABELS[tierIdx]}」已设为 ${sec}秒/${score}分`, "success");
 }
 
 /** 在玩家当前位置放置 CP（/r edit cp 命令入口也调它） */

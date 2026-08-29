@@ -76,6 +76,8 @@ model Race {
   laps          Int            @default(1)
   userId        String?        @map("user_id") @db.Uuid
   houseId       String?        @unique @map("house_id") @db.Uuid
+  levelData     String?        @map("level_data") @db.VarChar(255)
+  failedScoreFix Int           @default(0) @map("failed_score_fix")
   createdAt     DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime       @updatedAt @map("updated_at") @db.Timestamptz(6)
   deletedAt     DateTime?      @map("deleted_at") @db.Timestamptz(6)

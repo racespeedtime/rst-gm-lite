@@ -25,6 +25,14 @@ function raceTdBase(player: Player, y: number, text: string): TextDraw {
     .setProportional(true);
 }
 
+/** TIME TD 颜色（对齐 MSG_COLOR：白=正常计时、黄=限时告急、红=已超时） */
+export const TIME_COLOR_NORMAL = 0xffffffff;
+export const TIME_COLOR_WARN = 0xffffff00;
+export const TIME_COLOR_OVER = 0xffff5555;
+
+/** 限时告急阈值（剩余 ≤ 此毫秒 → 黄色） */
+const LIMIT_WARN_MS = 10_000;
+
 /** 创建比赛信息 UI（每人 4 行独立 TD，位置与原版一致：x 500 左缘，y 118/136/154/172） */
 export function createRaceTd(player: Player, room: RaceRoom): RoomRaceTds {
   const tds: RoomRaceTds = {
@@ -91,11 +99,12 @@ export function destroyRaceTds(room: RaceRoom): void {
 
 /** 写比赛信息 TD 文本 + 更新文本缓存（去重：相同文本不重复 setString）。
  * 成员与观战者共用：cache 按 playerId 记录上次显示的文本，60fps 高频刷新
- * 只对变化的内容调 native——静态/稳定段零开销 */
+ * 只对变化的内容调 native——静态/稳定段零开销。
+ * timeText 传 null 表示跳过 TIME（挑战限时模式 TIME 由 syncRaceTds 独占） */
 export function setRaceTdText(
   room: RaceRoom,
   playerId: number,
-  timeText: string,
+  timeText: string | null,
   rankText: string,
 ): void {
   const tds = room.raceTextTds.get(playerId);
@@ -105,16 +114,57 @@ export function setRaceTdText(
   if (!tds.time.isValid() || !tds.rank.isValid()) return;
   let cache = room.tdTextCache.get(playerId);
   if (!cache) {
-    cache = { time: "", rank: "", timeCs: -1 };
+    cache = { time: "", rank: "", timeCs: -1, timeColor: TIME_COLOR_NORMAL };
     room.tdTextCache.set(playerId, cache);
   }
-  if (timeText !== cache.time) {
+  if (timeText != null && timeText !== cache.time) {
     cache.time = timeText;
     tds.time.setString(timeText);
   }
   if (rankText !== cache.rank) {
     cache.rank = rankText;
     tds.rank.setString(rankText);
+  }
+}
+
+/**
+ * 限时倒计时文本：剩余 = 限时 - 已用。剩余 ≥ 0 → 正数 mm:ss.cc；已超时 → 红色
+ * 负数 -mm:ss.cc（超出限时的量）。仅挑战限时（challengeTierSeconds>0）时调用。
+ */
+export function formatLimitCountdown(
+  limitMs: number,
+  elapsedMs: number,
+): {
+  text: string;
+  color: number;
+} {
+  const remain = limitMs - elapsedMs;
+  if (remain >= 0) {
+    // 正数：mm:ss.cc（不补毫秒前缀），黄色告急
+    const m = Math.floor(remain / 60000);
+    const s = Math.floor((remain % 60000) / 1000);
+    const cs = Math.floor((remain % 1000) / 10);
+    return {
+      text: `TIME / ${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(cs).padStart(2, "0")}`,
+      color: remain <= LIMIT_WARN_MS ? TIME_COLOR_WARN : TIME_COLOR_NORMAL,
+    };
+  }
+  // 负数：-mm:ss.cc（超出量），红色
+  const over = -remain;
+  const m = Math.floor(over / 60000);
+  const s = Math.floor((over % 60000) / 1000);
+  const cs = Math.floor((over % 1000) / 10);
+  return {
+    text: `TIME / -${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}:${String(cs).padStart(2, "0")}`,
+    color: TIME_COLOR_OVER,
+  };
+}
+
+/** TIME TD 同步颜色（只在颜色变化时调 setColor，去重） */
+function setTimeColor(tds: RoomRaceTds, cache: { timeColor: number }, color: number): void {
+  if (cache.timeColor !== color) {
+    cache.timeColor = color;
+    if (tds.time.isValid()) tds.time.setColor(color);
   }
 }
 
@@ -132,6 +182,9 @@ export function syncRaceTds(): void {
     // 观战中的成员跳过：其 TD 显示被观战者的信息（下面观战循环写），否则
     // 60fps 会用自己的时间覆盖掉 tickRooms 写入的被观战者时间——出现"自己的
     // 时间 + 别人的名次"错乱。
+    // 挑战限时（challengeTierSeconds>0）：TIME 显示剩余倒计时（超时红色负数），
+    // 已完成者定格为最终用时（白色），未完成者倒计时。
+    const limitMs = room.challengeTierSeconds > 0 ? room.challengeTierSeconds * 1000 : 0;
     for (const m of room.members.values()) {
       const mp = playerRaces.get(m.id);
       const tds = room.raceTextTds.get(m.id);
@@ -145,9 +198,18 @@ export function syncRaceTds(): void {
       const cs = Math.floor((now - mp.startTime) / 10);
       if (cs !== cache.timeCs) {
         cache.timeCs = cs;
-        const timeText = `TIME / ${formatRaceTimeCs(now - mp.startTime)}`;
-        cache.time = timeText;
-        tds.time.setString(timeText);
+        if (limitMs > 0) {
+          // 挑战限时：倒计时 + 按剩余变色
+          const { text, color } = formatLimitCountdown(limitMs, now - mp.startTime);
+          cache.time = text;
+          tds.time.setString(text);
+          setTimeColor(tds, cache, color);
+        } else {
+          const timeText = `TIME / ${formatRaceTimeCs(now - mp.startTime)}`;
+          cache.time = timeText;
+          tds.time.setString(timeText);
+          setTimeColor(tds, cache, TIME_COLOR_NORMAL);
+        }
       }
     }
     // 观战中的房内成员：同步被观战者（玩家）的 TIME（RANK 由 tickRooms 写入
@@ -170,9 +232,17 @@ export function syncRaceTds(): void {
       const cs = Math.floor((now - tmp.startTime) / 10);
       if (cs !== cache.timeCs) {
         cache.timeCs = cs;
-        const timeText = `TIME / ${formatRaceTimeCs(now - tmp.startTime)}`;
-        cache.time = timeText;
-        tds.time.setString(timeText);
+        if (limitMs > 0) {
+          const { text, color } = formatLimitCountdown(limitMs, now - tmp.startTime);
+          cache.time = text;
+          tds.time.setString(text);
+          setTimeColor(tds, cache, color);
+        } else {
+          const timeText = `TIME / ${formatRaceTimeCs(now - tmp.startTime)}`;
+          cache.time = timeText;
+          tds.time.setString(timeText);
+          setTimeColor(tds, cache, TIME_COLOR_NORMAL);
+        }
       }
     }
   }

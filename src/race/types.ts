@@ -11,6 +11,8 @@ export interface PlayerRace {
   lap: number; // 当前圈（0 = 第一圈，laps-1 = 最后一圈）
   startTime: number;
   finished: boolean;
+  /** 挑战等级限时已超时（挑战失败标记）：不踢出，可继续跑完，完成时展示扣分 */
+  timeUp?: boolean;
   /** 当前名次（0-based，tickRooms 排名计算写入）。60fps TD 刷新（syncRaceTds）
    * 只读该缓存——排名计算要做距离采样+排序，200ms 足够，高频刷新不重算 */
   rank?: number;
@@ -34,7 +36,7 @@ export interface CpSnapshot {
 /** 比赛信息 UI（对齐原版 CreatePRaceTextDraw 的 4 行独立 TD） */
 export interface RoomRaceTds {
   cp: TextDraw; //   C  P / ~p~进度~w~/~y~总数
-  time: TextDraw; // TIME / mm:ss.cc
+  time: TextDraw; // TIME / mm:ss.cc（挑战限时模式显示剩余倒计时，超时红色负数）
   best: TextDraw; // BEST / mm:ss.cc（无记录 99:99:99）
   rank: TextDraw; // RANK / N st/nd/rd/th
 }
@@ -74,8 +76,9 @@ export interface RaceRoom {
   /** 比赛信息 TD 文本缓存（playerId -> 上次显示文本，成员与观战者各一条）。
    *  60fps 高频刷新只对变化的内容 setString——静态/稳定段零 native 调用。
    *  timeCs：上次显示的厘秒（秒表跳表去重，60fps 下大多数 tick 厘秒未变，
-   *  提前比较跳过 formatRaceTime 的格式化开销） */
-  tdTextCache: Map<number, { time: string; rank: string; timeCs: number }>;
+   *  提前比较跳过 formatRaceTime 的格式化开销）
+   *  timeColor：TIME TD 当前颜色（挑战限时倒计时按剩余阈值变色，只变时 setColor） */
+  tdTextCache: Map<number, { time: string; rank: string; timeCs: number; timeColor: number }>;
   /** 赛道个人最佳缓存（userId -> 最佳毫秒，开赛时查一次；重连复用） */
   bestTimes: Map<string, number>;
   /** 完成结果索引（playerId -> time），避免每 tick 线性查找 */
@@ -119,4 +122,10 @@ export interface RaceRoom {
    *  CP 脚本改时间天气后由脚本路径直接 setTime/setWeather，不更新此缓存） */
   roomTime: { hour: number; minute: number };
   roomWeather: number;
+  /** 挑战等级（level_data 原文，房主开赛前选择，null=本场无挑战限时） */
+  challengeLevelData?: string | null;
+  /** 挑战等级所选档位秒数上限：0=未选（开赛前弹选择），-1=已明确"无挑战"（不再弹），>0=该档限时秒数 */
+  challengeTierSeconds: number;
+  /** 挑战失败扣分（failed_score_fix，纯展示） */
+  failedScoreFix: number;
 }
