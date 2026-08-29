@@ -12,7 +12,11 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { showDialog } from "@/utils/dialog";
 import { sysMsg } from "@/utils/msg";
-import { registerObjectCollision, clearObjectCollisions } from "@/core/collision";
+import {
+  registerObjectCollision,
+  unregisterObjectCollision,
+  clearObjectCollisions,
+} from "@/core/collision";
 import { teleportTo } from "@/teleport";
 import { setTimeoutSafe } from "@/core/timers";
 import { DEFAULT_CHARSET } from "@/utils/constants";
@@ -189,10 +193,15 @@ export async function loadAllHouseObjects(attempt = 1): Promise<void> {
 
     for (const m of models) {
       const hname = houseName(m.houseId, m.house?.name ?? "?");
+      // 赛道专属对象（raceOnly=true，如 5F 空中赛道/护栏）：静态加载跳过——
+      // 由比赛/挑战/回放动态加载到对应世界（玩该赛道才显示，见 loadRaceOnlyObjects）
+      if (m.house?.raceOnly) {
+        stats.skipped++;
+        continue;
+      }
       // 世界区间按"是否关联赛道"判定：
-      // - 关联赛道的房屋（5F 导入的赛道场景对象 / 原版房屋+赛道）：实体是赛道
-      //   场景——在赛道世界（1001..2000）+ 回放/挑战世界（2001..2100）可见
-      //   （影子挑战/回放播放时赛道场景必须存在），公共大世界/战局不可见
+      // - 关联赛道的普通房屋（非 raceOnly）：赛道世界（1001..2000）+ 回放/挑战
+      //   世界（2001..2100）可见，公共大世界/战局不可见
       // - 普通房屋（不关联赛道）：公共大世界 + 战局（0 + 1..1000）
       const worldIds = m.house?.race ? RACE_REPLAY_WORLD_IDS : SESSION_WORLD_IDS;
       try {
@@ -219,6 +228,7 @@ export async function loadAllHouseObjects(attempt = 1): Promise<void> {
               rz: args.rz,
               drawDistance: args.drawDistance ?? 400,
               worldId: worldIds, // 关联赛道→含比赛世界；否则仅战局区间
+              extended: true,
             });
             obj.create();
             // 相机无碰撞：镜头可穿透物体（避免被房屋模型遮挡视野）
@@ -511,6 +521,98 @@ export function unloadAllHouseObjects(): void {
   }
   loadedAreas.length = 0;
   removedBuildings.length = 0;
+  // 动态赛道对象一并卸载（防退出残留）
+  unloadAllRaceOnlyObjects();
+}
+
+// ---------------------------------------------------------------------------
+// 赛道专属对象动态加载（raceOnly=true 的 house：只在游玩对应赛道/挑战/回放时
+// 加载到该次分配的世界，其他时间不显示——避免不同赛道的对象在别的赛道重叠出现）
+// ---------------------------------------------------------------------------
+
+/** raceId -> 已加载的动态赛道对象（含碰撞注册引用，销毁时一并注销） */
+const loadedRaceOnly = new Map<string, { obj: DynamicObject; collision: unknown }[]>();
+
+/** 卸载指定赛道的动态对象（房间销毁/挑战退出/回放停止时调用） */
+export function unloadRaceOnlyObjects(raceId: string): void {
+  const items = loadedRaceOnly.get(raceId);
+  if (!items) return;
+  for (const it of items) {
+    if (it.obj.isValid()) it.obj.destroy();
+    if (it.collision) unregisterObjectCollision(it.collision as never);
+  }
+  loadedRaceOnly.delete(raceId);
+}
+
+/** 卸载全部动态赛道对象（GameMode 退出） */
+export function unloadAllRaceOnlyObjects(): void {
+  for (const raceId of [...loadedRaceOnly.keys()]) {
+    unloadRaceOnlyObjects(raceId);
+  }
+}
+
+/**
+ * 加载指定赛道的专属对象到指定世界（比赛房间 worldId / 挑战回放世界）。
+ * 幂等：同 raceId 已加载则不重复创建（换世界需先 unload）。
+ * 只处理该赛道关联的 house（race.houseId）且 raceOnly=true 的 obj 行；
+ * 返回是否加载了任何对象（调用方据此决定是否需要在销毁时卸载）。
+ */
+export async function loadRaceOnlyObjects(raceId: string, worldId: number): Promise<boolean> {
+  if (loadedRaceOnly.has(raceId)) return true; // 已加载
+  // 查该赛道关联的 raceOnly house（race.houseId 唯一关联）
+  const race = await prisma.race.findUnique({
+    where: { id: raceId },
+    select: { houseId: true },
+  });
+  if (!race?.houseId) return false;
+  const house = await prisma.house.findUnique({
+    where: { id: race.houseId },
+    select: { id: true, raceOnly: true, isEnabled: true, deletedAt: true },
+  });
+  if (!house || !house.raceOnly || !house.isEnabled || house.deletedAt) return false;
+  const models = await prisma.houseModel.findMany({
+    where: { houseId: house.id },
+    orderBy: { index: "asc" },
+  });
+  const items: { obj: DynamicObject; collision: unknown }[] = [];
+  for (const m of models) {
+    if (m.type !== "obj") continue; // 5F 导入只有 obj；material 等动态场景暂不支持
+    const args = parseObjArgs(m.args);
+    if (!args) continue;
+    try {
+      const obj = new DynamicObject({
+        modelId: args.modelId,
+        x: args.x,
+        y: args.y,
+        z: args.z,
+        rx: args.rx,
+        ry: args.ry,
+        rz: args.rz,
+        drawDistance: args.drawDistance ?? 400,
+        worldId, // 单世界：只在该赛道这次分配的世界可见
+        extended: true,
+      });
+      obj.create();
+      obj.setNoCameraCollision();
+      const collision = registerObjectCollision(
+        args.modelId,
+        args.x,
+        args.y,
+        args.z,
+        args.rx,
+        args.ry,
+        args.rz,
+      );
+      items.push({ obj, collision });
+    } catch (e) {
+      logger.warn(`[house] 动态赛道对象创建失败 race=${raceId} model=${args.modelId}`, e);
+    }
+  }
+  if (items.length) {
+    loadedRaceOnly.set(raceId, items);
+    return true;
+  }
+  return false;
 }
 
 /** 初始化房屋命令 */

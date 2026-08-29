@@ -25,7 +25,8 @@ const registered = new Set<CA_Object>();
 
 /**
  * 把房屋 obj 注册进 colandreas 碰撞网格（world 0 静态物体，位置/旋转固定）。
- * 返回是否注册成功（colandreas 不可用/超上限/异常返回 false，不影响其他功能）。
+ * 返回注册的 CA_Object 实例（供动态对象销毁时单独注销）；失败返回 null，
+ * 不影响其他功能。
  */
 export function registerObjectCollision(
   modelId: number,
@@ -35,20 +36,33 @@ export function registerObjectCollision(
   rx: number,
   ry: number,
   rz: number,
-): boolean {
-  if (!isColandreasReady()) return false;
+): CA_Object | null {
+  if (!isColandreasReady()) return null;
   try {
     const ca = new CA_Object({ modelId, x, y, z, rx, ry, rz }, true, false);
     // getCollisionID() 有效（-2 无效/-1 未保留）才登记；无效则立即销毁
     if (ca.getCollisionID() !== -2) {
       registered.add(ca);
-      return true;
+      return ca;
     }
     ca.destroy();
   } catch (e) {
     logger.warn(`[collision] 注册物体碰撞失败 model=${modelId}`, e);
   }
-  return false;
+  return null;
+}
+
+/**
+ * 注销单个物体碰撞（动态对象销毁时调用：物体没了但碰撞残留会导致传送/落地
+ * 卡在看不见的碰撞上）。重复销毁幂等（Set delete + CA_Object.destroy 均安全）。
+ */
+export function unregisterObjectCollision(ca: CA_Object): void {
+  registered.delete(ca);
+  try {
+    ca.destroy();
+  } catch (e) {
+    logger.warn("[collision] 注销碰撞失败", e);
+  }
 }
 
 /**

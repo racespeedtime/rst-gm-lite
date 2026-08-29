@@ -18,6 +18,7 @@ import { getAuthState } from "@/auth/auth";
 import { formatRaceTimeCs } from "@/utils/format";
 import { sysMsg } from "@/utils/msg";
 import { isInRace } from "@/race/room";
+import { loadRaceOnlyObjects, unloadRaceOnlyObjects } from "@/house";
 import { isInChallenge } from "./challenge";
 import { getOwnedVehicle, addNitro } from "@/vehicles";
 import { setIntervalSafe, clearIntervalSafe } from "@/core/timers";
@@ -242,6 +243,8 @@ export interface ReplaySession {
   id: string; // replay 记录 id
   ownerId: number; // 发起人 playerId
   worldId: number;
+  /** 赛道 id（race 回放：加载赛道专属对象用；ghost 回放无） */
+  raceId?: string;
   /** 发起人进入回放前的世界（race 独立世界回放停止时恢复玩家+爱车） */
   ownerPrevWorld: number;
   /** 回放类型：ghost=自由录制（当前世界，大家可玩可控制）；race=比赛回放（独立世界+观战） */
@@ -1451,6 +1454,7 @@ export async function spawnReplay(
     id: replay.id,
     ownerId: player.id,
     worldId,
+    raceId: replay.raceId ?? undefined,
     ownerPrevWorld: player.getVirtualWorld(),
     replayType: isGhost ? "ghost" : "race",
     rank: replay.rank ?? null,
@@ -1475,6 +1479,10 @@ export async function spawnReplay(
     lastWeather: -128,
   };
   sessions.set(player.id, session);
+  // 比赛回放：加载赛道专属对象（raceOnly house）到回放世界（重现比赛场景）
+  if (!isGhost && session.raceId) {
+    void loadRaceOnlyObjects(session.raceId, worldId);
+  }
   session.timer = setIntervalSafe(() => tickSession(session), TICK_MS);
   for (const g of session.ghosts) renderGhost(session, g);
   // 按该玩家当前偏好应用 ghost 标签显隐（默认显示；隐藏偏好是临时设置不落库）
@@ -1741,8 +1749,12 @@ export function stopReplaySession(playerId: number): void {
   for (const pid of tdsHolders) {
     destroyObserverTds(session, pid);
   }
-  // 独立世界（比赛回放）的会话：会话销毁后世界无人使用 → 回收世界 id 供复用
-  if (session.replayType === "race") freeReplayWorld(session.worldId);
+  // 独立世界（比赛回放）的会话：会话销毁后世界无人使用 → 回收世界 id 供复用。
+  // 先卸载该赛道的专属对象（世界 id 回收复用前必须销毁）
+  if (session.replayType === "race") {
+    if (session.raceId) unloadRaceOnlyObjects(session.raceId);
+    freeReplayWorld(session.worldId);
+  }
   // 取消进行中的开场倒计时动画（owner + watchers 的 TD/句柄一并清；watchers 用
   // 上方快照——session.watchers 已 clear，owner 与 watchers 可能重叠，去重防重复调用）
   for (const pid of new Set([session.ownerId, ...watchers])) {

@@ -16,6 +16,7 @@ import { prisma } from "@/prisma";
 import { logger } from "@/logger";
 import { getAuthState } from "@/auth/auth";
 import { isInRace } from "@/race/room";
+import { loadRaceOnlyObjects, unloadRaceOnlyObjects } from "@/house";
 import { getOwnedVehicle, spawnVehicle, destroyPlayerVehicle, addNitro } from "@/vehicles";
 import {
   setIntervalSafe,
@@ -78,6 +79,8 @@ export interface ChallengeSession {
   /** 挑战前所在世界（退出/结束恢复） */
   prevWorld: number;
   replayId: string;
+  /** 赛道 id（加载赛道专属对象用） */
+  raceId: string;
   /** 影子战绩快照（结算显示） */
   replayRank: number | null;
   replayName: string | null;
@@ -182,6 +185,8 @@ export function cleanupChallenge(playerId: number): void {
     owned.setVirtualWorld(ch.prevWorld);
   }
   // 挑战独立世界已无人使用 → 回收世界 id 供复用
+  // 卸载该赛道的专属对象（世界 id 回收复用前必须销毁，防对象残留/碰撞泄漏）
+  if (ch.raceId) unloadRaceOnlyObjects(ch.raceId);
   freeReplayWorld(ch.worldId);
 }
 
@@ -855,7 +860,7 @@ export async function startChallengeFromRace(player: Player, raceId: string): Pr
     where: { id: raceId },
     select: { laps: true },
   });
-  return startChallengeCore(player, chosen, data, cps, Math.max(1, raceRow?.laps ?? 1));
+  return startChallengeCore(player, chosen, data, cps, Math.max(1, raceRow?.laps ?? 1), raceId);
 }
 
 /**
@@ -924,7 +929,7 @@ export async function startChallengeWithReplay(player: Player, replayId: string)
     sysMsg(player, "challenge", "该赛道至少需要 2 个检查点", "error");
     return false;
   }
-  return startChallengeCore(player, replay, data, cps, Math.max(1, race.laps ?? 1));
+  return startChallengeCore(player, replay, data, cps, Math.max(1, race.laps ?? 1), replay.raceId);
 }
 
 /** 影子挑战核心：建影子实体 + 放入玩家 + 倒计时（startChallengeFromRace/WithReplay 共用）。
@@ -935,6 +940,7 @@ async function startChallengeCore(
   data: ReplayData,
   cps: { x: unknown; y: unknown; z: unknown; angle: unknown; size: unknown }[],
   laps: number,
+  raceId: string,
 ): Promise<boolean> {
   const worldId = allocReplayWorld();
 
@@ -1040,6 +1046,7 @@ async function startChallengeCore(
     worldId,
     prevWorld: player.getVirtualWorld(),
     replayId: replay.id,
+    raceId,
     replayRank: replay.rank ?? null,
     replayName: replay.raceName ?? null,
     recorderName: replay.recorderName,
@@ -1067,6 +1074,8 @@ async function startChallengeCore(
     lastTickAt: Date.now(),
   };
   challenges.set(player.id, ch);
+  // 加载赛道专属对象（raceOnly house）到挑战世界（影子挑战时赛道场景必须存在）
+  void loadRaceOnlyObjects(raceId, worldId);
   // 统一待命制：影子停在起始帧只渲染一次（起点车可见），玩家就位后由
   // /challenge go 触发倒计时 → GO（首次进入与局内重开同一套交互）
   standbyAtStart(player, ch);
