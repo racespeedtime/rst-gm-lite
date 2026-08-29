@@ -96,7 +96,7 @@ export function updateDebugInfo(player: Player, state: DebugInfoState, kmh: numb
   const lines: string[] = [
     `x ${r2(displayPos.x)} ${r2(displayPos.y)} ${r2(displayPos.z)}  a ${r2(displayAngle)}  w ${player.getVirtualWorld()}  i ${player.getInterior()}`,
     `${qText}  h ${Math.ceil(health.health)}  ar ${Math.ceil(armour.armour)}  sk ${player.getSkin()}`,
-    `${displayTimeWeather(player)}  v ${veh ? veh.id : "-"}  sp ${Math.floor(kmh)}  k 0x${(keys.keys & 0xffff).toString(16)}`,
+    `${displayTimeWeather(player)}  v ${veh ? veh.id : "-"}  sp ${Math.floor(kmh)}  fps ${player.getFps()}  k 0x${(keys.keys & 0xffff).toString(16)}`,
   ];
   // 观战中：显示被观战对象（p 玩家 / v 车辆）
   const st = getObserveTarget(player.id);
