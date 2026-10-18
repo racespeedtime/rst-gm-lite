@@ -27,6 +27,10 @@
     "format": "oxfmt",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "db:generate": "prisma generate",
+    "predev": "npm run db:generate",
+    "prebuild": "npm run db:generate",
+    "postinstall": "npm run db:generate",
     "prepare": "husky"
   },
   "dependencies": {
