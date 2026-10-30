@@ -33,7 +33,7 @@ import {
   saveRaceReplay,
 } from "@/replay/recorder";
 import { cleanupScriptVehicle } from "./scripts";
-import { cleanupObserve, isObserving, stopObserve } from "@/core/observe";
+import { cleanupObserve, isObserving, stopObserve, detachObserversOfPlayer } from "@/core/observe";
 import { cancelCountdownFx } from "@/interface/countdownFx";
 import { clearTimeoutSafe } from "@/core/timers";
 import {
@@ -74,6 +74,8 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
         room.lastPositions.delete(playerId);
         room.afk.delete(playerId);
         clearSpectatorCpForMember(playerId);
+        // 外部观战者看的是该观众：目标掉线，退出观战回各自世界
+        detachObserversOfPlayer(playerId, (oid) => playerRaces.has(oid));
         broadcastToRoom(
           room,
           `${Player.getInstance(playerId)?.getName().name ?? "一名观众"} 离开了观众席（掉线）`,
@@ -173,6 +175,8 @@ export function cleanupRacePlayer(playerId: number, opts?: { sessionId?: number 
       room.members.delete(playerId);
       room.lastPositions.delete(playerId); // 掉线快照缓存随成员移出清理
       room.afk.delete(playerId); // 挂机累计随断线清理（防 Map 残留到房间销毁）
+      // 外部观战者看的是该参赛者：无重连窗口，退出观战回各自世界
+      detachObserversOfPlayer(playerId, (oid) => playerRaces.has(oid));
       // 房主掉线 → 转移房主（优先参赛者；只剩观众则交给 checkRoomState 解散）
       if (room.ownerId === playerId) {
         const next = getRacers(room)[0];
@@ -317,6 +321,10 @@ export function checkRoomState(room: RaceRoom): void {
         restoreSpectatorAfterRace(m, mp);
         sysMsg(m, "race", "房间已解散，已退出观众席", "info");
       }
+    }
+    // 外部（非本房）观战者：房间世界即将回收，退出观战回各自世界
+    for (const m of room.members.values()) {
+      detachObserversOfPlayer(m.id, (oid) => playerRaces.has(oid));
     }
     // 全员离开：各自的倒计时动画链随断线自停（组件帧守卫），成员残留 TD 一并清
     for (const m of room.members.values()) cancelCountdownFx(m.id);

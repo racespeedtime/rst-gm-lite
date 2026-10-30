@@ -98,6 +98,20 @@ export function isObserveBlocked(playerId: number): boolean {
   return !!getObserveScope(playerId)?.blockedReason;
 }
 
+/** 让所有正在观战 targetId 的观察者退出观战（skip 返回 true 的观察者跳过，
+ *  由调用方按房间角色自行恢复）。用于房间销毁/选手离开后清理外部观战者，
+ *  防止其卡在即将回收的房间世界。 */
+export function detachObserversOfPlayer(
+  targetId: number,
+  skip?: (observerId: number) => boolean,
+): void {
+  for (const oid of getObserverIdsOf(targetId)) {
+    if (skip?.(oid)) continue;
+    const observer = Player.getInstance(oid);
+    if (observer && observer.isConnected()) stopObserve(observer);
+  }
+}
+
 /** 观战切换：循环切换下一个/上一个可观战目标。
  *  open.mp 无现成的"观战目标切换"事件。触发源：
  *  - 方向键 ←/→（getKeys 轮询边沿检测）与 /tv next|prev 命令

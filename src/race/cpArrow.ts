@@ -104,7 +104,7 @@ function onSpectatorStart(observerId: number): void {
   const member = Player.getInstance(st.originPlayerId);
   if (!member || !member.isConnected()) return;
   const pr = playerRaces.get(member.id);
-  if (!pr) return;
+  if (!pr || pr.role !== "racer") return; // 观众席/非参赛者没有比赛 CP
   const room = rooms.get(pr.roomId);
   if (room && room.state === "RACING") {
     syncCpToObservers(room, member, pr.cpIndex);

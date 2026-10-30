@@ -17,7 +17,13 @@ import {
   isObserveStopLocked,
   isObserveBlocked,
 } from "@/core/observe";
-import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";
+import {
+  isInRace,
+  getRacePlayerState,
+  getRaceRoom,
+  respawnToLastCp,
+  respawnAtRoomStart,
+} from "@/race/room";
 import { isEditing } from "@/race/editor";
 import { flipVehicle } from "@/core/vehicleAuto";
 import { isPlayerLocked } from "@/core/interaction";
@@ -192,8 +198,9 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
         // 比赛中：重生回上一 CP（与 /kill 一致）；非比赛：正常重生
         const racePr = isInRace(player.id) ? getRacePlayerState(player.id) : undefined;
         const room = racePr ? getRaceRoom(racePr.roomId) : undefined;
-        if (racePr && racePr.role === "racer" && room && room.state === "RACING") {
-          void respawnToLastCp(player, racePr, room);
+        if (racePr && racePr.role === "racer" && room) {
+          if (room.state === "RACING") void respawnToLastCp(player, racePr, room);
+          else void respawnAtRoomStart(player);
         } else {
           player.spawn();
         }

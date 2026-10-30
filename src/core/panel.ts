@@ -27,6 +27,7 @@ import {
   restartRace,
   becomeSpectator,
   becomeRacer,
+  respawnAtRoomStart,
 } from "@/race/room";
 import { countRacers } from "@/race/state";
 import { isObserving, showRoomMemberList } from "@/core/observe";
@@ -181,8 +182,9 @@ const panelGroups: PanelGroup[] = [
         run: (player) => {
           const pr = getRacePlayerState(player.id);
           const room = pr ? getRaceRoom(pr.roomId) : undefined;
-          if (pr && room && room.state === "RACING") {
-            void respawnToLastCp(player, pr, room);
+          if (pr && room) {
+            if (room.state === "RACING") void respawnToLastCp(player, pr, room);
+            else void respawnAtRoomStart(player);
           } else {
             player.spawn();
           }

@@ -56,6 +56,7 @@ import {
   isObserving,
   getObserverIdsOf,
   getObserveTarget,
+  detachObserversOfPlayer,
 } from "@/core/observe";
 import { getWorldWeather, snapshotPersonalTime } from "@/core/worldenv";
 import { getCachedSettingByUserId } from "@/personalize/settings";
@@ -797,6 +798,54 @@ async function positionPlayerAtStart(player: Player, room: RaceRoom): Promise<vo
   showNextCheckpoint(player, room.cps, -1);
   // 加入/换赛道时同步观战者的起点 CP 箭头（观察者跟着看到起点）
   syncCpToObservers(room, player, -1);
+}
+
+/** 房间销毁/选手离开时，把不在本房的外部观战者退出观战（恢复各自世界）：
+ *  否则房间世界被回收/选手切回原世界后，外部观战者会卡在失效世界或继续盯着
+ *  已换世界的目标。本房成员（racer/spectator）由各自角色恢复逻辑处理。 */
+function detachExternalObservers(targetId: number): void {
+  detachObserversOfPlayer(targetId, (oid) => playerRaces.has(oid));
+}
+
+/** 等待/倒计时阶段把参赛者放回起点并正常重生（面板/快捷操作/ /kill 共用）。
+ *  直接 player.spawn() 会用主世界 spawnInfo 定位到错误坐标，必须先按起点摆车。 */
+export async function respawnAtRoomStart(player: Player): Promise<void> {
+  const pr = getRacePlayerState(player.id);
+  const room = pr ? getRaceRoom(pr.roomId) : undefined;
+  if (!pr || !room || pr.role !== "racer" || pr.finished) return;
+  if (room.state !== "WAITING" && room.state !== "COUNTDOWN") return;
+  if (room.roleSwitches.size > 0) return; // 房间正在切身份/重开/换图
+  const first = room.cps[0];
+  if (!first) return;
+  room.roleSwitches.add(player.id); // 重定位期间禁止并发开赛
+  try {
+    if (isObserving(player.id)) stopObserve(player);
+    // 先把 spawnInfo 指到起点再 spawn，否则 player.spawn() 会按主世界旧 spawnInfo
+    // 出生（人车分离/被传去地图另一端）；之后 positionPlayerAtStart 负责摆车+TD/CP。
+    const startAngle = getFirstCpStartAngle(room.cps).angle;
+    player.setSpawnInfo(
+      0,
+      player.getSkin(),
+      first.x,
+      first.y,
+      first.z,
+      startAngle,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+    );
+    player.spawn();
+    if (!player.isConnected() || !isInRace(player.id) || rooms.get(room.id) !== room) {
+      return;
+    }
+    sysMsg(player, "race", "比赛尚未开始，已回到起点", "info");
+    await positionPlayerAtStart(player, room);
+  } finally {
+    room.roleSwitches.delete(player.id);
+  }
 }
 
 /** 销毁单个成员的比赛信息 TD（racer→观众时清屏；房间销毁走 destroyRaceTds） */
@@ -1780,6 +1829,8 @@ function endRoom(room: RaceRoom): void {
       .show(m)
       .catch(() => {});
   }
+  // 外部观战者：房间世界即将回收，退出观战回各自世界（本房成员已在上面恢复）
+  for (const m of room.members.values()) detachExternalObservers(m.id);
 
   // 回放：整场合并落盘（v9 多轨道——一场一个 .rec 文件，内含所有参赛玩家轨道）。
   // 有完成者才落盘（整场有意义）；无人完成走 checkRoomState 的 discard 路径。
@@ -1838,6 +1889,8 @@ export function leaveRace(player: Player): void {
         if (obs && obs.isConnected()) autoObserveRacer(obs, room, player.id);
       }
     }
+    // 外部（非本房）观战者：目标已离开房间，退出观战回各自世界
+    detachExternalObservers(player.id);
     checkRoomState(room);
   }
   // 离开者自己的反馈
@@ -1917,6 +1970,8 @@ function tickRooms(): void {
         playerRaces.delete(m.id);
         cleanupScriptVehicle(m.id); // 等待期玩家可能在起点的比赛车上，解散一并清
       }
+      // 外部观战者：房间世界即将回收，退出观战回各自世界
+      for (const m of room.members.values()) detachExternalObservers(m.id);
       destroyRaceTds(room);
       cleanupSpectatorCpForRoom(room); // 房间销毁：清理指向本房间成员的观察者 CP 箭头
       room.members.clear();
@@ -2186,14 +2241,11 @@ export function initRaceSystem(): void {
     // 点），spawn 会重生到主世界坐标而虚拟世界还在房间世界（玩家被传去地图另一
     // 端）。定位回起点（第一 CP）再重生
     if (room) {
-      // 观战中 /kill：先退出观战（spectate 下 putPlayerIn/重生不生效，否则人车分离）
-      if (isObserving(player.id)) stopObserve(player);
-      sysMsg(player, "race", "比赛尚未开始，已回到起点", "info");
-      await positionPlayerAtStart(player, room);
+      await respawnAtRoomStart(player);
     } else {
       sysMsg(player, "race", "比赛尚未开始，已正常重生", "info");
+      player.spawn();
     }
-    player.spawn();
     return next();
   });
 
