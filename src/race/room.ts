@@ -813,7 +813,11 @@ export async function respawnAtRoomStart(player: Player): Promise<void> {
   const pr = getRacePlayerState(player.id);
   const room = pr ? getRaceRoom(pr.roomId) : undefined;
   if (!pr || !room || pr.role !== "racer" || pr.finished) return;
-  if (room.state !== "WAITING" && room.state !== "COUNTDOWN") return;
+  if (room.state === "COUNTDOWN") {
+    sysMsg(player, "race", "比赛倒计时中不能重生，开赛后可用 /kill 回上一检查点", "warn");
+    return;
+  }
+  if (room.state !== "WAITING") return;
   if (room.roleSwitches.size > 0) return; // 房间正在切身份/重开/换图
   const first = room.cps[0];
   if (!first) return;
