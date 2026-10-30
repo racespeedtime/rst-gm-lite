@@ -4,6 +4,7 @@ import {
   GameText,
   Player,
   PlayerEvent,
+  PlayerStateEnum,
   RaceCheckpoint,
   RaceCpEvent,
   VehicleEvent,
@@ -1012,26 +1013,35 @@ async function onPlayerReachCp(player: Player): Promise<void> {
       ob.playSound(cpSound);
     }
   }
-  const scriptCtx: CpScriptContext = {
-    raceId: room.raceId,
-    cpid: nextCp.index,
-    raceName: room.raceName,
-    authorName: room.authorName,
-    cps: room.cps.map((c) => ({ index: c.index, x: c.x, y: c.y, z: c.z })),
-  };
-  try {
-    for (const script of nextCp.scripts) {
-      // spawnpos 返回 false → 终止整条脚本链（对齐原版 Race_Cp_Script_Start 的 return 1）
-      if (!execCpScript(player, scriptCtx, script, { skipCveh: isFirstCp })) return;
-      // 脚本执行（同步）期间玩家可能已离开/比赛结束 → 终止后续操作
-      if (!playerRaces.has(player.id) || rooms.get(pr.roomId)?.state !== "RACING" || pr.finished) {
-        return;
+  // 对齐原版 OnPlayerEnterRaceCheckpoint：只有司机（PLAYER_STATE_DRIVER）才执行 CP
+  // 脚本；步行/副驾驶只推进检查点（racespeedtime.pwn:3332 的 state==2 门）。否则步行
+  // 过带 speed 的 CP 会刷"需要车辆"错误，副驾驶也会触发 cveh/变速/时间天气。
+  if (player.getState() === PlayerStateEnum.DRIVER) {
+    const scriptCtx: CpScriptContext = {
+      raceId: room.raceId,
+      cpid: nextCp.index,
+      raceName: room.raceName,
+      authorName: room.authorName,
+      cps: room.cps.map((c) => ({ index: c.index, x: c.x, y: c.y, z: c.z })),
+    };
+    try {
+      for (const script of nextCp.scripts) {
+        // spawnpos 返回 false → 终止整条脚本链（对齐原版 Race_Cp_Script_Start 的 return 1）
+        if (!execCpScript(player, scriptCtx, script, { skipCveh: isFirstCp })) return;
+        // 脚本执行（同步）期间玩家可能已离开/比赛结束 → 终止后续操作
+        if (
+          !playerRaces.has(player.id) ||
+          rooms.get(pr.roomId)?.state !== "RACING" ||
+          pr.finished
+        ) {
+          return;
+        }
       }
+    } catch (e) {
+      // 脚本执行异常（native 读取失败等）：终止链但不影响玩家状态（对齐原版防御式执行）
+      logger.error(`[race] CP 脚本执行异常 race=${room.raceId} cp=${nextCp.index}`, e);
+      return;
     }
-  } catch (e) {
-    // 脚本执行异常（native 读取失败等）：终止链但不影响玩家状态（对齐原版防御式执行）
-    logger.error(`[race] CP 脚本执行异常 race=${room.raceId} cp=${nextCp.index}`, e);
-    return;
   }
   // 触达该 CP 并执行完脚本后的状态快照（回退重生恢复用）：cveh 换车后的车型
   // + time/weather 脚本结果。放在脚本链完整执行之后（execCpScript 里的 spawnpos
@@ -1715,7 +1725,7 @@ export function initRaceSystem(): void {
     const room = pr ? getRaceRoom(pr.roomId) : undefined;
     if (room && room.state === "RACING") {
       // 比赛中：直接回到上一 CP（/kill 在比赛中 = 重置回上一个检查点）
-      respawnToLastCp(player, pr!, room);
+      await respawnToLastCp(player, pr!, room);
       return next();
     }
     // 在比赛房间但未开跑（WAITING/COUNTDOWN）：没有比赛进度，正常重生。
@@ -1738,8 +1748,8 @@ export function initRaceSystem(): void {
       const pr = getRacePlayerState(player.id);
       const room = pr ? getRaceRoom(pr.roomId) : undefined;
       if (room && room.state === "RACING") {
-        // 死亡后需要重新出生
-        respawnPlayerToCp(player, pr!, room);
+        // 死亡后需要重新出生（补车要 await 查库，事件里不阻塞 next()）
+        void respawnPlayerToCp(player, pr!, room);
       }
     }
     return next();

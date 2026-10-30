@@ -88,9 +88,10 @@ function resolveVar(player: Player, ctx: CpScriptContext, varName: string): stri
     case "#vs":
       return veh ? String(veh.getSpeed()) : "0";
     case "#va":
-      // 对齐原版 Race_Cp_Script_Return：#va = 玩家朝向（GetPlayerFacingAngleEx）。
-      // 车内时 open.mp 玩家朝向与车辆角度一致；下车后取玩家朝向更贴近原版语义
-      return String(player.getFacingAngle().angle);
+      // 对齐原版 Race_Cp_Script_Return：#va = GetPlayerFacingAngleEx——
+      // 车内取车辆 Z 角度、车外取玩家朝向。车内 actor 朝向不随车头实时更新
+      // （取到的是上车时的陈旧值），直接 getFacingAngle 会让作者脚本算错方向。
+      return String(veh ? veh.getZAngle().angle : player.getFacingAngle().angle);
     case "#vzs":
       return veh ? String(veh.getVelocity().z) : "0";
     case "#ncpx":
@@ -282,6 +283,10 @@ export function execCpScript(
       const oldVelo = veh
         ? { x: veh.getVelocity().x, y: veh.getVelocity().y, z: veh.getVelocity().z }
         : null;
+      // 原版 SpawnVehicle 在销毁旧车前就取好朝向：车内在车取 GetVehicleZAngle、车外取
+      // GetPlayerFacingAngle，CreateVehicle 之后再 SetVehicleZAngle 还原（gamemode:2070/2087）。
+      // 漏掉这步时 CreateVehicle 的角度固定为 0，中途换车（如 Car 赛道 CP11 的 562）车头会瞬间朝北。
+      const oldAngle = veh ? veh.getZAngle().angle : player.getFacingAngle().angle;
       if (oldScriptVeh) {
         cleanupScriptVehicle(player.id);
       }
@@ -293,7 +298,7 @@ export function execCpScript(
         x: pos.x,
         y: pos.y,
         z: pos.z,
-        zAngle: 0,
+        zAngle: oldAngle,
         color: [-1, -1],
         respawnDelay: 0,
       });

@@ -116,7 +116,7 @@ const panelGroups: PanelGroup[] = [
           const pr = getRacePlayerState(player.id);
           const room = pr ? getRaceRoom(pr.roomId) : undefined;
           if (pr && room && room.state === "RACING") {
-            respawnToLastCp(player, pr, room);
+            void respawnToLastCp(player, pr, room);
           } else {
             player.spawn();
           }

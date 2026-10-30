@@ -185,7 +185,7 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
         const racePr = isInRace(player.id) ? getRacePlayerState(player.id) : undefined;
         const room = racePr ? getRaceRoom(racePr.roomId) : undefined;
         if (racePr && room && room.state === "RACING") {
-          respawnToLastCp(player, racePr, room);
+          void respawnToLastCp(player, racePr, room);
         } else {
           player.spawn();
         }
