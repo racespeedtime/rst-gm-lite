@@ -21,11 +21,11 @@ export function sendWelcomeMessage(player: Player): void {
 const HELP_LINES = [
   "{FFD700}Y 键 / /p — 万能面板（主要入口：赛车/爱车/战局/个性化/装扮；观战中 Y 键收不到，用 /p）",
   "{FFFFFF}/sz — 我的设置（装扮 / 爱车 / 称号 / 个性化 / 信息 / 快捷操作聚合菜单）",
-  "{FFFFFF}/r — 赛车：无参数打开赛道列表（选赛道建房）· /r s 房主开始/非房主等待 · /r s 赛道名 直接建房 · /r j 加入 · /r l 离开",
+  "{FFFFFF}/r — 赛车：/r 列表建房 · /r s 开始 · /r j 参赛 · /r ob 观众席 · /r race 回比赛 · /r l 离开",
   "{FFFFFF}/c — 刷车（/c 车辆ID · /c list 图片选车 · /c wode 召唤）· /dcar 载具无敌 · /hys 变色龙 · /stuck 脱卡 · /djs 范围倒计时",
   "{FFFFFF}/skin — 3D 选皮肤（/skin 打开菜单 · /skin ID 直接切换）",
   "{FFFFFF}/drift — 乘坐漂移 NPC 随行观光（NPC 开车，您当乘客）",
-  "{FFFFFF}/tv — 观战玩家（/tv 玩家ID · /tv off 关闭）",
+  "{FFFFFF}/tv — 观战（/tv 玩家ID · /tv off 关闭；比赛房间内 /tv 列出参赛者，观众席离开用 /r l）",
   "{FFFFFF}/s /l — 保存当前位置 / 传送回去",
   "{FFFFFF}/rec — 自由录制回放（/rec start 开始 · /rec stop 停止 · /rec list 我的录制）",
   "{FFFFFF}/rp — 回放控制（/rp play · pause · speed · seek · watch · stop）",

@@ -11,6 +11,7 @@ import {
 } from "@infernus/core";
 
 import { setIntervalSafe } from "@/core/timers";
+import { showPagedDialog } from "@/utils/pagedDialog";
 import { sysMsg } from "@/utils/msg";
 
 /** 观察状态 */
@@ -51,17 +52,84 @@ export function unregisterObserveCandidate(targetId: number, kind: "player" | "v
   observeCandidates.delete(kind === "player" ? targetId : -targetId);
 }
 
+/**
+ * 观战作用域（房间范围限制）：由玩法模块注册（目前是比赛房间）。
+ * provider 每次调用现算成员列表——成员进出房间即时生效；返回 null = 全局观战。
+ * observe 不直接 import race（core → race 反向依赖 + ESM 环风险，见 AGENTS.md
+ * 第 13 条），比赛模块在 initRaceSystem 里注册 provider。
+ */
+export interface ObserveScope {
+  /** 作用域名称（提示/列表标题用，如"比赛房间"） */
+  label: string;
+  /** 允许观战的玩家 id（含观察者自己；切换时排除） */
+  memberIds: number[];
+  /** 目标失效（完赛/离开/掉线）时是否自动切到列表内下一个目标：
+   *  观众席 true（不弹“是否停止观战”），参赛者 false（保留原有确认弹窗） */
+  autoRetarget?: boolean;
+  /** 非空 = 当前观察者不允许发起观战（如比赛中的参赛者），内容为拒绝原因 */
+  blockedReason?: string;
+}
+type ObserveScopeProvider = (observerId: number) => ObserveScope | null;
+let observeScopeProvider: ObserveScopeProvider | null = null;
+
+/** 注册观战作用域 provider（比赛模块初始化时调用；传 null 清除） */
+export function setObserveScopeProvider(provider: ObserveScopeProvider | null): void {
+  observeScopeProvider = provider;
+}
+
+/** 查观察者当前的作用域；provider 异常不影响观战主流程（退回全局观战） */
+function getObserveScope(observerId: number): ObserveScope | null {
+  if (!observeScopeProvider) return null;
+  try {
+    return observeScopeProvider(observerId);
+  } catch {
+    return null;
+  }
+}
+
+/** 当前观察者是否禁止主动停止观战：观众席必须一直保持镜头（/tv off、快捷操作
+ *  “停止观战”都不能把观众停成站在房间世界里的无镜头状态；要离开用 /r l）。 */
+export function isObserveStopLocked(playerId: number): boolean {
+  return getObserveScope(playerId)?.autoRetarget === true;
+}
+
+/** 当前观察者是否被禁止发起观战（比赛中的未完成参赛者）。UI 用来隐藏无效入口。 */
+export function isObserveBlocked(playerId: number): boolean {
+  return !!getObserveScope(playerId)?.blockedReason;
+}
+
 /** 观战切换：循环切换下一个/上一个可观战目标。
  *  open.mp 无现成的"观战目标切换"事件。触发源：
  *  - 方向键 ←/→（getKeys 轮询边沿检测）与 /tv next|prev 命令
  *  - 副驾模式（mode=ride）只切车辆目标，切换仍保持副驾（见函数内分支）
- *  鼠标右键（SECONDARY_ATTACK/瞄准）在观战模式下客户端不发送，不可用。 */
+ *  鼠标右键（SECONDARY_ATTACK/瞄准）在观战模式下客户端不发送，不可用。
+ *  有观战作用域（比赛房间）时只在本房间成员间循环；否则走全局候选池。 */
 function cycleObserveTarget(observer: Player, forward: boolean): void {
   const st = observeStates.get(observer.id);
   if (!st) return;
+
+  const scope = getObserveScope(observer.id);
+  if (scope?.blockedReason) {
+    sysMsg(observer, "observe", scope.blockedReason, "warn");
+    return;
+  }
+  if (scope) {
+    cycleScopedObserveTarget(observer, st, scope, forward);
+    return;
+  }
+
   if (observeCandidates.size === 0) return;
-  // 当前目标在候选列表中的索引；不在则从头/尾开始
-  const curKey = st.kind === "player" ? st.targetId : -st.targetId;
+  // 当前目标在候选列表中的索引；不在则从头/尾开始。
+  // 观战车内目标时：车辆实体在候选池（回放 ghost 车）→ 用车辆 key；不在（比赛车
+  // 等）→ 用 originPlayerId 定位原玩家。否则用 -targetId 永远找不到比赛车 →
+  // 每次切换都从列表头开始。
+  const vehicleIsCandidate = st.kind === "vehicle" && observeCandidates.has(-st.targetId);
+  const curKey =
+    st.kind === "player"
+      ? st.targetId
+      : vehicleIsCandidate
+        ? -st.targetId
+        : (st.originPlayerId ?? -st.targetId);
   const keys = [...observeCandidates.keys()];
   let idx = keys.indexOf(curKey);
   if (idx < 0) idx = forward ? -1 : keys.length;
@@ -72,29 +140,68 @@ function cycleObserveTarget(observer: Player, forward: boolean): void {
     if (st.mode === "ride" && cand.kind !== "vehicle") continue;
     if (cand.kind === "player") {
       const target = Player.getInstance(k);
-      if (target && target.isConnected() && target.id !== observer.id) {
-        startObservePlayer(observer, target); // 会更新 observeStates + spectate
+      if (!target || !target.isConnected() || target.id === observer.id) continue;
+      // 切到的还是当前目标（候选只有一名玩家时循环回自己）：跳过无意义切换，
+      // 否则 spectate 反复 spectatePlayer 同一人会重置镜头
+      if (st.kind === "player" && target.id === st.targetId) continue;
+      // 观战未注册的比赛车时 originPlayerId 是原玩家，切回他没有意义（下车由重跟踪处理）
+      if (!vehicleIsCandidate && st.originPlayerId != null && target.id === st.originPlayerId) {
+        continue;
+      }
+      if (startObservePlayer(observer, target)) {
         sysMsg(observer, "observe", `已切换到 ${target.getName().name}(${target.id})`, "info");
         return;
       }
     } else {
       const target = Vehicle.getInstance(-k);
-      if (target && target.isValid()) {
-        // 切到的还是当前目标（候选只有一辆时循环回自己）：跳过无意义切换——
-        // 否则 spectate 反复 spectateVehicle 同一辆会重置镜头（f4b6d41 的坑）。
-        // 仅 kind=vehicle 时可比（玩家 id 与车辆 id 独立命名空间，数值可能撞号）
-        if (st.kind === "vehicle" && target.id === st.targetId) continue;
-        if (st.mode === "ride") {
-          // 副驾切换失败（座位满等）：内部已提示原因，不追加"已切换"误报
-          if (startRideVehicle(observer, target)) {
-            sysMsg(observer, "observe", `已切换副驾到车辆 #${target.id}`, "info");
-          }
-        } else {
-          startObserveVehicle(observer, target);
-          sysMsg(observer, "observe", `已切换到车辆 #${target.id}`, "info");
+      if (!target || !target.isValid()) continue;
+      // 切到的还是当前目标（候选只有一辆时循环回自己）：跳过无意义切换——
+      // 否则 spectate 反复 spectateVehicle 同一辆会重置镜头（f4b6d41 的坑）。
+      // 仅 kind=vehicle 时可比（玩家 id 与车辆 id 独立命名空间，数值可能撞号）
+      if (st.kind === "vehicle" && target.id === st.targetId) continue;
+      if (st.mode === "ride") {
+        // 副驾切换失败（座位满等）：内部已提示原因，不追加"已切换"误报；
+        // 失败即返回（避免对每辆满座车重复弹提示）
+        if (startRideVehicle(observer, target)) {
+          sysMsg(observer, "observe", `已切换副驾到车辆 #${target.id}`, "info");
         }
         return;
       }
+      if (startObserveVehicle(observer, target)) {
+        sysMsg(observer, "observe", `已切换到车辆 #${target.id}`, "info");
+        return;
+      }
+    }
+  }
+}
+
+/** 房间作用域内的切换：按房间成员列表循环（排除自己；当前目标不在列表时从头/尾开始） */
+function cycleScopedObserveTarget(
+  observer: Player,
+  st: ObserveState,
+  scope: ObserveScope,
+  forward: boolean,
+): void {
+  const ids = scope.memberIds.filter((id) => id !== observer.id);
+  if (ids.length === 0) {
+    sysMsg(observer, "observe", `${scope.label}内没有其他玩家可观战`, "info");
+    return;
+  }
+  // 观战玩家用 targetId；观战车内目标用 originPlayerId（车内目标 kind=vehicle）
+  const curId = st.kind === "player" ? st.targetId : st.originPlayerId;
+  let idx = curId != null ? ids.indexOf(curId) : -1;
+  if (idx < 0) idx = forward ? -1 : ids.length;
+  for (let step = 1; step <= ids.length; step++) {
+    const id = ids[(idx + (forward ? step : -step) + ids.length * 2) % ids.length];
+    // 只有自己/房间内只有一人：不重复 spectate 同一目标（会重置镜头）
+    if (id === curId) continue;
+    // 目标本身在观战（/tv 会拒绝）→ 跳过，不逐条弹“无法观看”
+    if (getObserveTarget(id)) continue;
+    const target = Player.getInstance(id);
+    if (!target || !target.isConnected()) continue;
+    if (startObservePlayer(observer, target)) {
+      sysMsg(observer, "observe", `已切换到 ${target.getName().name}(${target.id})`, "info");
+      return;
     }
   }
 }
@@ -179,22 +286,32 @@ function emitObserveStop(observerId: number): void {
   }
 }
 
-/** 开始观战玩家（自动跟踪其车辆/步行状态） */
-export function startObservePlayer(observer: Player, target: Player): void {
+/** 开始观战玩家（自动跟踪其车辆/步行状态）。返回是否成功开始（失败时已提示原因）。 */
+export function startObservePlayer(observer: Player, target: Player): boolean {
   if (observer.id === target.id) {
     sysMsg(observer, "observe", "不能观看自己", "warn");
-    return;
+    return false;
+  }
+  // 观战作用域：在比赛房间内只能观战本房间成员（/tv、玩家信息、快捷操作都走这里）
+  const scope = getObserveScope(observer.id);
+  if (scope?.blockedReason) {
+    sysMsg(observer, "observe", scope.blockedReason, "warn");
+    return false;
+  }
+  if (scope && !scope.memberIds.includes(target.id)) {
+    sysMsg(observer, "observe", `你正在${scope.label}中，只能观战房间内成员`, "warn");
+    return false;
   }
   if (
     !target.isConnected() ||
     [PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState())
   ) {
     sysMsg(observer, "observe", "对方当前无法被观看", "warn");
-    return;
+    return false;
   }
   // 副驾 → 镜头观战：先下车（否则观战期间仍坐在旧车里）
-  const prev = observeStates.get(observer.id);
-  if (prev?.mode === "ride") {
+  const existing = observeStates.get(observer.id);
+  if (existing?.mode === "ride") {
     try {
       observer.removeFromVehicle();
     } catch {
@@ -205,33 +322,33 @@ export function startObservePlayer(observer: Player, target: Player): void {
     // 换车/上车瞬间 isInAnyVehicle 与 getVehicle 之间有空窗：getVehicle 可能
     // 返回 undefined，非空断言会让 startObserveVehicle 在 isValid() 上抛 TypeError
     const veh = target.getVehicle();
-    if (veh) startObserveVehicle(observer, veh, target.id);
-  } else {
-    // 保留已有 prevWorld/prevInterior（重跟踪时不覆盖最初值）
-    const existing = observeStates.get(observer.id);
-    observeStates.set(observer.id, {
-      targetId: target.id,
-      kind: "player",
-      prevWorld: existing?.prevWorld ?? observer.getVirtualWorld(),
-      prevInterior: existing?.prevInterior ?? observer.getInterior(),
-      originPlayerId: target.id,
-    });
-    observer.setVirtualWorld(target.getVirtualWorld());
-    observer.setInterior(target.getInterior());
-    observer.toggleSpectating(true);
-    observer.spectatePlayer(target, SpectateModesEnum.NORMAL);
-    sysMsg(observer, "observe", `正在观看 ${target.getName().name}(${target.id})`, "info");
-    emitObserveStart(observer.id);
+    if (veh && startObserveVehicle(observer, veh, target.id)) return true;
   }
+  // 保留已有 prevWorld/prevInterior（重跟踪/切换时不覆盖最初值）
+  observeStates.set(observer.id, {
+    targetId: target.id,
+    kind: "player",
+    prevWorld: existing?.prevWorld ?? observer.getVirtualWorld(),
+    prevInterior: existing?.prevInterior ?? observer.getInterior(),
+    originPlayerId: target.id,
+  });
+  observer.setVirtualWorld(target.getVirtualWorld());
+  observer.setInterior(target.getInterior());
+  observer.toggleSpectating(true);
+  observer.spectatePlayer(target, SpectateModesEnum.NORMAL);
+  sysMsg(observer, "observe", `正在观看 ${target.getName().name}(${target.id})`, "info");
+  emitObserveStart(observer.id);
+  return true;
 }
 
-/** 开始观战车辆（originPlayerId：从观战玩家切入时保留来源玩家，下车后重跟踪用） */
+/** 开始观战车辆（originPlayerId：从观战玩家切入时保留来源玩家，下车后重跟踪用）。
+ *  返回是否成功（无效实体返回 false，供切换循环继续找下一个目标）。 */
 export function startObserveVehicle(
   observer: Player,
   target: Vehicle,
   originPlayerId?: number,
-): void {
-  if (!target.isValid()) return;
+): boolean {
+  if (!target.isValid()) return false;
   const existing = observeStates.get(observer.id);
   // 副驾 → 镜头观战：先下车（否则观战期间仍坐在旧车里）
   if (existing?.mode === "ride") {
@@ -253,6 +370,7 @@ export function startObserveVehicle(
   observer.toggleSpectating(true);
   observer.spectateVehicle(target, SpectateModesEnum.NORMAL);
   emitObserveStart(observer.id);
+  return true;
 }
 
 /** 停止观战。quiet=true 时跳过"已关闭观战"提示（换车重挂等瞬态场景，避免误导
@@ -428,10 +546,33 @@ export function cleanupObserve(playerId: number): void {
   emitObserveStop(playerId); // 断线：清理观察者专属实体（CP 箭头等）
 }
 
+/** 作用域自动重挂：给观众找一个还能看的参赛者（目标完赛/离开/掉线时用） */
+function tryScopedRetarget(observer: Player, scope: ObserveScope, skipId?: number): boolean {
+  for (const id of scope.memberIds) {
+    if (id === observer.id || id === skipId) continue;
+    const target = Player.getInstance(id);
+    if (!target || !target.isConnected()) continue;
+    if ([PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState())) continue;
+    if (getObserveTarget(id)) continue;
+    if (startObservePlayer(observer, target)) return true;
+  }
+  return false;
+}
+
+/** 目标失效且没有可切目标：观众席只提示等待（不弹停止观战框），其他观察者沿用确认框 */
+function observeLostFallback(observer: Player, scope: ObserveScope | null): void {
+  if (scope?.autoRetarget) {
+    sysMsg(observer, "observe", "暂无可观战的参赛者，等待比赛继续（/r l 可离开观众席）", "plain");
+    return;
+  }
+  suggestStop(observer);
+}
+
 /**
  * 目标失去跟踪（掉线/换车/重生等）时重新跟踪或提示。
  */
 function retracePlayer(observer: Player, state: ObserveState): void {
+  const scope = getObserveScope(observer.id);
   // 有最初跟踪玩家（目标上车切的车）→ 恢复为跟踪该玩家本人（下车/换车/重生后
   // 目标仍在，重跟踪回玩家而非继续盯车）
   if (state.originPlayerId != null) {
@@ -441,10 +582,15 @@ function retracePlayer(observer: Player, state: ObserveState): void {
       origin.isConnected() &&
       ![PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(origin.getState())
     ) {
-      startObservePlayer(observer, origin);
+      // 作用域拒绝（目标已离开房间等）→ 观众自动切下一个；参赛者按无法跟踪处理
+      if (!startObservePlayer(observer, origin)) {
+        if (scope?.autoRetarget && tryScopedRetarget(observer, scope, origin.id)) return;
+        observeLostFallback(observer, scope);
+      }
       return;
     }
-    suggestStop(observer);
+    if (scope?.autoRetarget && tryScopedRetarget(observer, scope, state.originPlayerId)) return;
+    observeLostFallback(observer, scope);
     return;
   }
   if (state.kind === "player") {
@@ -454,10 +600,14 @@ function retracePlayer(observer: Player, state: ObserveState): void {
       target.isConnected() &&
       ![PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState())
     ) {
-      startObservePlayer(observer, target);
+      if (!startObservePlayer(observer, target)) {
+        if (scope?.autoRetarget && tryScopedRetarget(observer, scope, target.id)) return;
+        observeLostFallback(observer, scope);
+      }
       return;
     }
-    suggestStop(observer);
+    if (scope?.autoRetarget && tryScopedRetarget(observer, scope, state.targetId)) return;
+    observeLostFallback(observer, scope);
   } else {
     // kind === "vehicle"：targetId 是车辆 id（不能用 Player.getInstance 取）
     const veh = Vehicle.getInstance(state.targetId);
@@ -473,7 +623,8 @@ function retracePlayer(observer: Player, state: ObserveState): void {
       startObserveVehicle(observer, veh);
       return;
     }
-    suggestStop(observer);
+    if (scope?.autoRetarget && tryScopedRetarget(observer, scope)) return;
+    observeLostFallback(observer, scope);
   }
 }
 
@@ -530,6 +681,40 @@ export function startObserveTicks(): void {
   setIntervalSafe(() => pollObserveKeys(), 100);
 }
 
+/** 房间观战入口：列出当前比赛房间内的其他玩家（房间作用域下 /tv 无参 / /tv room）。
+ *  同时供万能面板「切换观战目标」调用。 */
+export async function showRoomMemberList(player: Player): Promise<void> {
+  const scope = getObserveScope(player.id);
+  if (!scope) {
+    sysMsg(player, "observe", "你不在比赛房间中", "warn");
+    return;
+  }
+  const members = scope.memberIds
+    .filter((id) => id !== player.id)
+    .map((id) => Player.getInstance(id))
+    .filter((p): p is Player => !!p && p.isConnected())
+    // 与 /tv 直连校验口径一致：登录/观战中的目标无法被观看，列表里直接剔掉
+    .filter(
+      (p) =>
+        ![PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(p.getState()) &&
+        !getObserveTarget(p.id),
+    );
+  if (members.length === 0) {
+    sysMsg(player, "observe", `${scope.label}内没有其他玩家可观战`, "info");
+    return;
+  }
+  const r = await showPagedDialog(player, {
+    caption: `观战 · ${scope.label}成员`,
+    data: members,
+    headers: ["玩家", "ID"],
+    format: (p) => [p.getName().name, String(p.id)],
+    button1: "观战",
+    button2: "取消",
+  });
+  if (!r) return;
+  startObservePlayer(player, r.item);
+}
+
 /** 初始化观察系统（事件注册，模块加载时注册一次） */
 export function initObserve(): void {
   // 在线玩家都登记为可切换观战候选（断线时注销；观战者自己在切换时排除）
@@ -539,11 +724,22 @@ export function initObserve(): void {
   });
 
   // /tv <ID> 观战玩家 · /tv off 关闭 · /tv next|prev 切换上一个/下一个观战目标。
+  // 比赛房间内 /tv 无参（或 /tv room）= 列出本房间成员选择（房间作用域下没有
+  // 全局观战入口）；房间外的无参仍是用法提示。
   // 聊天命令在观战中不受限制（对齐 /p 面板原理），是切换的可靠入口——
   // 轮询/按键受 getKeys 陈旧值影响时命令兜底可靠。
   PlayerEvent.onCommandText(["tv", "ob", "spec"], ({ player, subcommand, next }) => {
     const arg = subcommand[0];
     if (!arg) {
+      const scope = getObserveScope(player.id);
+      if (scope?.blockedReason) {
+        sysMsg(player, "observe", scope.blockedReason, "warn");
+        return next();
+      }
+      if (scope) {
+        void showRoomMemberList(player);
+        return next();
+      }
       sysMsg(
         player,
         "observe",
@@ -552,13 +748,48 @@ export function initObserve(): void {
       );
       return next();
     }
+    if (arg === "room") {
+      const scope = getObserveScope(player.id);
+      if (!scope) {
+        sysMsg(player, "observe", "你不在比赛房间中，无法使用房间观战列表", "warn");
+        return next();
+      }
+      if (scope.blockedReason) {
+        sysMsg(player, "observe", scope.blockedReason, "warn");
+        return next();
+      }
+      void showRoomMemberList(player);
+      return next();
+    }
     if (arg === "off") {
+      // 观众席必须保持观战（停掉会以非 spectate 状态站在房间世界里），要离开用 /r l
+      if (isObserveStopLocked(player.id)) {
+        sysMsg(
+          player,
+          "observe",
+          "观众席不能关闭观战；用 /tv 选人切换镜头，或 /r l 离开房间",
+          "warn",
+        );
+        return next();
+      }
       stopObserve(player);
       return next();
     }
     if (arg === "next" || arg === "prev") {
       if (!observeStates.has(player.id)) {
-        sysMsg(player, "observe", "你不在观战中，先 /tv 玩家ID 开始观战", "warn");
+        const scoped = getObserveScope(player.id);
+        if (scoped?.blockedReason) {
+          sysMsg(player, "observe", scoped.blockedReason, "warn");
+          return next();
+        }
+        sysMsg(
+          player,
+          "observe",
+          scoped
+            ? "你不在观战中，先 /tv 选择房间成员开始观战"
+            : "你不在观战中，先 /tv 玩家ID 开始观战",
+          "warn",
+        );
         return next();
       }
       cycleObserveTarget(player, arg === "next");

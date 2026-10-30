@@ -25,7 +25,11 @@ import {
   respawnToLastCp,
   rollbackToPrevCp,
   restartRace,
+  becomeSpectator,
+  becomeRacer,
 } from "@/race/room";
+import { countRacers } from "@/race/state";
+import { isObserving, showRoomMemberList } from "@/core/observe";
 import { openChangeTrackMenu } from "@/race/roomUi";
 import { isEditing, exitEdit } from "@/race/editor";
 import { isInChallenge, goChallenge, restartChallenge, exitChallenge } from "@/replay/challenge";
@@ -79,7 +83,7 @@ interface PanelGroup {
 const panelGroups: PanelGroup[] = [
   {
     label: "比赛房间",
-    desc: "开始 / 离开比赛",
+    desc: "开始 / 观众席 / 离开",
     // 状态驱动分组：不自动展开单子项（否则比赛中唯一可见的"离开房间"会在按 Y 瞬间执行）
     noAutoExpand: true,
     // 仅在比赛房间内（创建/加入比赛后）显示；其余玩法组在比赛中自动隐藏
@@ -88,7 +92,7 @@ const panelGroups: PanelGroup[] = [
       {
         label: "开始比赛",
         raceSafe: true,
-        // 仅房主且房间处于等待状态才显示（非房主/已开跑时点了也是"只有房主能开始/比赛已开始"）
+        // 仅房主且房间处于等待状态才显示（房主可以是观众席，仍保留开赛权）
         visible: (player) => {
           const pr = getRacePlayerState(player.id);
           const room = pr ? getRaceRoom(pr.roomId) : undefined;
@@ -108,10 +112,72 @@ const panelGroups: PanelGroup[] = [
         run: openChangeTrackMenu,
       },
       {
+        label: "加入观众席",
+        raceSafe: true,
+        desc: "收回比赛车，开赛前可切回",
+        // 仅参赛者、等待阶段、且房间还有别的参赛者（不能全员观众）
+        visible: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          return (
+            !!room && room.state === "WAITING" && pr?.role === "racer" && countRacers(room) > 1
+          );
+        },
+        run: async (player, back) => {
+          const res = await showDialog(
+            player,
+            new Dialog({
+              style: DialogStylesEnum.MSGBOX,
+              caption: "加入观众席",
+              info: "加入观众席后会收回你的比赛车辆（不影响其他玩家），开赛前可用「回到比赛」或 /r race 切回参赛。确定？",
+              button1: "加入观众席",
+              button2: "取消",
+            }),
+          );
+          if (res && res.response === 1) becomeSpectator(player);
+          return back?.();
+        },
+      },
+      {
+        label: "回到比赛",
+        raceSafe: true,
+        desc: "重新拿车参赛",
+        visible: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          return !!room && room.state === "WAITING" && pr?.role === "spectator";
+        },
+        run: async (player, back) => {
+          await becomeRacer(player);
+          return back?.();
+        },
+      },
+      {
+        label: "切换观战目标",
+        raceSafe: true,
+        desc: "列出本房参赛者",
+        // 观众随时可切；参赛者仅开赛前/完赛后允许（比赛中未完赛禁止观战）
+        visible: (player) => {
+          const pr = getRacePlayerState(player.id);
+          const room = pr ? getRaceRoom(pr.roomId) : undefined;
+          if (!pr || !room) return false;
+          if (pr.role === "spectator") return true;
+          return pr.role === "racer" && (pr.finished || room.state === "WAITING");
+        },
+        run: async (player, back) => {
+          await showRoomMemberList(player);
+          return back?.();
+        },
+      },
+      {
         label: "重生",
         raceSafe: true,
-        // 常用操作置前：比赛房间组仅在比赛中显示；RACING 重生回上一 CP
-        //（对齐原版 /kill），未开跑（等待/倒计时）正常重生
+        // 参赛者专属：RACING 重生回上一 CP（对齐原版 /kill），未开跑正常重生；
+        // 观众席没有车/比赛进度，已完赛者等待结算/自动观战，均不显示
+        visible: (player) => {
+          const pr = getRacePlayerState(player.id);
+          return pr?.role === "racer" && !pr.finished && !isObserving(player.id);
+        },
         run: (player) => {
           const pr = getRacePlayerState(player.id);
           const room = pr ? getRaceRoom(pr.roomId) : undefined;
@@ -126,13 +192,19 @@ const panelGroups: PanelGroup[] = [
         label: "回退到更早检查点",
         raceSafe: true,
         // 再往前回退一个 CP（上一 CP 在空中/无落点重生落空时的兜底）；
-        // 同步回撤该 CP 触达后的状态（cveh 车型/time/weather）。仅开跑后显示
+        // 同步回撤该 CP 触达后的状态（cveh 车型/time/weather）。仅参赛者开跑后显示
         visible: (player) => {
           const pr = getRacePlayerState(player.id);
           const room = pr ? getRaceRoom(pr.roomId) : undefined;
           // 已触达累计序号 ≥ 1（跨圈后 cpIndex=-1 但累计序号仍指向上一圈末 CP）
           return (
-            !!room && room.state === "RACING" && !!pr && pr.lap * room.cps.length + pr.cpIndex >= 1
+            !!room &&
+            room.state === "RACING" &&
+            !!pr &&
+            pr.role === "racer" &&
+            !pr.finished &&
+            !isObserving(player.id) &&
+            pr.lap * room.cps.length + pr.cpIndex >= 1
           );
         },
         run: (player) => {
@@ -163,7 +235,7 @@ const panelGroups: PanelGroup[] = [
             new Dialog({
               style: DialogStylesEnum.MSGBOX,
               caption: "重开比赛",
-              info: `确定重开比赛「${room?.raceName ?? ""}」吗？\n当前比赛将作废，所有成员回到起点重新开始！`,
+              info: `确定重开比赛「${room?.raceName ?? ""}」吗？\n当前比赛将作废，所有参赛者回到起点重新开始（观众席保留）！`,
               button1: "确认重开",
               button2: "取消",
             }),

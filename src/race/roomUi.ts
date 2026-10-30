@@ -9,6 +9,8 @@ import {
   leaveRace,
   isInRace,
   joinRoom,
+  becomeSpectator,
+  becomeRacer,
   broadcastToRoom,
   findWaitingRoom,
   getRacePlayerState,
@@ -242,12 +244,22 @@ export async function openChangeTrackMenu(
   return back?.();
 }
 
-/** 加入房间流程 */
-function joinRoomFlow(player: Player): void {
+/** 加入房间流程（role：参赛 / 观众席） */
+function joinRoomFlow(player: Player, role: "racer" | "spectator" = "racer"): void {
   // 已在比赛中：直接提示而非静默踢出——joinRoom 会对已参赛玩家 leaveRace，
   // 正在跑的比赛进度/录像/排名会被无声放弃
   if (isInRace(player.id)) {
-    sysMsg(player, "race", "你已在比赛中，先 /r l 离开后再加入其他房间", "warn");
+    const pr = getRacePlayerState(player.id);
+    sysMsg(
+      player,
+      "race",
+      pr?.role === "spectator"
+        ? "你已在观众席，用 /r race 回到比赛，或 /r l 离开房间"
+        : role === "spectator"
+          ? "你已在比赛房间中，直接 /r ob 切换观众席"
+          : "你已在比赛中，先 /r l 离开后再加入其他房间",
+      "warn",
+    );
     return;
   }
   const room = findWaitingRoom();
@@ -255,11 +267,14 @@ function joinRoomFlow(player: Player): void {
     sysMsg(player, "race", "当前没有等待中的比赛房间", "error");
     return;
   }
-  void joinRoom(player, room).then(() => {
+  void joinRoom(player, room, { role }).then(() => {
     // joinRoom 中途可能因断线/校验中止（未真正入房）——此时不应广播加入消息
     const pr = getRacePlayerState(player.id);
     if (pr && getRaceRoom(pr.roomId) === room) {
-      broadcastToRoom(room, `${player.getName().name} 加入了比赛`);
+      broadcastToRoom(
+        room,
+        `${player.getName().name} ${role === "spectator" ? "加入了观众席" : "加入了比赛"}`,
+      );
     }
   });
 }
@@ -472,7 +487,21 @@ export function initRaceUi(): void {
         }
       }
     } else if (cmd === "j") {
-      joinRoomFlow(player);
+      joinRoomFlow(player, "racer");
+    } else if (cmd === "ob" || cmd === "spec" || cmd === "watch") {
+      // /r ob：房间内 = 切观众席；不在房间 = 以观众身份加入等待中的房间
+      if (isInRace(player.id)) {
+        becomeSpectator(player);
+      } else {
+        joinRoomFlow(player, "spectator");
+      }
+    } else if (cmd === "race" || cmd === "back") {
+      // /r race：观众席回到比赛（仅开赛前）
+      if (!isInRace(player.id)) {
+        sysMsg(player, "race", "你不在比赛房间中，先 /r j 参赛或 /r ob 进观众席", "warn");
+      } else {
+        void becomeRacer(player);
+      }
     } else if (cmd === "go") {
       // /r go：房间内纯开始命令（对齐 /r s 无参数的"房主开始"分支）。
       // 不在房间 → 明确报错（不弹列表不建房）；非房主 → 提示等待。
@@ -521,12 +550,14 @@ export function initRaceUi(): void {
       // 选中赛道直接创建比赛）
       void openRaceListDialog(player);
     } else {
+      // 拆两条短消息：SA 客户端聊天单条上限 128 字节（gbk），整条 usage 会被丢弃
       sysMsg(
         player,
         "race",
-        "用法: /r s 赛道名称 创建比赛 · /r go 房间内开始 · /r j 加入 · /r l 离开 · /r info 名称 · /r create 名称 · /r edit 名称|cp|q|d",
+        "用法: /r s 赛道名 创建 · /r go 开始 · /r j 参赛 · /r ob 观众席 · /r race 回比赛 · /r l 离开",
         "info",
       );
+      sysMsg(player, "race", " /r info 名称 · /r create 名称 · /r edit 名称|cp|q|d", "info");
     }
     return next();
   });

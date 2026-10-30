@@ -4,9 +4,14 @@ import type { Player } from "@infernus/core";
 /** 比赛房间状态 */
 export type RaceRoomState = "WAITING" | "COUNTDOWN" | "RACING" | "FINISHED";
 
+/** 房间身份：参赛者 / 观众席（OB）。只有 WAITING 阶段允许切换 */
+export type RaceRole = "racer" | "spectator";
+
 /** 玩家比赛状态（含圈数进度） */
 export interface PlayerRace {
   roomId: number;
+  /** 房间身份：racer 参与比赛，spectator 只在观众席观战 */
+  role: RaceRole;
   cpIndex: number; // 当前已通过的最大 CP 下标（-1 = 未过任何 CP）
   lap: number; // 当前圈（0 = 第一圈，laps-1 = 最后一圈）
   startTime: number;
@@ -18,6 +23,12 @@ export interface PlayerRace {
   rank?: number;
   /** 加入比赛前的世界（开赛切独立世界，离开/结束时恢复） */
   prevWorld: number;
+  /** 加入比赛前的位置/朝向（观众退出恢复；racer→观众时把车停回这里） */
+  prevPos: { x: number; y: number; z: number };
+  prevAngle: number;
+  /** racer→观众时是否把比赛车移到了 prevWorld（退出观众席时车也回 prevPos）。
+   *  false = 以观众身份直接进房，车本来就在原世界，未移动过 */
+  spectatorCarStowed?: boolean;
   /** 过 CP 后（脚本执行完）的状态快照，按"比赛累计 CP 序号"索引：
    *  k = lap × 一圈CP数 + cpIndex（跨圈瞬间 cpIndex=-1、lap++，公式仍指向该 CP）。
    *  记录 cveh 换车后的车型 + time/weather 脚本结果——重生多回退一格时
@@ -51,6 +62,9 @@ export interface RaceRoom {
   worldId: number; // 比赛独立世界（开赛时成员切换）
   ownerId: number;
   ownerUserId: string; // 房主 userId（重连恢复房主身份用）
+  /** 正在切换身份/异步入场定位（becomeRacer / racer 加入定位 / 重开/换赛道重定位）：
+   *  非空时 startRace 拒绝开赛，防止倒计时与身份切换并发导致人车错位 */
+  roleSwitches: Set<number>;
   state: RaceRoomState;
   members: Map<number, Player>;
   cps: {

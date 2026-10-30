@@ -222,6 +222,7 @@ export async function respawnPlayerToCp(
   room: RaceRoom,
   rollback?: number,
 ): Promise<void> {
+  if (pr.role !== "racer" || pr.finished) return;
   const target = computeTargetCp(pr, room, rollback);
   const prev = target.prev;
   if (!prev) return;
@@ -289,6 +290,7 @@ export async function respawnToLastCp(
   room: RaceRoom,
   rollback?: number,
 ): Promise<void> {
+  if (pr.role !== "racer" || pr.finished) return;
   const target = computeTargetCp(pr, room, rollback);
   if (!target.prev) return;
   if (!(await respawnToCpCore(player, room, target))) return;
@@ -303,6 +305,7 @@ export async function respawnToLastCp(
  * colandreas 抬不动），重生会落空/卡空——回退到更早一个 CP，并恢复该 CP 触达后的状态
  * （cveh 车型 / time / weather，回放式状态回撤）。 */
 export function rollbackToPrevCp(player: Player, pr: PlayerRace, room: RaceRoom): void {
+  if (pr.role !== "racer" || pr.finished) return;
   // 已触达累计序号 < 1（起点 / 刚过第一个 CP / 第一圈未过任何 CP）→ 没有更早的
   // 不同 CP 可回退（回退会 clamp 到同一目标）。跨圈后 cpIndex=-1 但累计序号
   // lap×len-1 ≥ len-1，回退目标 = 上一圈末 CP 的前一个，有效。

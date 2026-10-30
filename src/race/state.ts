@@ -1,3 +1,4 @@
+import type { Player } from "@infernus/core";
 import { COLOR_RACE } from "@/utils/colors";
 import { PREFIX } from "@/utils/msg";
 import type { PlayerRace, RaceRoom } from "./types";
@@ -45,6 +46,43 @@ export const UUID_RE =
 /** 玩家是否在比赛中 */
 export function isInRace(playerId: number): boolean {
   return playerRaces.has(playerId);
+}
+
+/** 玩家是否为房间参赛者（观众席不算） */
+export function isRacer(playerId: number): boolean {
+  return playerRaces.get(playerId)?.role === "racer";
+}
+
+/** 玩家是否为房间观众（OB） */
+export function isSpectator(playerId: number): boolean {
+  return playerRaces.get(playerId)?.role === "spectator";
+}
+
+/** 房间内在线参赛者（比赛逻辑统一走这里，不要直接遍历 room.members） */
+export function getRacers(room: RaceRoom): Player[] {
+  const out: Player[] = [];
+  for (const m of room.members.values()) {
+    if (playerRaces.get(m.id)?.role === "racer") out.push(m);
+  }
+  return out;
+}
+
+/** 房间内在线观众（OB） */
+export function getSpectators(room: RaceRoom): Player[] {
+  const out: Player[] = [];
+  for (const m of room.members.values()) {
+    if (playerRaces.get(m.id)?.role === "spectator") out.push(m);
+  }
+  return out;
+}
+
+/** 房间内在线参赛者数量（房间存活/开赛条件） */
+export function countRacers(room: RaceRoom): number {
+  let n = 0;
+  for (const m of room.members.values()) {
+    if (playerRaces.get(m.id)?.role === "racer") n++;
+  }
+  return n;
 }
 
 /** 获取玩家比赛状态（供其他模块读取） */

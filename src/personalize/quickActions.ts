@@ -10,7 +10,13 @@ import {
 import { pickOption, notifySaved } from "./settings";
 import { sysMsg } from "@/utils/msg";
 import { setTimeoutSafe } from "@/core/timers";
-import { startObservePlayer, stopObserve, isObserving } from "@/core/observe";
+import {
+  startObservePlayer,
+  stopObserve,
+  isObserving,
+  isObserveStopLocked,
+  isObserveBlocked,
+} from "@/core/observe";
 import { isInRace, getRacePlayerState, getRaceRoom, respawnToLastCp } from "@/race/room";
 import { isEditing } from "@/race/editor";
 import { flipVehicle } from "@/core/vehicleAuto";
@@ -175,16 +181,18 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
     });
   }
 
-  // 重生：观战中隐藏（观战态重生会 spawn 出观战但 observeStates 残留，
-  // 且 stopObserve 恢复的 prevWorld 语义错乱；观战有独立的"停止观战"项）
-  if (!isObserving(player.id)) {
+  // 重生：观战中隐藏；观众席/已完赛者同样隐藏（观众没有比赛车，重生会 spawn
+  // 出无镜头状态；完赛者应等待结算/观战，不能复活回赛道）
+  const actionRacePr = isInRace(player.id) ? getRacePlayerState(player.id) : undefined;
+  const canRespawn = !actionRacePr || (actionRacePr.role === "racer" && !actionRacePr.finished);
+  if (!isObserving(player.id) && canRespawn) {
     rows.push({
       label: "重生",
       run: () => {
         // 比赛中：重生回上一 CP（与 /kill 一致）；非比赛：正常重生
         const racePr = isInRace(player.id) ? getRacePlayerState(player.id) : undefined;
         const room = racePr ? getRaceRoom(racePr.roomId) : undefined;
-        if (racePr && room && room.state === "RACING") {
+        if (racePr && racePr.role === "racer" && room && room.state === "RACING") {
           void respawnToLastCp(player, racePr, room);
         } else {
           player.spawn();
@@ -259,41 +267,45 @@ export async function openQuickActionsMenu(player: Player, back?: MenuBack): Pro
     },
   });
 
-  // 观战相关：未观战显示"观战玩家"，已观战显示"停止观战"（互斥，避免无效项）
-  if (!isObserving(player.id)) {
-    rows.push({
-      label: "观战玩家",
-      run: async () => {
-        const res = await showDialog(
-          player,
-          new Dialog({
-            style: DialogStylesEnum.INPUT,
-            caption: "观战玩家",
-            info: "输入要观看的玩家ID：",
-            button1: "确定",
-            button2: "取消",
-          }),
-        );
-        if (!res || res.response !== 1) return;
-        // B5：空输入/非数字会解析成 0/NaN → 误观战 0 号玩家，先校验
-        const input = res.inputText.trim();
-        if (!/^\d+$/.test(input)) {
-          sysMsg(player, "action", "请输入有效的玩家ID", "error");
-          return;
-        }
-        const target = Player.getInstance(+input);
-        if (!target) {
-          sysMsg(player, "action", "对方未在线", "error");
-          return;
-        }
-        startObservePlayer(player, target);
-      },
-    });
-  } else {
-    rows.push({
-      label: "停止观战",
-      run: () => stopObserve(player),
-    });
+  // 观战相关：未观战显示"观战玩家"，已观战显示"停止观战"（互斥，避免无效项）。
+  // 观众席禁止停止观战（必须保持镜头）——显示"观战玩家"供切换目标，要离开走 /r l。
+  // 比赛中未完成参赛者被作用域禁止观战：整项隐藏，不显示点了也会被拒的入口。
+  if (!isObserveBlocked(player.id)) {
+    if (!isObserving(player.id) || isObserveStopLocked(player.id)) {
+      rows.push({
+        label: "观战玩家",
+        run: async () => {
+          const res = await showDialog(
+            player,
+            new Dialog({
+              style: DialogStylesEnum.INPUT,
+              caption: "观战玩家",
+              info: "输入要观看的玩家ID：",
+              button1: "确定",
+              button2: "取消",
+            }),
+          );
+          if (!res || res.response !== 1) return;
+          // B5：空输入/非数字会解析成 0/NaN → 误观战 0 号玩家，先校验
+          const input = res.inputText.trim();
+          if (!/^\d+$/.test(input)) {
+            sysMsg(player, "action", "请输入有效的玩家ID", "error");
+            return;
+          }
+          const target = Player.getInstance(+input);
+          if (!target) {
+            sysMsg(player, "action", "对方未在线", "error");
+            return;
+          }
+          startObservePlayer(player, target);
+        },
+      });
+    } else {
+      rows.push({
+        label: "停止观战",
+        run: () => stopObserve(player),
+      });
+    }
   }
 
   const index = await pickOption(

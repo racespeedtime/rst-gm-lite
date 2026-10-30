@@ -3,7 +3,7 @@ import { prisma } from "@/prisma";
 import { getAuthState, hasSuperAdminRole } from "@/auth/auth";
 import { isPlayerLocked, lockPlayer, unlockPlayer } from "@/core/interaction";
 import { pickOption } from "@/personalize/settings";
-import { startObservePlayer } from "@/core/observe";
+import { startObservePlayer, isObserveBlocked } from "@/core/observe";
 import { requestTpa, acceptsTeleport } from "@/teleport";
 import { sessionManager } from "@/sessions/manager";
 import { isInRace } from "@/race/room";
@@ -346,12 +346,18 @@ async function openClickPlayerMenu(player: Player, target: Player): Promise<void
           },
         });
       }
-      // 观战：目标可观看（非观战/未连接等状态）才显示
+      // 观战：目标可观看（非观战/未连接等状态）+ 自己当前允许发起观战才显示
       const watchable =
+        !isObserveBlocked(player.id) &&
         target.isConnected() &&
         ![PlayerStateEnum.NONE, PlayerStateEnum.SPECTATING].includes(target.getState());
       if (watchable) {
-        rows.push({ label: "观战玩家", run: () => startObservePlayer(player, target) });
+        rows.push({
+          label: "观战玩家",
+          run: () => {
+            startObservePlayer(player, target);
+          },
+        });
       }
       // 传送到身边：双向不在比赛中 + 同战局 + 目标接受传送 才显示（完整校验 requestTpa 仍兜底）
       const tpaOk =
