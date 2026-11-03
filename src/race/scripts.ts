@@ -211,12 +211,14 @@ export function getFirstCpEnv(cps: { scripts: string[] }[]): {
 
 /** 执行一条 CP 脚本。返回 false 表示终止整条脚本链（对齐原版 Race_Cp_Script_Start：
  * 碰到 spawnpos 直接 return 1，其后的脚本全部不再执行）。其余情况返回 true 继续。
- * opts.skipCveh：跳过 cveh 换车（第一 CP 的 cveh = 进赛道默认车型，到达时不再换车）。 */
+ * opts.skipCveh：跳过 cveh 换车（第一 CP 的 cveh = 进赛道默认车型，到达时不再换车）。
+ * opts.spawnPos：重生重放脚本时 cveh 的建车坐标（此时玩家/车的 SetPos 可能尚未同步，
+ * 直接用 player.getPos() 会把新车建在旧的死亡位置——表现为"重生后还在原地"）。 */
 export function execCpScript(
   player: Player,
   ctx: CpScriptContext,
   script: string,
-  opts?: { skipCveh?: boolean },
+  opts?: { skipCveh?: boolean; spawnPos?: { x: number; y: number; z: number } },
 ): boolean {
   const [fn, ...rawArgs] = script.trim().split(/\s+/);
   const args = resolveArgs(player, ctx, rawArgs);
@@ -271,7 +273,8 @@ export function execCpScript(
         err("cveh 车辆ID需 400-611");
         return true;
       }
-      const pos = player.getPos();
+      // 重生重放脚本：优先用重生点，避免 SetPos 尚未同步时把新车建在旧位置
+      const pos = opts?.spawnPos ?? player.getPos();
       // 对齐原版 cveh（HRace.inc:561 → SpawnVehicle，gamemode:2065）：换车后
       // 新车成为玩家自己的车（原版 BuyID = CreateVehicle(新车)）。因此：
       // 1. 换车前取当前车速度，换车后无条件恢复（原版 GetVehicleVelocity/SetVehicleVelocity）

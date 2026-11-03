@@ -119,7 +119,12 @@ function applyRollbackState(player: Player, pr: PlayerRace, target: RollbackTarg
  * - 其余（speed/speedex/zspeed/angle/time/weather/cveh/fix/msg）照执行：弹射初速
  *   恢复（必需场景）、车型/时间天气恢复、提示重演
  * - 第一 CP 的 cveh 是赛道标准车（skipCveh，与过点语义一致） */
-function replayCpScriptsOnRespawn(player: Player, room: RaceRoom, prevIdx: number): void {
+function replayCpScriptsOnRespawn(
+  player: Player,
+  room: RaceRoom,
+  prevIdx: number,
+  spawnPos?: { x: number; y: number; z: number },
+): void {
   const cp = room.cps[prevIdx];
   if (!cp) return;
   const scripts = cp.scripts.filter((s) => {
@@ -139,7 +144,7 @@ function replayCpScriptsOnRespawn(player: Player, room: RaceRoom, prevIdx: numbe
   };
   try {
     for (const script of scripts) {
-      if (!execCpScript(player, scriptCtx, script, { skipCveh: isFirstCp })) break;
+      if (!execCpScript(player, scriptCtx, script, { skipCveh: isFirstCp, spawnPos })) break;
       // 脚本执行（同步）期间玩家可能已离开/比赛结束 → 终止后续脚本
       if (!playerRaces.has(player.id) || rooms.get(pr.roomId)?.state !== "RACING" || pr.finished) {
         break;
@@ -207,7 +212,19 @@ async function respawnToCpCore(
     // 重生重执行该 CP 脚本（弹射/换车等必需效果恢复，跳过 spawnpos/vgoto/damage——
     // 见 replayCpScriptsOnRespawn 注释）。放在 applyRollbackState 之前：重执行 cveh
     // 已把车型换对，快照回撤的车型判断自然跳过（不重复刷车），time/weather 同值幂等。
-    replayCpScriptsOnRespawn(player, room, prevIdx);
+    replayCpScriptsOnRespawn(player, room, prevIdx, pt);
+    // 兜底：cveh 重放/车辆位置同步可能仍把车/人留在旧位置——以重生点为最终权威。
+    // 只在明显偏离时纠正，避免覆盖 speed/angle 等脚本刚设置的即时状态。
+    const posNow = player.getPos();
+    if (Math.hypot(posNow.x - pt.x, posNow.y - pt.y, posNow.z - pt.z) > 2) {
+      const finalVeh = getOwnedVehicle(player.id);
+      if (finalVeh && finalVeh.isValid()) {
+        finalVeh.setPos(pt.x, pt.y, pt.z);
+        if (!player.isInAnyVehicle()) finalVeh.putPlayerIn(player, 0);
+      } else if (!player.isInAnyVehicle()) {
+        player.setPos(pt.x, pt.y, pt.z);
+      }
+    }
     return true;
   } finally {
     respawnInFlight.delete(player.id);
